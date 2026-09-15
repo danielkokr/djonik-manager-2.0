@@ -1,98 +1,76 @@
-# Djonik 2.0 — Implementation Agent Rules
+# Agent Working Agreement — Djonik 2.0
 
-## Roles
+This repository is a greenfield Claude-native rebuild of Djonik.
 
-- Daniel — Product Owner / strategist.
-- ChatGPT — Product Lead + technical reviewer.
-- Claude Code / Codex — Implementation Engineer.
+## Required reading
 
-## Before implementation
-
-Read in this order:
+Before implementation:
 
 1. `docs/00_DJONIK_PRODUCT_CONTRACT.md`
 2. `docs/01_CLAUDE_NATIVE_ARCHITECTURE.md`
 3. `docs/02_DEVELOPMENT_ROADMAP.md`
-4. `CLAUDE.md`
-5. this file
-6. the canonical NOW GitHub issue from the roadmap
-7. the latest issue comments
-8. only then any relevant existing implementation/docs.
+4. `docs/03_TARGET_CAPABILITIES.md`
+5. `CLAUDE.md`
+6. canonical NOW GitHub issue from the roadmap and its latest comments.
 
-Do not choose work from issue number, age, memory, or the legacy repo.
+Do not determine NOW from issue number, date, memory or another conversation.
 
-## Working model
+## Architecture rules
 
-One bounded issue at a time.
+- The authoritative Djonik runtime is the Claude Managed Agent resource configured through Claude Console / Managed Agents API.
+- Do not create a duplicate local Djonik agent or duplicate system prompt in application code unless an explicit canonical decision changes this.
+- Prefer Managed Agent configuration, Sessions, Memory Stores, Skills and bounded tools/MCP before adding custom infrastructure.
+- Do not implement a custom Messages API tool loop.
+- Do not implement a custom transcript/conversation-history system in the foundation.
+- Do not add Neon, vector DB or custom RAG/memory without a measured need and an explicit roadmap decision.
+- Keep channel/integration code thin and deterministic only where hard boundaries need it.
+- Claude owns normal conversational reasoning and tool sequencing.
+- External writes must be bounded and verified.
+- Do not expose unrestricted low-level APIs where a semantic tool can be used.
+- Do not prebuild speculative Skills, subagents or integrations.
 
-Normal loop:
+## Scope discipline
 
-1. Read canonical context and NOW issue.
-2. Inspect the current repository state.
-3. Implement only the bounded scope.
-4. Run focused verification.
-5. Report what changed, what was tested, and any remaining risk.
-6. Stop for review.
-7. Daniel performs commit/push unless explicitly instructed otherwise.
+Work only inside the canonical bounded issue.
 
-## Git policy
+If current official Anthropic APIs differ from repo assumptions, stop and report the discrepancy before silently redesigning the architecture.
 
-During implementation work unless the user explicitly changes the rule:
+Do not resurrect legacy `djonik-manager` architecture just because code already exists there.
 
-- do not create branches;
-- do not commit;
-- do not push;
-- do not deploy;
-- do not close GitHub issues;
-- do not silently rewrite canonical roadmap/product docs.
+## Git discipline
 
-Before reporting completion, run the relevant checks plus:
+Unless the Product Owner explicitly authorizes it:
+
+- no commit;
+- no push;
+- no deploy;
+- no branch creation;
+- no issue close;
+- no unrelated cleanup.
+
+Before handoff run the relevant focused checks plus:
 
 - `git diff --check`
 - `git status --short`
 
-## Architecture policy
+Preserve unrelated pre-existing user changes.
 
-This is a Claude-native greenfield rebuild.
+## Secrets
 
-Do not import legacy runtime code or architecture merely because it already exists.
+- Never commit API keys, bot tokens, credentials or Console secrets.
+- Use environment/runtime secret mechanisms only where integration code actually needs them.
+- Non-secret Managed Agent resource IDs may be configured through environment/config when their integration slice arrives.
 
-Prefer, in order:
+## Report format
 
-- agent configuration;
-- sessions;
-- Claude Memory / Memory Stores;
-- Skills;
-- built-in tools;
-- bounded custom tools / MCP;
-- simple adapters/scheduling;
-- specialist agents only when justified;
-- custom infrastructure only after a demonstrated gap.
+Return:
 
-Never implement a second conversational reasoning engine in server code.
+1. Summary
+2. Files changed
+3. Architecture/API decisions
+4. Tests/checks and exact results
+5. Manual smoke evidence when required
+6. Limitations / explicitly deferred work
+7. `git status --short`
 
-## Scope discipline
-
-If an issue asks for the first local Claude session, do not add Telegram, Trello, memory architecture, Skills or deployment "while here".
-
-Small clean vertical slices are preferred to speculative scaffolding.
-
-## Safety / correctness
-
-- Never commit secrets.
-- External mutations must be bounded and later verified once mutation tools exist.
-- Do not hide ambiguity behind fuzzy guessing.
-- Do not claim tests passed unless they were actually run.
-- If current official Claude APIs differ from repository assumptions, use current official Anthropic documentation and report the discrepancy rather than building against stale examples.
-
-## Completion report
-
-Every implementation report should contain:
-
-- summary;
-- files changed;
-- behavior implemented;
-- tests/checks run and their results;
-- exact manual verification steps if needed;
-- known limitations / out-of-scope items;
-- `git status --short`.
+If the issue requires an external manual Console action that you cannot perform, say exactly what is blocked and do not replace it with a different architecture.
