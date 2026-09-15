@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1 and 2 are accepted. A real Claude Managed Agent named `Джонік` exists in Claude Console, `Djonik Default` Cloud Environment exists, and the repository now has a thin TypeScript/Node client that connects to that existing Managed Agent through a real server-side Session. Two-turn continuity has been verified both in Console and through the repo client. Telegram is the next channel slice.
+Foundations 1–3 are accepted. `Джонік` exists as the authoritative Claude Managed Agent, the repo has a thin TypeScript/Node Managed Agents client, and Telegram now works as a thin single-user channel adapter. Real two-turn continuity has been verified in Console, through the repo client, and through Telegram. Durable cross-session Claude-native memory is the current focus.
 
 ## Execution order
 
@@ -39,55 +39,62 @@ Verified foundation:
 - typecheck and focused tests passed;
 - secrets remain outside Git.
 
-### NOW — Foundation 3: Telegram adapter to the existing Djonik Managed Agent (#3)
+### DONE — Foundation 3: Telegram adapter to the existing Djonik Managed Agent (#3)
+
+Accepted 2026-09-15 at commit `43b976e16c52c8090b9e585c03141d3520e4e7a5`.
+
+Verified foundation:
+
+- Telegram adapter reuses the Foundation 2 Managed Agent client boundary;
+- development access is protected by a single-user allowlist;
+- first accepted Telegram text creates/connects one Managed Session;
+- later messages in the same running process reuse that Session;
+- real two-turn Telegram smoke passed (`5832` recalled correctly);
+- typecheck passed;
+- focused tests passed 14/14;
+- no prompt duplication, custom transcript store, database, or PM intent router was introduced.
+
+### NOW — Foundation 4: Durable Claude Memory Store across Djonik sessions (#4)
 
 Goal:
 
-`Telegram text → existing Djonik Managed Agent Session → Telegram response`
+`Djonik Managed Session + Claude Memory Store → durable fact written → new Managed Session → fact recalled`
 
 Scope:
 
-- add the smallest local Telegram text adapter;
-- use a single-user allowlist for safe development;
-- reuse the existing Djonik client boundary from Foundation 2;
-- first accepted Telegram message creates/connects one Managed Session;
-- subsequent messages in the same running process reuse that Session;
-- send the user's text to Djonik without application-side intent routing or prompt rewriting;
-- return Djonik's final natural-language response to Telegram;
-- return an explicit user-visible failure if a turn fails;
-- keep Telegram/API secrets in local environment configuration only;
-- validate with a real two-turn Telegram continuity smoke test.
+- create one real Claude Memory Store for Djonik;
+- attach it as a `memory_store` session resource with `read_write` access whenever a new Djonik Managed Session is created;
+- supply the Memory Store ID through local environment configuration;
+- keep Telegram using the same shared memory-enabled session boundary;
+- give the attachment concise instructions limiting memory to durable useful PM context;
+- prove a durable fact is written in Session A and recalled from a distinct Session B;
+- inspect the persisted memory in Claude Console/API/CLI;
+- keep the memory architecture entirely Claude-native.
 
 Explicitly out of scope:
 
-- deployment/webhooks/production hosting;
-- durable chat→session persistence across restarts;
-- files/images/voice;
 - Trello/Google MCP enablement;
-- Memory Store;
 - Skills;
+- custom memory extraction/classification pipelines;
+- vector DB/custom RAG/Neon/database;
+- multiple/per-project memory stores;
+- production deployment;
+- images/files/voice;
 - subagents;
-- proactive scheduler;
-- database;
-- legacy runtime migration.
+- proactive scheduler.
 
 Acceptance evidence:
 
-- one documented local command starts the Telegram adapter;
-- only the configured Telegram user reaches Djonik;
-- first Telegram text receives a real Djonik response;
-- second Telegram text in the same running process demonstrably uses first-turn context;
-- Telegram layer stays a thin channel adapter;
-- no secret is committed;
-- failures are not silent.
+- `Djonik Memory` store exists;
+- all new Djonik sessions attach it as read-write;
+- Session A persists a durable memory;
+- that memory is visible in the store;
+- a distinct Session B recalls it without replaying Session A transcript;
+- Telegram still works through the shared client boundary;
+- typecheck/tests/`git diff --check` pass;
+- no custom memory persistence is introduced.
 
-### NEXT — Foundation 4: Durable Claude Memory
-
-Create/attach a Claude Memory Store and validate that Djonik can deliberately persist and later retrieve useful cross-session PM context.
-
-Test with real examples such as stable project/client context and user work preferences. Do not store live task status as memory.
-
-### THEN — Foundation 5: First Skill
+### NEXT — Foundation 5: First Skill
 
 Add `task-management` as the first custom Skill and validate progressive, task-relevant behavior without bloating the core system prompt.
 
@@ -181,7 +188,8 @@ During all phases:
 - Claude reasoning stays primary;
 - do not rebuild a custom Messages tool loop;
 - do not create a duplicate local Djonik agent when Console/Managed Agents owns the configuration;
-- do not create a custom DB/memory system without evidence;
+- Claude Memory Stores are the default durable memory mechanism;
+- do not create a custom DB/memory system without measured evidence;
 - do not turn adapter code into a phrase/intent router;
 - keep Skills separate from mutable project data;
 - keep external live state fresh through tools;
