@@ -20,7 +20,7 @@ async function main(): Promise<void> {
   const client = new Anthropic({ apiKey: config.apiKey });
 
   console.log("Connecting to the existing Djonik Managed Agent...");
-  const djonik = await connectToDjonik(client, config.agentId, config.environmentId);
+  const djonik = await connectToDjonik(client, config.agentId, config.environmentId, config.memoryStoreId);
   console.log(`Connected (session ${djonik.sessionId}). Type a message, or "exit" to quit.\n`);
 
   const rl = readline.createInterface({ input: stdin, output: stdout });

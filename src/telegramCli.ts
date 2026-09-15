@@ -21,7 +21,7 @@ async function main(): Promise<void> {
 
   const anthropic = new Anthropic({ apiKey: djonikConfig.apiKey });
   const djonikSession = createSessionManager(() =>
-    connectToDjonik(anthropic, djonikConfig.agentId, djonikConfig.environmentId),
+    connectToDjonik(anthropic, djonikConfig.agentId, djonikConfig.environmentId, djonikConfig.memoryStoreId),
   );
 
   const bot = new Bot(telegramConfig.botToken);

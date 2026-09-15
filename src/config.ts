@@ -4,6 +4,7 @@ export interface DjonikClientConfig {
   apiKey: string;
   agentId: string;
   environmentId: string;
+  memoryStoreId: string;
 }
 
 export class MissingConfigError extends Error {
@@ -31,6 +32,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DjonikClientCo
     apiKey: requireEnv(env, "ANTHROPIC_API_KEY"),
     agentId: requireEnv(env, "DJONIK_AGENT_ID"),
     environmentId: requireEnv(env, "DJONIK_ENVIRONMENT_ID"),
+    memoryStoreId: requireEnv(env, "DJONIK_MEMORY_STORE_ID"),
   };
 }
 

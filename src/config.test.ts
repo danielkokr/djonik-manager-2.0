@@ -23,6 +23,18 @@ test("loadConfig throws MissingConfigError when DJONIK_ENVIRONMENT_ID is absent"
   );
 });
 
+test("loadConfig throws MissingConfigError when DJONIK_MEMORY_STORE_ID is absent", () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        ANTHROPIC_API_KEY: "key",
+        DJONIK_AGENT_ID: "agent_x",
+        DJONIK_ENVIRONMENT_ID: "env_x",
+      }),
+    MissingConfigError,
+  );
+});
+
 test("loadConfig throws MissingConfigError when a value is blank", () => {
   assert.throws(
     () =>
@@ -30,18 +42,25 @@ test("loadConfig throws MissingConfigError when a value is blank", () => {
         ANTHROPIC_API_KEY: "key",
         DJONIK_AGENT_ID: "   ",
         DJONIK_ENVIRONMENT_ID: "env_x",
+        DJONIK_MEMORY_STORE_ID: "memstore_x",
       }),
     MissingConfigError,
   );
 });
 
-test("loadConfig returns all three values when present", () => {
+test("loadConfig returns all four values when present", () => {
   const config = loadConfig({
     ANTHROPIC_API_KEY: "key",
     DJONIK_AGENT_ID: "agent_x",
     DJONIK_ENVIRONMENT_ID: "env_x",
+    DJONIK_MEMORY_STORE_ID: "memstore_x",
   });
-  assert.deepEqual(config, { apiKey: "key", agentId: "agent_x", environmentId: "env_x" });
+  assert.deepEqual(config, {
+    apiKey: "key",
+    agentId: "agent_x",
+    environmentId: "env_x",
+    memoryStoreId: "memstore_x",
+  });
 });
 
 test("loadTelegramConfig throws MissingConfigError when TELEGRAM_BOT_TOKEN is absent", () => {
