@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–4 are accepted. `Джонік` exists as the authoritative Claude Managed Agent, Telegram works as a thin channel adapter, and `Djonik Memory` now provides durable Claude-native memory across distinct Managed Sessions. The current focus is the first modular PM competency implemented as a custom Claude Skill.
+Foundations 1–5 are accepted. `Джонік` exists as the authoritative Claude Managed Agent, Telegram works as a thin channel adapter, `Djonik Memory` provides durable Claude-native memory across distinct Managed Sessions, the first custom `task-management` Skill is attached and verified, and the `Djonik Personal` Credential Vault is now wired into all new Sessions. Trello MCP is authenticated; the current focus is bounded read-only Trello awareness.
 
 ## Execution order
 
@@ -71,46 +71,63 @@ Verified foundation:
 - focused tests passed 16/16;
 - no custom DB/vector/RAG memory layer was introduced.
 
-### NOW — Foundation 5: First custom Skill — task-management (#5)
+### DONE — Foundation 5: First custom Skill — task-management (#5)
+
+Accepted 2026-09-15 at commit `478cd60c604392fdce3ae3b56624fa7c6299f7df`.
+
+Verified foundation:
+
+- one real custom `task-management` Skill exists in the Claude workspace;
+- the existing authoritative `Джонік` Managed Agent has it attached;
+- a real Managed Session event trace proved the Skill file was loaded/read;
+- task request, correction/follow-up, and advice-not-mutation scenarios behaved correctly;
+- Skill content remains bounded and contains no mutable/live project data;
+- no Trello mutation behavior was introduced;
+- typecheck/tests/`git diff --check` passed.
+
+### DONE — Blocker: Session vault wiring and retryable MCP errors (#6)
+
+Accepted 2026-09-15 at commit `ddbd3dfb117ff4da16f15598619499f686a4b53e`.
+
+Verified foundation:
+
+- `Djonik Personal` Credential Vault is passed to every new Managed Session via `vault_ids`;
+- Trello and Google Calendar MCP credentials resolve without missing-auth failures;
+- retrying/non-terminal `session.error` events no longer abort otherwise successful turns;
+- true terminal failure still surfaces correctly;
+- standard Telegram path works again;
+- task-management Skill still loads;
+- focused tests passed 20/20.
+
+### NOW — Foundation 6: Trello read surface through Claude MCP (#7)
 
 Goal:
 
-`task-related request → Djonik discovers task-management Skill → applies bounded PM task rules`
+`natural-language PM question → task-management Skill + fresh Trello MCP reads → concise evidence-based answer`
 
 Scope:
 
-- author one compact custom `task-management` Skill;
-- create/upload it to the Claude workspace and obtain its `skill_...` ID;
-- attach it to the existing authoritative `Джонік` Managed Agent;
-- preserve the existing agent model/system/tools and Memory/Telegram architecture;
-- teach task interpretation, corrections/follow-ups, deadline handling, ambiguity handling, advice-vs-action separation, and verify-before-claim behavior;
-- keep mutable project/client/live task state out of the Skill;
-- validate that a real task-management turn actually loads/reads the Skill;
-- validate task request, correction/follow-up, and advice-not-mutation scenarios;
-- do not add Trello or any external task mutation yet.
+- inspect the current Trello MCP tool surface and effective permissions;
+- keep this foundation read-only;
+- disable/block Trello mutation tools where current MCP permissions allow it;
+- discover/search real boards/cards;
+- read card/task details and relevant board/list context;
+- answer PM questions from fresh Trello evidence rather than memory-only guesses;
+- preserve Skill, Memory Store, Vault, Telegram, and shared Managed Session architecture;
+- do not create a custom Trello API client or state mirror.
 
 Acceptance evidence:
 
-- one real custom `task-management` Skill exists in the Claude workspace;
-- the existing `Джонік` Managed Agent has it attached;
-- a real Managed Session demonstrably loads/uses it for a relevant turn;
-- the three bounded validation scenarios behave correctly;
-- Djonik does not claim external task writes before task tools exist;
-- repo retains only canonical Skill source/support needed for maintainability;
-- no mutable/live project data is embedded in the Skill;
-- typecheck/tests/`git diff --check` pass for repo changes.
+- authenticated Trello MCP works in ordinary Djonik Sessions;
+- effective permission set is read-only for this stage;
+- real project/task discovery works;
+- specific card details are read accurately;
+- PM judgement can be based on fresh Trello state;
+- event/tool traces prove read operations and no mutation;
+- task-management Skill still loads where relevant;
+- Memory and Telegram remain functional.
 
-### NEXT — Foundation 6: Trello read surface
-
-Give Djonik bounded read-only task/project awareness.
-
-Initial target:
-
-- find/search cards;
-- read task details;
-- answer natural PM questions from fresh Trello state.
-
-### THEN — Foundation 7: Trello write surface
+### NEXT — Foundation 7: Trello write surface
 
 Add the smallest safe mutation set:
 
