@@ -8,35 +8,45 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Greenfield repository. Product contract and Claude-native architecture are defined. Djonik is being created as a real Claude Managed Agent in Claude Console. No application runtime implementation has been accepted yet.
+Foundation 1 is accepted. A real Claude Managed Agent named `Джонік` exists in Claude Console, `Djonik Default` Cloud Environment exists, and a real Managed Agent Session passed a two-turn continuity smoke test without any custom transcript/runtime. No application-side integration has been accepted yet.
 
 ## Execution order
 
-### NOW — Foundation 1: Real Djonik Managed Agent + first Console Session
+### DONE — Foundation 1: Real Djonik Managed Agent + first Console Session (#1)
+
+Accepted 2026-09-15.
+
+Verified foundation:
+
+- real `Джонік` Managed Agent exists and is Active;
+- model: `claude-sonnet-5`, Low effort;
+- `Djonik Default` Cloud Environment exists;
+- real Session references that agent + environment;
+- second turn correctly used first-turn context;
+- no local duplicate agent/session runtime is part of the accepted architecture.
+
+### NOW — Foundation 2: Thin repo client for the existing Djonik Managed Agent (#2)
 
 Goal:
 
-`Djonik Managed Agent in Claude Console → Environment → multi-turn Session`
+`local test input → existing Djonik agent_id + environment_id → Managed Agent Session → response`
 
 Scope:
 
-- create the real `Djonik` Managed Agent in Claude Console;
-- configure its name, model, description and minimal PM system prompt;
-- keep default/built-in tools only for this foundation unless Console requires a narrower safe choice;
-- do not add MCP, custom tools, Skills, subagents or Memory Store yet;
-- create the smallest suitable Environment required by a Session;
-- start a real Session in Claude Console;
-- send one user message and obtain a natural-language Djonik response;
-- send a second message in the same Session and prove conversational continuity;
-- record only the non-secret resource identifiers/observations needed for the next integration slice.
+- initialize/retain only the minimal TypeScript/Node client needed for this slice;
+- use the current official Anthropic Managed Agents API/SDK primitives;
+- reference the already-created Djonik Agent and Environment through environment configuration;
+- create/use a real Managed Agent Session;
+- send one local test message and receive a natural-language response;
+- send a second message to the same Session and prove continuity;
+- expose the smallest clean client boundary Foundation 3 can later call from Telegram;
+- keep secrets and resource IDs in local environment configuration where appropriate;
+- do not duplicate the Djonik system prompt or agent configuration in repo code.
 
 Explicitly out of scope:
 
-- local duplicate Djonik agent implementation;
-- custom Agent SDK / Messages tool loop;
-- local CLI conversation runtime;
 - Telegram;
-- Trello;
+- Trello/Google MCP enablement;
 - Memory Store;
 - Skills;
 - subagents;
@@ -47,22 +57,16 @@ Explicitly out of scope:
 
 Acceptance evidence:
 
-- a real Managed Agent named `Djonik` exists in Claude Console;
-- a usable Environment exists;
-- a real Session references Djonik + that Environment;
-- first turn returns a response consistent with Djonik's PM identity;
-- second turn in the same Session demonstrably uses first-turn context;
-- no application-side duplicate agent/session implementation is introduced.
+- clean install works;
+- one documented command runs the local client;
+- existing Managed Agent + Environment are referenced rather than recreated;
+- first local turn receives a real Managed Agent response;
+- second turn in the same Managed Session demonstrably uses first-turn context;
+- no Djonik prompt/configuration is duplicated application-side;
+- no secret is committed;
+- implementation stays thin and Claude-native.
 
-### NEXT — Foundation 2: Thin repo client for the existing Managed Agent
-
-Goal:
-
-`local test input → existing Djonik agent_id + environment_id → Managed Agent Session → response`
-
-Scope only the smallest TypeScript/Node client needed to call the already-created Djonik resource through the current official Anthropic SDK/API. Store identifiers/secrets only in local environment configuration. Do not duplicate the Djonik system prompt in application code.
-
-### THEN — Foundation 3: Telegram conversation adapter
+### NEXT — Foundation 3: Telegram conversation adapter
 
 Goal:
 
