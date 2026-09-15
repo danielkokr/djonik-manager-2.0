@@ -39,9 +39,17 @@ Read in this order:
 
 ## Current phase
 
-**Foundation 1:** create the real Djonik Managed Agent, Environment and first multi-turn Session in Claude Console.
+**Foundation 3:** a thin local Telegram adapter in front of the existing Djonik Managed Agent client.
 
-Application code begins only after that real Claude resource works. The next slice will be a thin repository client that talks to the existing `agent_id` / `environment_id`; it will not recreate Djonik locally.
+Copy `.env.example` to `.env` and fill in `ANTHROPIC_API_KEY`, `DJONIK_AGENT_ID`, `DJONIK_ENVIRONMENT_ID`, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_ID` (your own Telegram numeric user id — the single-user allowlist for this dev bot). Then run:
+
+```bash
+npm run telegram
+```
+
+Only messages from `TELEGRAM_ALLOWED_USER_ID` reach Djonik; every Telegram text message from that user during the running process reuses the same Djonik Managed Session, so conversational continuity works exactly like the console/CLI client. Stop the adapter with Ctrl+C.
+
+A console-only client (no Telegram) remains available via `npm run dev`.
 
 ## Working model
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, MissingConfigError } from "./config.js";
+import { loadConfig, loadTelegramConfig, MissingConfigError } from "./config.js";
 
 test("loadConfig throws MissingConfigError when ANTHROPIC_API_KEY is absent", () => {
   assert.throws(
@@ -42,4 +42,20 @@ test("loadConfig returns all three values when present", () => {
     DJONIK_ENVIRONMENT_ID: "env_x",
   });
   assert.deepEqual(config, { apiKey: "key", agentId: "agent_x", environmentId: "env_x" });
+});
+
+test("loadTelegramConfig throws MissingConfigError when TELEGRAM_BOT_TOKEN is absent", () => {
+  assert.throws(() => loadTelegramConfig({ TELEGRAM_ALLOWED_USER_ID: "12345" }), MissingConfigError);
+});
+
+test("loadTelegramConfig throws MissingConfigError when TELEGRAM_ALLOWED_USER_ID is absent", () => {
+  assert.throws(() => loadTelegramConfig({ TELEGRAM_BOT_TOKEN: "token" }), MissingConfigError);
+});
+
+test("loadTelegramConfig returns both values when present", () => {
+  const config = loadTelegramConfig({
+    TELEGRAM_BOT_TOKEN: "token",
+    TELEGRAM_ALLOWED_USER_ID: "12345",
+  });
+  assert.deepEqual(config, { botToken: "token", allowedUserId: "12345" });
 });

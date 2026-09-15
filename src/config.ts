@@ -33,3 +33,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DjonikClientCo
     environmentId: requireEnv(env, "DJONIK_ENVIRONMENT_ID"),
   };
 }
+
+export interface TelegramAdapterConfig {
+  botToken: string;
+  /** Telegram user id allowed to reach Djonik through the dev bot. */
+  allowedUserId: string;
+}
+
+/** Loads the Telegram-adapter-only settings; unrelated to the Djonik client config above. */
+export function loadTelegramConfig(env: NodeJS.ProcessEnv = process.env): TelegramAdapterConfig {
+  return {
+    botToken: requireEnv(env, "TELEGRAM_BOT_TOKEN"),
+    allowedUserId: requireEnv(env, "TELEGRAM_ALLOWED_USER_ID"),
+  };
+}

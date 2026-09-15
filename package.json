@@ -6,12 +6,14 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/cli.ts",
+    "telegram": "tsx src/telegramCli.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "grammy": "^1.46.0"
   },
   "devDependencies": {
     "@types/node": "^24.9.0",
