@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–3 are accepted. `Джонік` exists as the authoritative Claude Managed Agent, the repo has a thin TypeScript/Node Managed Agents client, and Telegram now works as a thin single-user channel adapter. Real two-turn continuity has been verified in Console, through the repo client, and through Telegram. Durable cross-session Claude-native memory is the current focus.
+Foundations 1–4 are accepted. `Джонік` exists as the authoritative Claude Managed Agent, Telegram works as a thin channel adapter, and `Djonik Memory` now provides durable Claude-native memory across distinct Managed Sessions. The current focus is the first modular PM competency implemented as a custom Claude Skill.
 
 ## Execution order
 
@@ -54,51 +54,53 @@ Verified foundation:
 - focused tests passed 14/14;
 - no prompt duplication, custom transcript store, database, or PM intent router was introduced.
 
-### NOW — Foundation 4: Durable Claude Memory Store across Djonik sessions (#4)
+### DONE — Foundation 4: Durable Claude Memory Store across Djonik sessions (#4)
+
+Accepted 2026-09-15 at commit `8617e691c0e791ce5efe6c80876383491f915ec0`.
+
+Verified foundation:
+
+- real `Djonik Memory` Claude Memory Store exists;
+- all new Djonik Managed Sessions attach it as a `memory_store` resource with `read_write` access;
+- Memory Store ID is supplied through local environment configuration;
+- Session A persisted a durable preference;
+- persisted memory was verified through the official Memory Store API;
+- distinct Session B recalled that fact without transcript replay;
+- Telegram remains on the same shared memory-enabled client boundary;
+- typecheck passed;
+- focused tests passed 16/16;
+- no custom DB/vector/RAG memory layer was introduced.
+
+### NOW — Foundation 5: First custom Skill — task-management (#5)
 
 Goal:
 
-`Djonik Managed Session + Claude Memory Store → durable fact written → new Managed Session → fact recalled`
+`task-related request → Djonik discovers task-management Skill → applies bounded PM task rules`
 
 Scope:
 
-- create one real Claude Memory Store for Djonik;
-- attach it as a `memory_store` session resource with `read_write` access whenever a new Djonik Managed Session is created;
-- supply the Memory Store ID through local environment configuration;
-- keep Telegram using the same shared memory-enabled session boundary;
-- give the attachment concise instructions limiting memory to durable useful PM context;
-- prove a durable fact is written in Session A and recalled from a distinct Session B;
-- inspect the persisted memory in Claude Console/API/CLI;
-- keep the memory architecture entirely Claude-native.
-
-Explicitly out of scope:
-
-- Trello/Google MCP enablement;
-- Skills;
-- custom memory extraction/classification pipelines;
-- vector DB/custom RAG/Neon/database;
-- multiple/per-project memory stores;
-- production deployment;
-- images/files/voice;
-- subagents;
-- proactive scheduler.
+- author one compact custom `task-management` Skill;
+- create/upload it to the Claude workspace and obtain its `skill_...` ID;
+- attach it to the existing authoritative `Джонік` Managed Agent;
+- preserve the existing agent model/system/tools and Memory/Telegram architecture;
+- teach task interpretation, corrections/follow-ups, deadline handling, ambiguity handling, advice-vs-action separation, and verify-before-claim behavior;
+- keep mutable project/client/live task state out of the Skill;
+- validate that a real task-management turn actually loads/reads the Skill;
+- validate task request, correction/follow-up, and advice-not-mutation scenarios;
+- do not add Trello or any external task mutation yet.
 
 Acceptance evidence:
 
-- `Djonik Memory` store exists;
-- all new Djonik sessions attach it as read-write;
-- Session A persists a durable memory;
-- that memory is visible in the store;
-- a distinct Session B recalls it without replaying Session A transcript;
-- Telegram still works through the shared client boundary;
-- typecheck/tests/`git diff --check` pass;
-- no custom memory persistence is introduced.
+- one real custom `task-management` Skill exists in the Claude workspace;
+- the existing `Джонік` Managed Agent has it attached;
+- a real Managed Session demonstrably loads/uses it for a relevant turn;
+- the three bounded validation scenarios behave correctly;
+- Djonik does not claim external task writes before task tools exist;
+- repo retains only canonical Skill source/support needed for maintainability;
+- no mutable/live project data is embedded in the Skill;
+- typecheck/tests/`git diff --check` pass for repo changes.
 
-### NEXT — Foundation 5: First Skill
-
-Add `task-management` as the first custom Skill and validate progressive, task-relevant behavior without bloating the core system prompt.
-
-### THEN — Foundation 6: Trello read surface
+### NEXT — Foundation 6: Trello read surface
 
 Give Djonik bounded read-only task/project awareness.
 
@@ -190,8 +192,8 @@ During all phases:
 - do not create a duplicate local Djonik agent when Console/Managed Agents owns the configuration;
 - Claude Memory Stores are the default durable memory mechanism;
 - do not create a custom DB/memory system without measured evidence;
+- Skills contain reusable expertise/workflows, not mutable project data;
 - do not turn adapter code into a phrase/intent router;
-- keep Skills separate from mutable project data;
 - keep external live state fresh through tools;
 - verify mutations;
 - prefer bounded vertical slices over broad scaffolding.
