@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–5 are accepted. `Джонік` exists as the authoritative Claude Managed Agent, Telegram works as a thin channel adapter, `Djonik Memory` provides durable Claude-native memory across distinct Managed Sessions, the first custom `task-management` Skill is attached and verified, and the `Djonik Personal` Credential Vault is now wired into all new Sessions. Trello MCP is authenticated; the current focus is bounded read-only Trello awareness.
+Foundations 1–6 are accepted. `Джонік` exists as the authoritative Claude Managed Agent, Telegram works as a thin channel adapter, `Djonik Memory` provides durable Claude-native memory across distinct Managed Sessions, the custom `task-management` Skill is attached and verified, the `Djonik Personal` Credential Vault is wired into all new Sessions, and Trello MCP read access is authenticated and verified against real data. Foundation 6 hard-disabled Trello mutation tools and proved fresh read-only PM awareness. The current focus is safe, verified Trello mutation behavior.
 
 ## Execution order
 
@@ -99,46 +99,54 @@ Verified foundation:
 - task-management Skill still loads;
 - focused tests passed 20/20.
 
-### NOW — Foundation 6: Trello read surface through Claude MCP (#7)
+### DONE — Foundation 6: Trello read surface through Claude MCP (#7)
+
+Accepted 2026-09-15.
+
+Verified foundation:
+
+- authenticated Trello MCP works in ordinary Djonik Sessions;
+- all 6 Trello mutation tools are hard-disabled at the Managed Agent config level;
+- 9 read tools plus search remain available;
+- real project/card discovery works against the live `Djonik` Trello board;
+- card details, checklist state, list context and due-date state were read accurately without inventing missing fields;
+- PM judgement was based on fresh Trello evidence;
+- tool traces showed only read operations and zero mutation calls;
+- task-management Skill and Memory Store remain functional;
+- Telegram adapter starts cleanly;
+- repo remained clean because this foundation required only live agent permission config.
+
+### NOW — Foundation 7: Trello write surface with verified mutations (#8)
 
 Goal:
 
-`natural-language PM question → task-management Skill + fresh Trello MCP reads → concise evidence-based answer`
+`natural-language task request → task-management Skill → exact Trello target → mutation → fresh verification read → concise confirmation`
 
 Scope:
 
-- inspect the current Trello MCP tool surface and effective permissions;
-- keep this foundation read-only;
-- disable/block Trello mutation tools where current MCP permissions allow it;
-- discover/search real boards/cards;
-- read card/task details and relevant board/list context;
-- answer PM questions from fresh Trello evidence rather than memory-only guesses;
-- preserve Skill, Memory Store, Vault, Telegram, and shared Managed Session architecture;
-- do not create a custom Trello API client or state mirror.
+- inspect actual operations inside the disabled Trello write tools;
+- re-enable only the smallest useful mutation set;
+- create cards/tasks;
+- update title/description/due date;
+- move cards when target list is clear;
+- support complete/reopen where current Trello MCP semantics safely allow it;
+- use fresh Trello reads to resolve targets;
+- ask one concise clarification when material ambiguity remains;
+- verify every claimed mutation by re-reading the affected Trello object;
+- preserve Skill, Memory Store, Vault, Telegram and the existing Trello read surface;
+- run at least one real Trello write flow through Telegram.
 
 Acceptance evidence:
 
-- authenticated Trello MCP works in ordinary Djonik Sessions;
-- effective permission set is read-only for this stage;
-- real project/task discovery works;
-- specific card details are read accurately;
-- PM judgement can be based on fresh Trello state;
-- event/tool traces prove read operations and no mutation;
-- task-management Skill still loads where relevant;
-- Memory and Telegram remain functional.
+- only intended Trello mutation tools are enabled;
+- real create/update/move flows succeed;
+- each successful write is followed by an independent fresh Trello read confirming the intended state;
+- ambiguous targets cause clarification instead of guessed mutation;
+- conversational corrections update the intended existing task rather than create duplicates;
+- at least one write succeeds end-to-end through Telegram;
+- no unverified success claim or unintended mutation occurs.
 
-### NEXT — Foundation 7: Trello write surface
-
-Add the smallest safe mutation set:
-
-- create task;
-- update title/description/date;
-- move task;
-- complete/reopen.
-
-Writes must be target-safe and verified before Djonik claims success.
-
-### THEN — Conversational PM validation
+### NEXT — Conversational PM validation
 
 Exercise realistic multi-turn scenarios:
 
