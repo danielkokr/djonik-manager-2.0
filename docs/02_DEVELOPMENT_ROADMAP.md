@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundation 1 is accepted. A real Claude Managed Agent named `Джонік` exists in Claude Console, `Djonik Default` Cloud Environment exists, and a real Managed Agent Session passed a two-turn continuity smoke test without any custom transcript/runtime. No application-side integration has been accepted yet.
+Foundations 1 and 2 are accepted. A real Claude Managed Agent named `Джонік` exists in Claude Console, `Djonik Default` Cloud Environment exists, and the repository now has a thin TypeScript/Node client that connects to that existing Managed Agent through a real server-side Session. Two-turn continuity has been verified both in Console and through the repo client. Telegram is the next channel slice.
 
 ## Execution order
 
@@ -25,56 +25,63 @@ Verified foundation:
 - second turn correctly used first-turn context;
 - no local duplicate agent/session runtime is part of the accepted architecture.
 
-### NOW — Foundation 2: Thin repo client for the existing Djonik Managed Agent (#2)
+### DONE — Foundation 2: Thin repo client for the existing Djonik Managed Agent (#2)
+
+Accepted 2026-09-15 at commit `ca7c82401059853d6fa7485d7b24c205e48829d3`.
+
+Verified foundation:
+
+- minimal TypeScript/Node client uses the current Managed Agents SDK surface;
+- repo references the existing `agent_id` + environment through local configuration;
+- no Djonik system prompt or agent configuration is duplicated application-side;
+- no custom transcript/history store exists;
+- real two-turn local smoke test passed in one Managed Session;
+- typecheck and focused tests passed;
+- secrets remain outside Git.
+
+### NOW — Foundation 3: Telegram adapter to the existing Djonik Managed Agent (#3)
 
 Goal:
 
-`local test input → existing Djonik agent_id + environment_id → Managed Agent Session → response`
+`Telegram text → existing Djonik Managed Agent Session → Telegram response`
 
 Scope:
 
-- initialize/retain only the minimal TypeScript/Node client needed for this slice;
-- use the current official Anthropic Managed Agents API/SDK primitives;
-- reference the already-created Djonik Agent and Environment through environment configuration;
-- create/use a real Managed Agent Session;
-- send one local test message and receive a natural-language response;
-- send a second message to the same Session and prove continuity;
-- expose the smallest clean client boundary Foundation 3 can later call from Telegram;
-- keep secrets and resource IDs in local environment configuration where appropriate;
-- do not duplicate the Djonik system prompt or agent configuration in repo code.
+- add the smallest local Telegram text adapter;
+- use a single-user allowlist for safe development;
+- reuse the existing Djonik client boundary from Foundation 2;
+- first accepted Telegram message creates/connects one Managed Session;
+- subsequent messages in the same running process reuse that Session;
+- send the user's text to Djonik without application-side intent routing or prompt rewriting;
+- return Djonik's final natural-language response to Telegram;
+- return an explicit user-visible failure if a turn fails;
+- keep Telegram/API secrets in local environment configuration only;
+- validate with a real two-turn Telegram continuity smoke test.
 
 Explicitly out of scope:
 
-- Telegram;
+- deployment/webhooks/production hosting;
+- durable chat→session persistence across restarts;
+- files/images/voice;
 - Trello/Google MCP enablement;
 - Memory Store;
 - Skills;
 - subagents;
 - proactive scheduler;
 - database;
-- legacy runtime migration;
-- production deployment.
+- legacy runtime migration.
 
 Acceptance evidence:
 
-- clean install works;
-- one documented command runs the local client;
-- existing Managed Agent + Environment are referenced rather than recreated;
-- first local turn receives a real Managed Agent response;
-- second turn in the same Managed Session demonstrably uses first-turn context;
-- no Djonik prompt/configuration is duplicated application-side;
+- one documented local command starts the Telegram adapter;
+- only the configured Telegram user reaches Djonik;
+- first Telegram text receives a real Djonik response;
+- second Telegram text in the same running process demonstrably uses first-turn context;
+- Telegram layer stays a thin channel adapter;
 - no secret is committed;
-- implementation stays thin and Claude-native.
+- failures are not silent.
 
-### NEXT — Foundation 3: Telegram conversation adapter
-
-Goal:
-
-`Telegram → existing Djonik Managed Agent Session → Telegram response`
-
-Add only the minimal channel adapter and chat/session mapping needed for one-user real usage.
-
-### THEN — Foundation 4: Durable Claude Memory
+### NEXT — Foundation 4: Durable Claude Memory
 
 Create/attach a Claude Memory Store and validate that Djonik can deliberately persist and later retrieve useful cross-session PM context.
 
