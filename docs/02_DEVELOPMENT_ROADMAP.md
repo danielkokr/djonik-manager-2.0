@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–6 are accepted. `Джонік` exists as the authoritative Claude Managed Agent, Telegram works as a thin channel adapter, `Djonik Memory` provides durable Claude-native memory across distinct Managed Sessions, the custom `task-management` Skill is attached and verified, the `Djonik Personal` Credential Vault is wired into all new Sessions, and Trello MCP read access is authenticated and verified against real data. Foundation 6 hard-disabled Trello mutation tools and proved fresh read-only PM awareness. The current focus is safe, verified Trello mutation behavior.
+Foundations 1–7 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; the custom `task-management` Skill is attached; `Djonik Personal` Vault supplies Trello/Google credentials; Trello MCP read/write flows work against live data; and the shared client now enforces same-card verify-after-write for Trello card mutations. The current focus is realistic conversational PM validation across Telegram and Trello before expanding capabilities.
 
 ## Execution order
 
@@ -82,7 +82,6 @@ Verified foundation:
 - a real Managed Session event trace proved the Skill file was loaded/read;
 - task request, correction/follow-up, and advice-not-mutation scenarios behaved correctly;
 - Skill content remains bounded and contains no mutable/live project data;
-- no Trello mutation behavior was introduced;
 - typecheck/tests/`git diff --check` passed.
 
 ### DONE — Blocker: Session vault wiring and retryable MCP errors (#6)
@@ -106,57 +105,56 @@ Accepted 2026-09-15.
 Verified foundation:
 
 - authenticated Trello MCP works in ordinary Djonik Sessions;
-- all 6 Trello mutation tools are hard-disabled at the Managed Agent config level;
-- 9 read tools plus search remain available;
-- real project/card discovery works against the live `Djonik` Trello board;
-- card details, checklist state, list context and due-date state were read accurately without inventing missing fields;
+- Foundation 6 used a read-only effective permission set;
+- real project/card discovery works against live Trello data;
+- card details, checklist state, list context and due-date state were read accurately;
 - PM judgement was based on fresh Trello evidence;
-- tool traces showed only read operations and zero mutation calls;
-- task-management Skill and Memory Store remain functional;
-- Telegram adapter starts cleanly;
-- repo remained clean because this foundation required only live agent permission config.
+- task-management Skill and Memory Store remained functional.
 
-### NOW — Foundation 7: Trello write surface with verified mutations (#8)
+### DONE — Foundation 7: Trello write surface with verified mutations (#8)
+
+Accepted 2026-09-15 at commits `842352a0e90b143f2e5d397e92586ea4673cf696` and `5bec33a53c1e57eed2edb53ad5cceb01d3e77be6`.
+
+Verified foundation:
+
+- `trelloWriteCard` is the bounded enabled Trello mutation tool;
+- real create/update/move flows work against the live board;
+- target resolution uses fresh Trello reads rather than Memory;
+- ambiguous target scenarios do not mutate;
+- Telegram end-to-end write succeeded;
+- task-management Skill guidance was strengthened for verify-after-write;
+- the shared client deterministically requires a later successful `trelloReadCard` for the same `cardId` after `trelloWriteCard`;
+- unrelated reads cannot satisfy verification;
+- one bounded corrective nudge is allowed, then the turn fails closed;
+- focused tests passed 28/28, with typecheck and `git diff --check` clean.
+
+### NOW — Foundation 8: Conversational PM validation across Telegram and Trello (#9)
 
 Goal:
 
-`natural-language task request → task-management Skill → exact Trello target → mutation → fresh verification read → concise confirmation`
+`natural conversation → understand intent/context → fresh Trello evidence when needed → target-safe verified mutations → preserve referents/corrections → concise PM response`
 
 Scope:
 
-- inspect actual operations inside the disabled Trello write tools;
-- re-enable only the smallest useful mutation set;
-- create cards/tasks;
-- update title/description/due date;
-- move cards when target list is clear;
-- support complete/reopen where current Trello MCP semantics safely allow it;
-- use fresh Trello reads to resolve targets;
-- ask one concise clarification when material ambiguity remains;
-- verify every claimed mutation by re-reading the affected Trello object;
-- preserve Skill, Memory Store, Vault, Telegram and the existing Trello read surface;
-- run at least one real Trello write flow through Telegram.
+- validate realistic multi-turn task creation and follow-ups through Telegram;
+- validate referents such as `її`, `цю задачу`, `це`;
+- validate project/date corrections without duplicate tasks;
+- validate advice-vs-mutation separation;
+- validate `що зараз горить?` from fresh Trello state;
+- validate ambiguity causes clarification and zero write;
+- validate durable Memory across a new Session while fresh Trello state outranks remembered live state;
+- fix only bounded issues exposed by these scenarios;
+- do not add new product integrations or orchestration layers.
 
 Acceptance evidence:
 
-- only intended Trello mutation tools are enabled;
-- real create/update/move flows succeed;
-- each successful write is followed by an independent fresh Trello read confirming the intended state;
-- ambiguous targets cause clarification instead of guessed mutation;
-- conversational corrections update the intended existing task rather than create duplicates;
-- at least one write succeeds end-to-end through Telegram;
-- no unverified success claim or unintended mutation occurs.
-
-### NEXT — Conversational PM validation
-
-Exercise realistic multi-turn scenarios:
-
-- "створи задачу по Extract";
-- "постав її на пʼятницю";
-- "ні, краще на понеділок";
-- "це не Extract, а Seqthera";
-- "що зараз горить?".
-
-Only after this experience is strong should the product expand significantly.
+- Telegram scenarios A–E from Issue #9 behave correctly;
+- cross-session Memory scenario F behaves correctly;
+- no accidental duplicate tasks or guessed mutations occur;
+- advice-only turns produce zero mutation;
+- every successful Trello write still satisfies same-card verify-after-write;
+- fresh Trello state remains the source of truth for live work;
+- task-management Skill continues to load where relevant.
 
 ## Capability waves after the foundation
 
