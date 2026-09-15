@@ -8,6 +8,28 @@ export interface DjonikSessionHandle {
 }
 
 /**
+ * Thrown when the underlying Managed Session/event stream itself has died
+ * (stream ended, session terminated, or a terminal session.error) rather than
+ * an ordinary turn-level failure (e.g. unverified write, empty reply) where
+ * the session is still usable for the next message. Callers that cache a
+ * session (e.g. the Telegram adapter's one-session-per-process manager) can
+ * use this to know the cached session must be discarded and reconnected,
+ * without discarding it on every turn failure.
+ */
+export class DjonikSessionDeadError extends Error {}
+
+/**
+ * Optional observability hook for validation/debugging (e.g. Foundation 8 live
+ * scenario traces). Purely informational — never consulted for verification
+ * logic, which stays entirely in the event-stream handling below.
+ */
+export type DjonikTraceEvent =
+  | { type: "mcp_tool_use"; serverName: string; toolName: string; input: Record<string, unknown> }
+  | { type: "mcp_tool_result"; serverName: string; toolName: string; isError: boolean }
+  | { type: "verification_nudge_sent"; attempt: number }
+  | { type: "write_unverified_failure" };
+
+/**
  * Session-specific guidance shown to the agent alongside the memory store's
  * name/description (see the store's own `description` for what it is).
  * Memory stores attach only at session creation time, so this text travels
@@ -126,6 +148,7 @@ export async function connectToDjonik(
   environmentId: string,
   memoryStoreId: string,
   vaultId: string,
+  onTrace?: (event: DjonikTraceEvent) => void,
 ): Promise<DjonikSessionHandle> {
   const session = await client.beta.sessions.create({
     agent: agentId,
@@ -166,7 +189,7 @@ export async function connectToDjonik(
     for (;;) {
       const { value: event, done } = await iterator.next();
       if (done) {
-        throw new Error("Djonik session event stream ended unexpectedly.");
+        throw new DjonikSessionDeadError("Djonik session event stream ended unexpectedly.");
       }
 
       switch (event.type) {
@@ -182,9 +205,23 @@ export async function connectToDjonik(
             toolName: event.name,
             input: event.input as Record<string, unknown>,
           });
+          onTrace?.({
+            type: "mcp_tool_use",
+            serverName: event.mcp_server_name,
+            toolName: event.name,
+            input: event.input as Record<string, unknown>,
+          });
           break;
         case "agent.mcp_tool_result": {
           const call = mcpToolCallsById.get(event.mcp_tool_use_id);
+          if (call) {
+            onTrace?.({
+              type: "mcp_tool_result",
+              serverName: call.serverName,
+              toolName: call.toolName,
+              isError: Boolean(event.is_error),
+            });
+          }
           if (call && !event.is_error) {
             if (isTrelloWriteTool(call.serverName, call.toolName)) {
               unverifiedTrelloWrite = true;
@@ -220,11 +257,11 @@ export async function connectToDjonik(
           // message is still caught below by the empty-reply check on
           // session.status_idle.
           if (event.error.retry_status.type === "terminal") {
-            throw new Error(`Djonik session error: ${event.error.message}`);
+            throw new DjonikSessionDeadError(`Djonik session error: ${event.error.message}`);
           }
           break;
         case "session.status_terminated":
-          throw new Error("Djonik session terminated unexpectedly.");
+          throw new DjonikSessionDeadError("Djonik session terminated unexpectedly.");
         case "session.status_idle":
           if (!reply) {
             throw new Error("Djonik produced no text reply for this turn.");
@@ -254,10 +291,12 @@ export async function connectToDjonik(
     let reply = await runTurn([{ type: "user.message", content: [{ type: "text", text }] }]);
 
     for (let attempt = 0; unverifiedTrelloWrite && attempt < MAX_VERIFICATION_NUDGES; attempt += 1) {
+      onTrace?.({ type: "verification_nudge_sent", attempt: attempt + 1 });
       reply = await runTurn([{ type: "user.message", content: [{ type: "text", text: VERIFICATION_NUDGE_TEXT }] }]);
     }
 
     if (unverifiedTrelloWrite) {
+      onTrace?.({ type: "write_unverified_failure" });
       throw new Error(
         "Djonik mutated Trello but did not verify the write with an independent read in this turn.",
       );

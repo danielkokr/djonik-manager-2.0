@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Bot } from "grammy";
 import { loadConfig, loadTelegramConfig, MissingConfigError } from "./config.js";
 import { connectToDjonik } from "./djonikClient.js";
-import { createSessionManager, formatUserFacingError, isAllowedUser } from "./telegramAdapter.js";
+import { createSessionManager, formatUserFacingError, handleSessionError, isAllowedUser } from "./telegramAdapter.js";
 
 async function main(): Promise<void> {
   let djonikConfig;
@@ -20,6 +20,7 @@ async function main(): Promise<void> {
   }
 
   const anthropic = new Anthropic({ apiKey: djonikConfig.apiKey });
+  const trace = process.env.DJONIK_TRACE === "1";
   const djonikSession = createSessionManager(() =>
     connectToDjonik(
       anthropic,
@@ -27,6 +28,7 @@ async function main(): Promise<void> {
       djonikConfig.environmentId,
       djonikConfig.memoryStoreId,
       djonikConfig.vaultId,
+      trace ? (event) => console.error("[trace]", JSON.stringify(event)) : undefined,
     ),
   );
 
@@ -46,6 +48,7 @@ async function main(): Promise<void> {
       await ctx.reply(reply);
     } catch (error) {
       console.error("Djonik turn failed:", error);
+      handleSessionError(djonikSession, error);
       await ctx.reply(formatUserFacingError(error));
     }
   });

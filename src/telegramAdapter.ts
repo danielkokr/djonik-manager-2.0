@@ -1,4 +1,4 @@
-import type { DjonikSessionHandle } from "./djonikClient.js";
+import { DjonikSessionDeadError, type DjonikSessionHandle } from "./djonikClient.js";
 
 /**
  * Compares the Telegram sender id against the single-user allowlist. Only an
@@ -20,6 +20,14 @@ export interface DjonikSessionManager {
   getSession(): Promise<DjonikSessionHandle>;
   /** Closes the session's event stream if one was ever opened. */
   closeIfOpen(): void;
+  /**
+   * Discards the cached session so the next `getSession()` reconnects instead
+   * of reusing a session whose event stream has already died. Call this only
+   * for a `DjonikSessionDeadError` (see `handleSessionError`) — ordinary
+   * turn-level failures (unverified write, empty reply) leave a perfectly
+   * usable session and must not be torn down.
+   */
+  invalidate(): void;
 }
 
 /**
@@ -47,5 +55,23 @@ export function createSessionManager(connect: () => Promise<DjonikSessionHandle>
     sessionPromise?.then((session) => session.close()).catch(() => {});
   }
 
-  return { getSession, closeIfOpen };
+  function invalidate(): void {
+    sessionPromise = null;
+  }
+
+  return { getSession, closeIfOpen, invalidate };
+}
+
+/**
+ * Discards a session whose event stream/Managed Session has actually died
+ * (`DjonikSessionDeadError`) so the next Telegram message reconnects fresh,
+ * instead of every later message failing forever against the same dead
+ * cached session. Ordinary turn-level failures are left alone: the session
+ * behind them is still usable, so tearing it down would lose conversational
+ * continuity for no reason.
+ */
+export function handleSessionError(manager: DjonikSessionManager, error: unknown): void {
+  if (error instanceof DjonikSessionDeadError) {
+    manager.invalidate();
+  }
 }
