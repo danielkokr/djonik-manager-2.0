@@ -30,6 +30,20 @@ test("loadConfig throws MissingConfigError when DJONIK_MEMORY_STORE_ID is absent
         ANTHROPIC_API_KEY: "key",
         DJONIK_AGENT_ID: "agent_x",
         DJONIK_ENVIRONMENT_ID: "env_x",
+        DJONIK_VAULT_ID: "vlt_x",
+      }),
+    MissingConfigError,
+  );
+});
+
+test("loadConfig throws MissingConfigError when DJONIK_VAULT_ID is absent", () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        ANTHROPIC_API_KEY: "key",
+        DJONIK_AGENT_ID: "agent_x",
+        DJONIK_ENVIRONMENT_ID: "env_x",
+        DJONIK_MEMORY_STORE_ID: "memstore_x",
       }),
     MissingConfigError,
   );
@@ -43,23 +57,26 @@ test("loadConfig throws MissingConfigError when a value is blank", () => {
         DJONIK_AGENT_ID: "   ",
         DJONIK_ENVIRONMENT_ID: "env_x",
         DJONIK_MEMORY_STORE_ID: "memstore_x",
+        DJONIK_VAULT_ID: "vlt_x",
       }),
     MissingConfigError,
   );
 });
 
-test("loadConfig returns all four values when present", () => {
+test("loadConfig returns all five values when present", () => {
   const config = loadConfig({
     ANTHROPIC_API_KEY: "key",
     DJONIK_AGENT_ID: "agent_x",
     DJONIK_ENVIRONMENT_ID: "env_x",
     DJONIK_MEMORY_STORE_ID: "memstore_x",
+    DJONIK_VAULT_ID: "vlt_x",
   });
   assert.deepEqual(config, {
     apiKey: "key",
     agentId: "agent_x",
     environmentId: "env_x",
     memoryStoreId: "memstore_x",
+    vaultId: "vlt_x",
   });
 });
 

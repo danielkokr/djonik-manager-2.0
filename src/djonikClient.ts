@@ -31,16 +31,23 @@ const DJONIK_MEMORY_INSTRUCTIONS =
  * The Djonik Memory Store is attached as a `memory_store` session resource
  * with `read_write` access, since memory stores can only be attached at
  * session creation time (not added to a running session).
+ *
+ * The Djonik Personal Vault is passed via `vault_ids` so the session's
+ * attached MCP servers (Trello, Google Calendar) can authenticate; without
+ * it every new session emits `mcp_authentication_failed_error` events for
+ * those servers.
  */
 export async function connectToDjonik(
   client: Anthropic,
   agentId: string,
   environmentId: string,
   memoryStoreId: string,
+  vaultId: string,
 ): Promise<DjonikSessionHandle> {
   const session = await client.beta.sessions.create({
     agent: agentId,
     environment_id: environmentId,
+    vault_ids: [vaultId],
     resources: [
       {
         type: "memory_store",
@@ -75,7 +82,16 @@ export async function connectToDjonik(
             .join("");
           break;
         case "session.error":
-          throw new Error(`Djonik session error: ${event.error.message}`);
+          // "retrying" and "exhausted" are non-terminal per the Managed
+          // Agents API: the session keeps running (or returns to idle to
+          // accept a new prompt). Only "terminal" means the session itself
+          // is dying. A turn that ends via "exhausted" with no assistant
+          // message is still caught below by the empty-reply check on
+          // session.status_idle.
+          if (event.error.retry_status.type === "terminal") {
+            throw new Error(`Djonik session error: ${event.error.message}`);
+          }
+          break;
         case "session.status_terminated":
           throw new Error("Djonik session terminated unexpectedly.");
         case "session.status_idle":
