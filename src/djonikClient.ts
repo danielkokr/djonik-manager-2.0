@@ -20,6 +20,89 @@ const DJONIK_MEMORY_INSTRUCTIONS =
   "anything trivial. Fresh external tool reads always outrank what is remembered here.";
 
 /**
+ * Deterministic backstop for the task-management Skill's verify-before-claiming-success
+ * rule. The Skill asks Djonik to re-read a Trello object after every mutation before
+ * replying, but a real Telegram turn proved instruction-following alone is not
+ * reliable (Foundation 7 acceptance blocker: a `trelloWriteCard` call was followed by
+ * a success reply with no `agent.mcp_tool_use` read call in between).
+ *
+ * This inspects the same `agent.mcp_tool_use` / `agent.mcp_tool_result` events the
+ * session stream already emits — no custom Trello client, no stored task state, no
+ * intent router. It only tracks tool-call *shape*: which write tool ran, the object id
+ * it names, and whether a read of the matching type later names that same object id.
+ * It never inspects mutated field values (title/desc/due/list) — whether the *content*
+ * of a write was correct remains entirely the Skill's/Claude's job. This is identity
+ * verification only: did a read of the same object happen, not was the write right.
+ */
+const TRELLO_MCP_SERVER_PATTERN = /trello/i;
+const TRELLO_WRITE_TOOL_PATTERN = /^trelloWrite/;
+const TRELLO_READ_TOOL_PATTERN = /^trelloRead/;
+
+function isTrelloWriteTool(serverName: string, toolName: string): boolean {
+  return TRELLO_MCP_SERVER_PATTERN.test(serverName) && TRELLO_WRITE_TOOL_PATTERN.test(toolName);
+}
+
+function isTrelloReadTool(serverName: string, toolName: string): boolean {
+  return TRELLO_MCP_SERVER_PATTERN.test(serverName) && TRELLO_READ_TOOL_PATTERN.test(toolName);
+}
+
+/**
+ * For each Trello write tool whose input names an object id, the read tool + input
+ * field that must name the *same* id to count as verification. A write tool absent
+ * from this map (none currently — only `trelloWriteCard` is enabled per Foundation 7)
+ * falls back to the looser "any successful Trello read clears it" behavior, since no
+ * identity field is known to check.
+ */
+const CARD_OBJECT_ID_VERIFICATION = {
+  writeTool: "trelloWriteCard",
+  writeIdField: "cardId",
+  readTool: "trelloReadCard",
+  readIdFields: ["cardIdOrUrl", "cardId"],
+} as const;
+
+function readStringField(input: Record<string, unknown>, field: string): string | null {
+  const value = input[field];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/** The object id a write tool call names, or null if this write tool has no known identity field. */
+function writeObjectId(toolName: string, input: Record<string, unknown>): string | null {
+  if (toolName === CARD_OBJECT_ID_VERIFICATION.writeTool) {
+    return readStringField(input, CARD_OBJECT_ID_VERIFICATION.writeIdField);
+  }
+  return null;
+}
+
+/**
+ * Whether a successful read call verifies the given pending write: same write/read
+ * tool pairing (e.g. trelloWriteCard verified only by trelloReadCard, never by
+ * trelloReadBoard/trelloSearch/etc.) and the read names the exact same object id.
+ */
+function readVerifiesWrite(
+  pendingWriteTool: string,
+  pendingObjectId: string,
+  readToolName: string,
+  readInput: Record<string, unknown>,
+): boolean {
+  if (pendingWriteTool !== CARD_OBJECT_ID_VERIFICATION.writeTool) return false;
+  if (readToolName !== CARD_OBJECT_ID_VERIFICATION.readTool) return false;
+  return CARD_OBJECT_ID_VERIFICATION.readIdFields.some(
+    (field) => readStringField(readInput, field) === pendingObjectId,
+  );
+}
+
+const VERIFICATION_NUDGE_TEXT =
+  "Системна перевірка: у цьому turn був виклик Trello write-інструменту без " +
+  "наступного read-виклику САМЕ ТОГО Ж об'єкта (той самий cardId), що підтверджує " +
+  "результат. Перш ніж відповідати користувачу, зроби окремий Trello read саме того " +
+  "об'єкта, який ти щойно змінив, і повідом користувачу підтверджений результат (або " +
+  "скажи чесно, якщо перевірка показала розбіжність).";
+
+const MAX_VERIFICATION_NUDGES = 1;
+
+type SendableEvent = { type: "user.message"; content: Array<{ type: "text"; text: string }> };
+
+/**
  * Connects to the already-existing Djonik Managed Agent (Claude Console is
  * the authoritative runtime/configuration for the agent itself) by starting
  * one Managed Agent Session against `agentId` + `environmentId`, then opens
@@ -61,10 +144,22 @@ export async function connectToDjonik(
   const stream = await client.beta.sessions.events.stream(session.id);
   const iterator = stream[Symbol.asyncIterator]();
 
-  async function send(text: string): Promise<string> {
-    await client.beta.sessions.events.send(session.id, {
-      events: [{ type: "user.message", content: [{ type: "text", text }] }],
-    });
+  /**
+   * Correlates `agent.mcp_tool_result` events back to the tool call that produced
+   * them (results only carry `mcp_tool_use_id`, not the tool name/server/input).
+   * Scoped to one `send()` call — cleared at the start of each.
+   */
+  const mcpToolCallsById = new Map<string, { serverName: string; toolName: string; input: Record<string, unknown> }>();
+  /** True from a successful Trello write until a verifying read of the same object is observed. */
+  let unverifiedTrelloWrite = false;
+  /** Which write tool is pending verification, so a read can be checked against the right pairing. */
+  let pendingWriteTool: string | null = null;
+  /** The object id the pending write named, or null when this write tool has no known identity field
+   *  (falls back to "any successful Trello read clears it"). */
+  let pendingWriteObjectId: string | null = null;
+
+  async function runTurn(events: SendableEvent[]): Promise<string> {
+    await client.beta.sessions.events.send(session.id, { events });
 
     let reply = "";
 
@@ -81,6 +176,42 @@ export async function connectToDjonik(
             .map((block) => block.text)
             .join("");
           break;
+        case "agent.mcp_tool_use":
+          mcpToolCallsById.set(event.id, {
+            serverName: event.mcp_server_name,
+            toolName: event.name,
+            input: event.input as Record<string, unknown>,
+          });
+          break;
+        case "agent.mcp_tool_result": {
+          const call = mcpToolCallsById.get(event.mcp_tool_use_id);
+          if (call && !event.is_error) {
+            if (isTrelloWriteTool(call.serverName, call.toolName)) {
+              unverifiedTrelloWrite = true;
+              pendingWriteTool = call.toolName;
+              pendingWriteObjectId = writeObjectId(call.toolName, call.input);
+            } else if (isTrelloReadTool(call.serverName, call.toolName) && unverifiedTrelloWrite) {
+              if (pendingWriteObjectId !== null) {
+                // Identity known: only a read of the exact same object verifies it.
+                // An unrelated or mismatched-id read leaves the write unverified.
+                if (
+                  pendingWriteTool !== null &&
+                  readVerifiesWrite(pendingWriteTool, pendingWriteObjectId, call.toolName, call.input)
+                ) {
+                  unverifiedTrelloWrite = false;
+                  pendingWriteTool = null;
+                  pendingWriteObjectId = null;
+                }
+              } else {
+                // No identity field known for this write tool type: fall back to the
+                // looser "any successful Trello read clears it" behavior.
+                unverifiedTrelloWrite = false;
+                pendingWriteTool = null;
+              }
+            }
+          }
+          break;
+        }
         case "session.error":
           // "retrying" and "exhausted" are non-terminal per the Managed
           // Agents API: the session keeps running (or returns to idle to
@@ -103,6 +234,36 @@ export async function connectToDjonik(
           break;
       }
     }
+  }
+
+  /**
+   * Sends one user turn, then enforces verify-after-write deterministically:
+   * if the turn ends with a successful Trello write and no successful Trello
+   * read afterward, the reply is a false-success candidate. Rather than trust
+   * the Skill's instruction-following alone (the Foundation 7 acceptance
+   * blocker), nudge the agent once to verify and reply again in the same
+   * session; if it still hasn't verified, fail the turn instead of returning
+   * an unverified success claim to the user.
+   */
+  async function send(text: string): Promise<string> {
+    unverifiedTrelloWrite = false;
+    pendingWriteTool = null;
+    pendingWriteObjectId = null;
+    mcpToolCallsById.clear();
+
+    let reply = await runTurn([{ type: "user.message", content: [{ type: "text", text }] }]);
+
+    for (let attempt = 0; unverifiedTrelloWrite && attempt < MAX_VERIFICATION_NUDGES; attempt += 1) {
+      reply = await runTurn([{ type: "user.message", content: [{ type: "text", text: VERIFICATION_NUDGE_TEXT }] }]);
+    }
+
+    if (unverifiedTrelloWrite) {
+      throw new Error(
+        "Djonik mutated Trello but did not verify the write with an independent read in this turn.",
+      );
+    }
+
+    return reply;
   }
 
   function close(): void {
