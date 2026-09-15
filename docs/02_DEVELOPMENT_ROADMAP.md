@@ -4,38 +4,40 @@
 
 ## Goal
 
-Build Djonik as a Claude-native conversational PM, adding one working capability at a time while avoiding legacy infrastructure unless real usage demonstrates a need.
+Build Djonik as a Claude-native conversational PM, adding one working capability at a time while avoiding custom infrastructure unless real usage demonstrates a need.
 
 ## Current state
 
-Greenfield repository. Product contract and Claude-native architecture are defined. No runtime implementation exists yet.
+Greenfield repository. Product contract and Claude-native architecture are defined. Djonik is being created as a real Claude Managed Agent in Claude Console. No application runtime implementation has been accepted yet.
 
 ## Execution order
 
-### NOW — Foundation 1: First real Djonik Claude session
+### NOW — Foundation 1: Real Djonik Managed Agent + first Console Session
 
 Goal:
 
-`local user input → Djonik Claude agent → natural-language response → second input continues the same session`
+`Djonik Managed Agent in Claude Console → Environment → multi-turn Session`
 
 Scope:
 
-- initialize a minimal TypeScript/Node project;
-- use the current official Anthropic SDK / Claude Managed Agents primitives;
-- define/apply a minimal Djonik agent configuration from repo-owned instructions;
-- start a session;
-- send one user message and obtain a final natural-language response;
-- send a second message to the same session and prove conversational continuity;
-- provide a simple local CLI/dev entry point;
-- keep secrets in `.env` / environment only;
-- add focused automated tests where deterministic behavior can be tested;
-- document exact local run steps.
+- create the real `Djonik` Managed Agent in Claude Console;
+- configure its name, model, description and minimal PM system prompt;
+- keep default/built-in tools only for this foundation unless Console requires a narrower safe choice;
+- do not add MCP, custom tools, Skills, subagents or Memory Store yet;
+- create the smallest suitable Environment required by a Session;
+- start a real Session in Claude Console;
+- send one user message and obtain a natural-language Djonik response;
+- send a second message in the same Session and prove conversational continuity;
+- record only the non-secret resource identifiers/observations needed for the next integration slice.
 
 Explicitly out of scope:
 
+- local duplicate Djonik agent implementation;
+- custom Agent SDK / Messages tool loop;
+- local CLI conversation runtime;
 - Telegram;
 - Trello;
-- Memory Store integration beyond whatever is strictly required to create the first session;
+- Memory Store;
 - Skills;
 - subagents;
 - proactive scheduler;
@@ -45,32 +47,40 @@ Explicitly out of scope:
 
 Acceptance evidence:
 
-- clean install works;
-- `npm run dev` (or one clearly documented equivalent) starts the local interaction;
-- first turn returns a Djonik response;
-- second turn in the same session demonstrably remembers/uses first-turn context;
-- no API key or secret is committed;
-- implementation remains small and Claude-native.
+- a real Managed Agent named `Djonik` exists in Claude Console;
+- a usable Environment exists;
+- a real Session references Djonik + that Environment;
+- first turn returns a response consistent with Djonik's PM identity;
+- second turn in the same Session demonstrably uses first-turn context;
+- no application-side duplicate agent/session implementation is introduced.
 
-### NEXT — Foundation 2: Telegram conversation adapter
+### NEXT — Foundation 2: Thin repo client for the existing Managed Agent
 
 Goal:
 
-`Telegram → Djonik Claude session → Telegram response`
+`local test input → existing Djonik agent_id + environment_id → Managed Agent Session → response`
+
+Scope only the smallest TypeScript/Node client needed to call the already-created Djonik resource through the current official Anthropic SDK/API. Store identifiers/secrets only in local environment configuration. Do not duplicate the Djonik system prompt in application code.
+
+### THEN — Foundation 3: Telegram conversation adapter
+
+Goal:
+
+`Telegram → existing Djonik Managed Agent Session → Telegram response`
 
 Add only the minimal channel adapter and chat/session mapping needed for one-user real usage.
 
-### THEN — Foundation 3: Durable Claude Memory
+### THEN — Foundation 4: Durable Claude Memory
 
-Attach a Claude Memory Store and validate that Djonik can deliberately persist and later retrieve useful cross-session PM context.
+Create/attach a Claude Memory Store and validate that Djonik can deliberately persist and later retrieve useful cross-session PM context.
 
 Test with real examples such as stable project/client context and user work preferences. Do not store live task status as memory.
 
-### THEN — Foundation 4: First Skill
+### THEN — Foundation 5: First Skill
 
 Add `task-management` as the first custom Skill and validate progressive, task-relevant behavior without bloating the core system prompt.
 
-### THEN — Foundation 5: Trello read surface
+### THEN — Foundation 6: Trello read surface
 
 Give Djonik bounded read-only task/project awareness.
 
@@ -80,7 +90,7 @@ Initial target:
 - read task details;
 - answer natural PM questions from fresh Trello state.
 
-### THEN — Foundation 6: Trello write surface
+### THEN — Foundation 7: Trello write surface
 
 Add the smallest safe mutation set:
 
@@ -156,10 +166,12 @@ Do not introduce them because multi-agent is available. Require measured value.
 
 During all phases:
 
+- the Claude Managed Agent resource is the authoritative Djonik runtime;
 - Claude reasoning stays primary;
 - do not rebuild a custom Messages tool loop;
+- do not create a duplicate local Djonik agent when Console/Managed Agents owns the configuration;
 - do not create a custom DB/memory system without evidence;
-- do not turn server code into a phrase/intent router;
+- do not turn adapter code into a phrase/intent router;
 - keep Skills separate from mutable project data;
 - keep external live state fresh through tools;
 - verify mutations;
