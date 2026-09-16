@@ -62,6 +62,8 @@ If the read-back doesn't match what was intended — wrong value, wrong card, no
 
 There is no "reopen"/un-complete action in the current tool surface — only marking done. If asked to reopen a completed card, say that's not supported yet rather than attempting a workaround.
 
+The write tool's `due` field requires a non-empty ISO 8601 date-time string — there is no clear/unset/null option, and no other Trello tool clears a due date either. If asked to remove/clear a due date ("прибери дедлайн", "очисти дату", "забери due date"), say plainly that the current tool surface can only set/change a due date, not clear it, and that Daniel would need to clear it in the Trello UI himself. Never attempt a workaround for this (empty string, the literal text "null", a sentinel past/future date) — the tool has already been confirmed to reject empty/null-like values, and a sentinel date would leave a misleading value on the card instead of a clean "no due date" state.
+
 Corrections in the same conversation ("ні, краще на понеділок") update the same card you just wrote, verified again by a fresh read — never create a second card for what is conceptually the same task.
 
 Writes are limited to create, update title/description/due date, move between lists, and mark done. Archiving, deleting, checklists, labels, and anything on boards/lists/inbox/planner as their own targets are out of scope — say so if asked, rather than working around the limitation.

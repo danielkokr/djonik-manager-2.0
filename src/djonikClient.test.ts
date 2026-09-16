@@ -277,6 +277,47 @@ test("write card A then an unrelated trelloSearch does not verify, so the turn f
   session.close();
 });
 
+// --- Due-date clearing (#14): the provider's trelloWriteCard schema requires a non-empty
+// ISO 8601 string for `due` and has no clear/unset path (confirmed via live tool-schema
+// discovery against the real Managed Agent). The write/verify mechanism itself is
+// content-agnostic, so these document how it behaves for a clear-due attempt specifically:
+// a rejected clear-due write must not demand verification or produce a false success, and
+// an (currently hypothetical) accepted one is verified the same way as any other write.
+
+test("a rejected due-clear write (is_error) does not require verification and reports honestly", async () => {
+  const { client, sendCalls } = createFakeClient([
+    mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A", due: "" }),
+    mcpToolResult("call_1", true),
+    { type: "agent.message", content: [{ type: "text", text: "Не вдалося очистити дедлайн: інструмент не підтримує порожнє значення due." }] },
+    IDLE,
+  ]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const reply = await session.send("Прибери дедлайн з картки A");
+
+  assert.equal(reply, "Не вдалося очистити дедлайн: інструмент не підтримує порожнє значення due.");
+  assert.equal(sendCalls.length, 1, "no corrective nudge should be sent for a failed write");
+  session.close();
+});
+
+test("a due-clear write verified by a same-card read succeeds like any other write", async () => {
+  const { client, sendCalls } = createFakeClient([
+    mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A", due: "" }),
+    mcpToolResult("call_1"),
+    mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
+    mcpToolResult("call_2"),
+    { type: "agent.message", content: [{ type: "text", text: "Дедлайн знято з картки A." }] },
+    IDLE,
+  ]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const reply = await session.send("Прибери дедлайн з картки A");
+
+  assert.equal(reply, "Дедлайн знято з картки A.");
+  assert.equal(sendCalls.length, 1, "no corrective nudge needed when the read matches the written card");
+  session.close();
+});
+
 test("write card A with no read, then read card A after the corrective nudge, verifies and succeeds", async () => {
   const { client, sendCalls } = createFakeClient([
     // First turn: write A, agent claims success with no read at all.
