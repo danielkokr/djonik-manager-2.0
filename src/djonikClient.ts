@@ -38,8 +38,17 @@ export type DjonikTraceEvent =
 const DJONIK_MEMORY_INSTRUCTIONS =
   "Persistent PM memory across sessions. Write only durable, useful context: " +
   "stable work preferences, client/project facts, important decisions, recurring " +
-  "patterns, PM lessons. Do not store live Trello/task state, transient chat, or " +
-  "anything trivial. Fresh external tool reads always outrank what is remembered here.";
+  "patterns, PM lessons, plans the user has explicitly accepted (e.g. \"так, працюємо " +
+  "за цим планом\"), and explicit personal/client commitments the user states (e.g. " +
+  "\"я точно зроблю X до пʼятниці\"). Do not write every suggestion or provisional plan " +
+  "as if it were accepted — only write an accepted plan or commitment when the user's " +
+  "acceptance/commitment is actually explicit, not merely discussed. Do not store live " +
+  "Trello/task state, transient chat, or anything trivial. An accepted plan or " +
+  "commitment recorded here is historical/decision context, not live task state: fresh " +
+  "external tool reads always outrank what is remembered here for current status. When " +
+  "the user corrects or cancels an earlier accepted plan/commitment, update what is " +
+  "remembered so the new version is current and the superseded one is no longer " +
+  "presented as still active.";
 
 /**
  * Deterministic backstop for the task-management Skill's verify-before-claiming-success
