@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing is blocked by the external Trello MCP tool surface. The Managed Agent token/cost audit is complete: Google Calendar remains attached but is disabled until Wave E, five unsupported Trello write tools are already disabled, opt-in per-turn telemetry and a planning regression matrix are live, and the three tested optional Trello reads remain enabled because the final quality gate did not establish safe behavioral equivalence. Conditional same-turn fresh-read enforcement for short planning follow-ups is a Managed Agents platform limitation under the accepted architecture; daily/weekly planning Skills continue to request fresh Trello evidence, but that guidance is best-effort rather than a hard guarantee for this edge case. A follow-up architecture/roadmap review (2026-09-16) identified the remaining unexploited, evidence-based token/cost work: separating real Telegram production usage from Console/CLI validation usage, measuring real long-lived Telegram session growth, and adopting a spend guardrail for future audits.
+Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing is blocked by the external Trello MCP tool surface. The Managed Agent token/cost audit is complete: Google Calendar remains attached but is disabled until Wave E, five unsupported Trello write tools are already disabled, opt-in per-turn telemetry and a planning regression matrix are live, and the three tested optional Trello reads remain enabled because the final quality gate did not establish safe behavioral equivalence. Conditional same-turn fresh-read enforcement for short planning follow-ups is a Managed Agents platform limitation under the accepted architecture; daily/weekly planning Skills continue to request fresh Trello evidence, but that guidance is best-effort rather than a hard guarantee for this edge case. Source-correlated Telegram usage telemetry (#19) is accepted and validated against an independent Console export for one real UTC hour. The next canonical cost/reliability measurement is real long-lived Telegram session growth (#20); the development/validation spend guardrail (#21) remains queued.
 
 ## Execution order
 
@@ -161,15 +161,25 @@ Outcome:
 - do not add an always-read-every-turn workaround, semantic routing, or a custom Messages API loop;
 - revisit only if Managed Agents exposes a native deterministic per-turn tool requirement or pre-response enforcement capability.
 
-### NOW — Source-correlated usage telemetry: separate Telegram production cost from Console/CLI validation cost (#19)
+### DONE — Source-correlated usage telemetry: separate Telegram production cost from Console/CLI validation cost (#19)
 
-Decided 2026-09-16 by Product Owner architecture/roadmap review.
+Accepted 2026-09-16 at commit `9b510182a1e0314c5dd12c7447b78091f1158e9a`.
 
-Goal: make it possible to determine, for any recent time window, how much measured token/cost usage came from real Telegram traffic versus Console/CLI/diagnostic sessions, reusing the existing opt-in turn telemetry (`DJONIK_TURN_TELEMETRY=1`, source-labelled `telegram`/`diagnostic`/`unknown` since #16 §25). No custom analytics database, dashboard, or scheduled export job. No Agent/Skill/Memory/MCP/production configuration change.
+Verified outcome:
+- opt-in, content-free Telegram telemetry emits explicit `source: telegram`, UTC timestamps, and `usageScope: turn_delta`;
+- cumulative Managed Session `session.usage` is converted to per-visible-turn deltas, preventing double-counting across long-lived sessions;
+- a local stateless reconciliation utility aggregates a defined UTC window without a DB, dashboard, scheduler, or hosted accounting service;
+- a real two-turn Telegram capture totalled 265,438 input-composition tokens, 1,777 output tokens, and $0.14 list cost;
+- an independent Console token export for the same UTC hour matched the Telegram token totals exactly, leaving a measured non-Telegram token remainder of 0 for that window;
+- the estimated non-Telegram list-cost remainder was $0.00, explicitly retained as an estimate because the supplied Console export contained token fields but no Cost API cost column;
+- no Agent/Skill/Memory/MCP/Calendar/Trello production configuration changed;
+- typecheck passed, tests passed 40/40, and `git diff --check` was clean.
 
-### QUEUED — Measure real Telegram session token growth over time using existing turn telemetry (#20)
+### NOW — Measure real Telegram session token growth over time using existing turn telemetry (#20)
 
-After #19 lands (or in parallel if #19's source separation is not yet needed for a clean read), observe real production Telegram sessions over an agreed window to determine whether token/cost composition grows materially with turn count, before any compaction/rollover/history-trimming work is considered. Measurement only; no session lifecycle change.
+Promoted after #19 acceptance on 2026-09-16.
+
+Observe real production Telegram sessions over an agreed window to determine whether token/cost composition grows materially with turn count, before any compaction/rollover/history-trimming work is considered. Measurement only; no session lifecycle change.
 
 ### QUEUED — Adopt a development/validation spend guardrail for future token/cost audits (#21)
 
