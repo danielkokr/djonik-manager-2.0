@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing is blocked by the external Trello MCP tool surface. The Managed Agent token/cost audit is complete: Google Calendar remains attached but is disabled until Wave E, five unsupported Trello write tools are already disabled, opt-in per-turn telemetry and a planning regression matrix are live, and the three tested optional Trello reads remain enabled because the final quality gate did not establish safe behavioral equivalence. The current blocker is ensuring every new planning turn obtains fresh authoritative Trello evidence in that same turn before making exact due/list/status/current-state claims.
+Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing is blocked by the external Trello MCP tool surface. The Managed Agent token/cost audit is complete: Google Calendar remains attached but is disabled until Wave E, five unsupported Trello write tools are already disabled, opt-in per-turn telemetry and a planning regression matrix are live, and the three tested optional Trello reads remain enabled because the final quality gate did not establish safe behavioral equivalence. Conditional same-turn fresh-read enforcement for short planning follow-ups is a Managed Agents platform limitation under the accepted architecture; daily/weekly planning Skills continue to request fresh Trello evidence, but that guidance is best-effort rather than a hard guarantee for this edge case.
 
 ## Execution order
 
@@ -148,24 +148,22 @@ Verified outcome:
 - opt-in content-free per-turn telemetry and a canonical planning regression matrix were added;
 - Memory, Skills, authoritative direct reads, and same-card verify-after-write were not optimized away.
 
-### NOW — Blocker: fresh Trello evidence per planning turn (#18)
+### DONE / PROVIDER LIMITATION — Blocker: fresh Trello evidence per planning turn (#18)
 
-Goal:
+Investigated 2026-09-16.
 
-Ensure every new planning turn that makes exact Trello-backed current-state claims obtains fresh authoritative evidence during that same visible turn. Prior conversation context and Memory may inform judgement, but must not substitute for fresh operational truth.
+Outcome:
+- the baseline defect was reproduced: short planning follow-ups could make exact current Trello claims without a same-turn direct read;
+- an isolated stronger Agent-instruction experiment passed, but production Agent v13 failed validation on `Що зараз горить?` with zero Trello calls;
+- production was restored to Agent v14, whose system prompt is byte-for-byte equivalent to the accepted v12 baseline; all other Agent configuration remains unchanged;
+- current Managed Agent Sessions expose no native deterministic per-turn tool choice, required MCP-call mechanism, or pre-response enforcement gate that can conditionally require a Trello read;
+- prompt and Skill guidance continue to request fresh evidence, but are best-effort for this short-follow-up edge case and must not be represented as a hard guarantee;
+- do not add an always-read-every-turn workaround, semantic routing, or a custom Messages API loop;
+- revisit only if Managed Agents exposes a native deterministic per-turn tool requirement or pre-response enforcement capability.
 
-Evidence from #16:
-- urgency and project-planning follow-ups made exact due/status claims without a fresh direct Trello read in that same turn;
-- one mixed-status planning turn made exact live-state claims with zero Trello calls;
-- the defect appeared in the control path as well as an optimization variant, proving it is a shared baseline correctness gap rather than a token-optimization side effect.
+### NO CANONICAL NOW
 
-Immediate bounded work:
-- reproduce the gap first against real Managed Sessions and live Trello;
-- determine the smallest correct fix layer: planning Skill(s), shared task-management guidance, or Agent system instruction;
-- keep production Agent v12 tool surface unchanged while fixing the correctness gap;
-- require same-turn authoritative evidence for every exact due/list/status/current-state claim;
-- preserve zero-mutation planning, project scoping, Memory semantics, daily/weekly planning quality, and same-card write verification;
-- do not introduce a custom Trello client, state mirror, DB, intent router, or custom Messages loop.
+After #18 closeout, the next canonical execution item is intentionally undecided pending a separate Product Owner architecture/roadmap review with another agent/model. Do not promote #17 or any other issue to NOW until that review makes an explicit decision.
 
 ### QUEUED — Project Context Bootstrap: canonical project briefs in Djonik Memory (#17)
 
