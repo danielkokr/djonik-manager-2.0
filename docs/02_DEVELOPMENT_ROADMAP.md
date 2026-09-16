@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing is blocked by the external Trello MCP tool surface, while exact Trello field claims now use authoritative direct reads rather than `trelloSearch` alone. The current focus is measuring and reducing Managed Agent token/cost overhead without weakening PM quality or correctness.
+Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing is blocked by the external Trello MCP tool surface. The Managed Agent token/cost audit is complete: Google Calendar remains attached but is disabled until Wave E, five unsupported Trello write tools are already disabled, opt-in per-turn telemetry and a planning regression matrix are live, and the three tested optional Trello reads remain enabled because the final quality gate did not establish safe behavioral equivalence. The current blocker is ensuring every new planning turn obtains fresh authoritative Trello evidence in that same turn before making exact due/list/status/current-state claims.
 
 ## Execution order
 
@@ -134,25 +134,42 @@ Verified outcome:
 - daily/weekly planning remained grounded in live Trello reads;
 - no cache/state mirror/custom Trello client was introduced.
 
-### NOW — Audit: Managed Agent token usage and cost (#16)
+### DONE — Audit: Managed Agent token usage and cost (#16)
+
+Accepted 2026-09-16 at commits `51b70cd64ea65536fd1610520f3b4c6dcd140908`, `02da7fa4670c38589e368fe3885d4eb81e8f017c`, and `9da00a58451dca98db616d93ad7ba8b32df26754`, plus production Managed Agent version 12.
+
+Verified outcome:
+- a small number of visible turns can generate large input-token composition because one visible turn may contain multiple internal model/tool iterations;
+- prompt caching is active and materially reduces billed repeated context, but cache-read tokens still appear in usage totals;
+- disabling the unused Google Calendar toolset reduced controlled first-pass context by 28.07% and total-turn composition by 27.38% with no regression in the validated factual Trello flow;
+- Google Calendar remains attached but `enabled:false` in production until Wave E;
+- five unsupported Trello write tools are confirmed `enabled:false`, while `trelloWriteCard` remains enabled;
+- three optional Trello reads showed a potential first-pass reduction, but the final quality gate found material planning regressions / insufficient same-turn fresh evidence, so they remain enabled and further optimization of them is stopped;
+- opt-in content-free per-turn telemetry and a canonical planning regression matrix were added;
+- Memory, Skills, authoritative direct reads, and same-card verify-after-write were not optimized away.
+
+### NOW — Blocker: fresh Trello evidence per planning turn (#18)
 
 Goal:
 
-Measure the real token/cost shape of Djonik and identify the largest safe optimization opportunities before Wave B, without weakening reasoning quality, Memory semantics, live-Trello freshness, or write verification.
+Ensure every new planning turn that makes exact Trello-backed current-state claims obtains fresh authoritative evidence during that same visible turn. Prior conversation context and Memory may inform judgement, but must not substitute for fresh operational truth.
 
-Measured baseline so far:
-- one visible Managed Agent turn can require multiple internal model iterations and tool loops;
-- representative turns observed roughly `60.8k–242k` input-token composition and `$0.02–$0.11` session cost;
-- stable starting context is roughly `30k` tokens per internal iteration in observed sessions;
-- prompt caching is active and material, with most representative input composition coming from cache reads;
-- repeated Foundation/diagnostic sessions likely account for a meaningful share of recent development usage, but source attribution is not yet instrumented.
+Evidence from #16:
+- urgency and project-planning follow-ups made exact due/status claims without a fresh direct Trello read in that same turn;
+- one mixed-status planning turn made exact live-state claims with zero Trello calls;
+- the defect appeared in the control path as well as an optimization variant, proving it is a shared baseline correctness gap rather than a token-optimization side effect.
 
 Immediate bounded work:
-- finish controlled baseline for a trivial no-tool turn and fresh-vs-continued Session behavior;
-- audit the 17-tool surface and identify tools that can be safely disabled without reducing current product capability;
-- add development cost guardrails / per-turn observability only after measurements justify the exact implementation;
-- test Session rollover only if controlled measurements show meaningful history growth;
-- do not optimize by removing Memory, Skills, authoritative direct reads, or same-card verification.
+- reproduce the gap first against real Managed Sessions and live Trello;
+- determine the smallest correct fix layer: planning Skill(s), shared task-management guidance, or Agent system instruction;
+- keep production Agent v12 tool surface unchanged while fixing the correctness gap;
+- require same-turn authoritative evidence for every exact due/list/status/current-state claim;
+- preserve zero-mutation planning, project scoping, Memory semantics, daily/weekly planning quality, and same-card write verification;
+- do not introduce a custom Trello client, state mirror, DB, intent router, or custom Messages loop.
+
+### QUEUED — Project Context Bootstrap: canonical project briefs in Djonik Memory (#17)
+
+After #18 is accepted, bootstrap concise canonical project briefs into `Djonik Memory` before broader capability expansion. Stable project/client context belongs in Memory; live deadlines/status/current task state continue to come from fresh Trello.
 
 ## Capability waves after reliability/cost closeout
 
