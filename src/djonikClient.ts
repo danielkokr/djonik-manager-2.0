@@ -9,10 +9,23 @@ export interface DjonikSessionHandle {
 
 export type DjonikTurnSource = "telegram" | "diagnostic" | "unknown";
 
+export interface DjonikCumulativeUsage {
+  inputTokens?: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
+  outputTokens?: number;
+  listCostAmount?: string;
+  listCostCurrency?: string;
+}
+
 /** Content-free summary emitted once per visible user turn when enabled by the caller. */
 export interface DjonikTurnTelemetry {
+  /** ISO 8601 UTC instant at which this completed visible turn was recorded. */
+  recordedAt: string;
   source: DjonikTurnSource;
   sessionId: string;
+  /** Reconciliation must only aggregate records with this explicit per-turn scope. */
+  usageScope: "turn_delta";
   modelIterations: number;
   toolCalls: number;
   toolNames: string[];
@@ -20,14 +33,8 @@ export interface DjonikTurnTelemetry {
   verificationNudges: number;
   skillRead: boolean;
   memoryRead: boolean;
-  usage: {
-    inputTokens?: number;
-    cacheCreationInputTokens?: number;
-    cacheReadInputTokens?: number;
-    outputTokens?: number;
-    listCostAmount?: string;
-    listCostCurrency?: string;
-  } | null;
+  /** Per-visible-turn delta, never the session's cumulative usage snapshot. */
+  usage: DjonikCumulativeUsage | null;
 }
 
 export interface DjonikTurnTelemetryCollector {
@@ -44,12 +51,15 @@ export interface DjonikTurnTelemetryCollector {
     list_cost?: { amount: string; currency: string } | null;
   }): void;
   summary(): DjonikTurnTelemetry;
+  cumulativeUsage(): DjonikCumulativeUsage | null;
 }
 
 /** Aggregates event metadata only; it never accepts message, Memory, or MCP-result content. */
 export function createTurnTelemetryCollector(
   source: DjonikTurnSource,
   sessionId: string,
+  previousUsage: DjonikCumulativeUsage | null = null,
+  now: () => string = () => new Date().toISOString(),
 ): DjonikTurnTelemetryCollector {
   let modelIterations = 0;
   const toolNames: string[] = [];
@@ -57,7 +67,43 @@ export function createTurnTelemetryCollector(
   let verificationNudges = 0;
   let skillRead = false;
   let memoryRead = false;
-  let usage: DjonikTurnTelemetry["usage"] = null;
+  let cumulativeUsage: DjonikCumulativeUsage | null = null;
+
+  function delta(current: number | undefined, previous: number | undefined): number | undefined {
+    if (current === undefined) return undefined;
+    const result = current - (previous ?? 0);
+    return result >= 0 ? result : undefined;
+  }
+
+  function listCostDelta(): Pick<DjonikCumulativeUsage, "listCostAmount" | "listCostCurrency"> {
+    if (!cumulativeUsage?.listCostAmount || !cumulativeUsage.listCostCurrency) return {};
+    if (
+      previousUsage?.listCostCurrency !== undefined &&
+      previousUsage.listCostCurrency !== cumulativeUsage.listCostCurrency
+    ) return {};
+    try {
+      const result = BigInt(cumulativeUsage.listCostAmount) - BigInt(previousUsage?.listCostAmount ?? "0");
+      return result >= 0n
+        ? { listCostAmount: result.toString(), listCostCurrency: cumulativeUsage.listCostCurrency }
+        : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function turnUsage(): DjonikCumulativeUsage | null {
+    if (cumulativeUsage === null) return null;
+    return {
+      inputTokens: delta(cumulativeUsage.inputTokens, previousUsage?.inputTokens),
+      cacheCreationInputTokens: delta(
+        cumulativeUsage.cacheCreationInputTokens,
+        previousUsage?.cacheCreationInputTokens,
+      ),
+      cacheReadInputTokens: delta(cumulativeUsage.cacheReadInputTokens, previousUsage?.cacheReadInputTokens),
+      outputTokens: delta(cumulativeUsage.outputTokens, previousUsage?.outputTokens),
+      ...listCostDelta(),
+    };
+  }
 
   return {
     recordModelIteration: () => { modelIterations += 1; },
@@ -74,7 +120,7 @@ export function createTurnTelemetryCollector(
         (sum, value) => sum + (typeof value === "number" ? value : 0),
         0,
       );
-      usage = {
+      cumulativeUsage = {
         inputTokens: nextUsage.input_tokens,
         cacheCreationInputTokens,
         cacheReadInputTokens: nextUsage.cache_read_input_tokens,
@@ -84,8 +130,10 @@ export function createTurnTelemetryCollector(
       };
     },
     summary: () => ({
+      recordedAt: now(),
       source,
       sessionId,
+      usageScope: "turn_delta",
       modelIterations,
       toolCalls: toolNames.length,
       toolNames: [...toolNames],
@@ -93,8 +141,9 @@ export function createTurnTelemetryCollector(
       verificationNudges,
       skillRead,
       memoryRead,
-      usage,
+      usage: turnUsage(),
     }),
+    cumulativeUsage: () => cumulativeUsage === null ? null : { ...cumulativeUsage },
   };
 }
 
@@ -283,6 +332,8 @@ export async function connectToDjonik(
    *  (falls back to "any successful Trello read clears it"). */
   let pendingWriteObjectId: string | null = null;
   let turnTelemetry: DjonikTurnTelemetryCollector | null = null;
+  /** Session usage events are cumulative; this is the completed-turn baseline. */
+  let previousSessionUsage: DjonikCumulativeUsage | null = null;
 
   async function runTurn(events: SendableEvent[]): Promise<string> {
     await client.beta.sessions.events.send(session.id, { events });
@@ -403,7 +454,7 @@ export async function connectToDjonik(
     pendingWriteTool = null;
     pendingWriteObjectId = null;
     mcpToolCallsById.clear();
-    turnTelemetry = createTurnTelemetryCollector(turnSource, session.id);
+    turnTelemetry = createTurnTelemetryCollector(turnSource, session.id, previousSessionUsage);
 
     try {
       let reply = await runTurn([{ type: "user.message", content: [{ type: "text", text }] }]);
@@ -423,7 +474,9 @@ export async function connectToDjonik(
 
       return reply;
     } finally {
-      onTurnTelemetry?.(turnTelemetry.summary());
+      const completedTelemetry = turnTelemetry.summary();
+      previousSessionUsage = turnTelemetry.cumulativeUsage();
+      onTurnTelemetry?.(completedTelemetry);
       turnTelemetry = null;
     }
   }

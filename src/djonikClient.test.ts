@@ -89,8 +89,8 @@ function mcpToolResult(mcp_tool_use_id: string, is_error = false): unknown {
   return { type: "agent.mcp_tool_result", id: `${mcp_tool_use_id}_result`, mcp_tool_use_id, is_error };
 }
 
-test("turn telemetry aggregates metadata without retaining content", () => {
-  const telemetry = createTurnTelemetryCollector("telegram", "session_test123");
+test("turn telemetry emits content-free explicit-source usage delta with deterministic time", () => {
+  const telemetry = createTurnTelemetryCollector("telegram", "session_test123", null, () => "2026-09-16T10:00:00.000Z");
   telemetry.recordModelIteration();
   telemetry.recordModelIteration();
   telemetry.recordMcpToolUse("trelloReadCard");
@@ -109,8 +109,10 @@ test("turn telemetry aggregates metadata without retaining content", () => {
   });
 
   assert.deepEqual(telemetry.summary(), {
+    recordedAt: "2026-09-16T10:00:00.000Z",
     source: "telegram",
     sessionId: "session_test123",
+    usageScope: "turn_delta",
     modelIterations: 2,
     toolCalls: 2,
     toolNames: ["trelloReadCard", "trelloSearch"],
@@ -127,6 +129,60 @@ test("turn telemetry aggregates metadata without retaining content", () => {
       listCostCurrency: "USD",
     },
   });
+});
+
+test("cumulative session usage produces only the second visible turn delta", () => {
+  const first = createTurnTelemetryCollector("telegram", "session_test123", null, () => "2026-09-16T10:00:00.000Z");
+  first.recordUsage({
+    input_tokens: 10, cache_creation: { ephemeral_5m_input_tokens: 20 }, cache_read_input_tokens: 30,
+    output_tokens: 40, list_cost: { amount: "50", currency: "USD" },
+  });
+  assert.deepEqual(first.summary().usage, {
+    inputTokens: 10, cacheCreationInputTokens: 20, cacheReadInputTokens: 30, outputTokens: 40,
+    listCostAmount: "50", listCostCurrency: "USD",
+  });
+
+  const second = createTurnTelemetryCollector("telegram", "session_test123", first.cumulativeUsage());
+  second.recordUsage({
+    input_tokens: 13, cache_creation: { ephemeral_5m_input_tokens: 25 }, cache_read_input_tokens: 38,
+    output_tokens: 44, list_cost: { amount: "57", currency: "USD" },
+  });
+  assert.deepEqual(second.summary().usage, {
+    inputTokens: 3, cacheCreationInputTokens: 5, cacheReadInputTokens: 8, outputTokens: 4,
+    listCostAmount: "7", listCostCurrency: "USD",
+  });
+});
+
+test("a new session starts with a zero usage baseline", () => {
+  const telemetry = createTurnTelemetryCollector("telegram", "session_new");
+  telemetry.recordUsage({
+    input_tokens: 3, cache_creation: { ephemeral_1h_input_tokens: 5 }, cache_read_input_tokens: 8,
+    output_tokens: 2, list_cost: { amount: "7", currency: "USD" },
+  });
+  assert.deepEqual(telemetry.summary().usage, {
+    inputTokens: 3, cacheCreationInputTokens: 5, cacheReadInputTokens: 8, outputTokens: 2,
+    listCostAmount: "7", listCostCurrency: "USD",
+  });
+});
+
+test("connectToDjonik retains the cumulative baseline across two sends in one session", async () => {
+  const telemetry: unknown[] = [];
+  const { client } = createFakeClient([
+    { type: "session.usage", usage: { input_tokens: 10, cache_creation: { ephemeral_5m_input_tokens: 20 }, cache_read_input_tokens: 30, output_tokens: 40, list_cost: { amount: "50", currency: "USD" } } },
+    AGENT_MESSAGE, IDLE,
+    { type: "session.usage", usage: { input_tokens: 13, cache_creation: { ephemeral_5m_input_tokens: 25 }, cache_read_input_tokens: 38, output_tokens: 44, list_cost: { amount: "57", currency: "USD" } } },
+    AGENT_MESSAGE, IDLE,
+  ]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x", undefined, (record) => telemetry.push(record), "telegram");
+
+  await session.send("Перший turn");
+  await session.send("Другий turn");
+
+  assert.deepEqual((telemetry[1] as { usage: unknown }).usage, {
+    inputTokens: 3, cacheCreationInputTokens: 5, cacheReadInputTokens: 8, outputTokens: 4,
+    listCostAmount: "7", listCostCurrency: "USD",
+  });
+  session.close();
 });
 
 test("connectToDjonik attaches the Djonik Memory Store and Vault at session creation", async () => {
