@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing was investigated and is currently blocked by the external Trello MCP tool surface. The current focus is hardening due-date read accuracy before the token/cost audit and Wave B.
+Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing is blocked by the external Trello MCP tool surface, while exact Trello field claims now use authoritative direct reads rather than `trelloSearch` alone. The current focus is measuring and reducing Managed Agent token/cost overhead without weakening PM quality or correctness.
 
 ## Execution order
 
@@ -121,31 +121,40 @@ Outcome:
 - same-card verification and normal due-date changes remain intact;
 - issue closed `not_planned` until the provider exposes a safe clearing path.
 
-### NOW — Trello read surface: due-date accuracy across search vs direct card read (#15)
+### DONE — Trello read surface: due-date accuracy across search vs direct card read (#15)
+
+Accepted 2026-09-16 at commit `580dfa49510881cabd1d3de9ee16d37800222a96` plus Managed Agent system-prompt version 11.
+
+Verified outcome:
+- `trelloSearch` is treated as discovery only for exact card-field questions;
+- exact due/list/status/current-state claims require an authoritative direct read;
+- `due: null` from search is not treated as proof that no deadline exists;
+- the formerly failing no-due Scenario C passed 3/3 fresh sessions after the Agent-level rule;
+- ambiguity produces clarification without false field claims or mutation;
+- daily/weekly planning remained grounded in live Trello reads;
+- no cache/state mirror/custom Trello client was introduced.
+
+### NOW — Audit: Managed Agent token usage and cost (#16)
 
 Goal:
 
-Ensure Djonik does not make definitive field-level claims, especially due dates, from incomplete `trelloSearch` results when a direct card read is required.
+Measure the real token/cost shape of Djonik and identify the largest safe optimization opportunities before Wave B, without weakening reasoning quality, Memory semantics, live-Trello freshness, or write verification.
 
-Scope:
-- reproduce and characterize `trelloSearch` vs `trelloReadCard` due-field mismatch;
-- use search for discovery, not authoritative field-level truth when exact fields matter;
-- require direct reads for exact due/status claims where search may be incomplete;
-- preserve ambiguity handling and zero-mutation read behavior;
-- avoid custom Trello cache/state mirrors or REST clients.
+Measured baseline so far:
+- one visible Managed Agent turn can require multiple internal model iterations and tool loops;
+- representative turns observed roughly `60.8k–242k` input-token composition and `$0.02–$0.11` session cost;
+- stable starting context is roughly `30k` tokens per internal iteration in observed sessions;
+- prompt caching is active and material, with most representative input composition coming from cache reads;
+- repeated Foundation/diagnostic sessions likely account for a meaningful share of recent development usage, but source attribution is not yet instrumented.
 
-Acceptance evidence:
-- exact due-date answers are backed by direct card reads;
-- planning judgement is not based on a false `due = null` from search results;
-- cards with no due date are only declared so after authoritative direct/read-board evidence;
-- ambiguity produces clarification rather than a false field claim;
-- regressions/tests/typecheck/`git diff --check` pass.
+Immediate bounded work:
+- finish controlled baseline for a trivial no-tool turn and fresh-vs-continued Session behavior;
+- audit the 17-tool surface and identify tools that can be safely disabled without reducing current product capability;
+- add development cost guardrails / per-turn observability only after measurements justify the exact implementation;
+- test Session rollover only if controlled measurements show meaningful history growth;
+- do not optimize by removing Memory, Skills, authoritative direct reads, or same-card verification.
 
-### NEXT — Audit: Managed Agent token usage and cost (#16)
-
-After #15, measure the real token/cost shape of representative Djonik turns before Wave B. Separate Foundation/CLI validation overhead from ordinary Telegram runtime usage and identify the dominant input-token contributors before implementing any optimization.
-
-## Capability waves after reliability closeout
+## Capability waves after reliability/cost closeout
 
 ### Wave B — Studio intake
 - screenshots/images;
