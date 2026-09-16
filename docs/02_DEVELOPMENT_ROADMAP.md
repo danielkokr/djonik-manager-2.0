@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–10 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; `Djonik Personal` Vault supplies Trello/Google credentials; Trello MCP read/write flows work against live data; same-card verify-after-write is enforced by the thin client; dead Managed Sessions recover automatically; realistic conversational PM, daily planning, and weekly planning have been validated. The current focus is richer durable project/client context through Claude-native Memory.
+Foundations 1–11 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; `Djonik Personal` Vault supplies Trello/Google credentials; Trello MCP read/write flows work against live data; same-card verify-after-write is enforced by the thin client; dead Managed Sessions recover automatically; conversational PM, daily/weekly planning, and project/client context memory have been validated. The current focus is distinguishing suggestions from explicitly accepted plans and commitments while preserving fresh Trello as operational truth.
 
 ## Execution order
 
@@ -84,33 +84,41 @@ Verified foundation:
 - task-management, daily-planning, and write-verification regressions were absent;
 - typecheck passed, tests passed 30/30, and `git diff --check` was clean.
 
-### NOW — Foundation 11: Project/client context memory (#12)
+### DONE — Foundation 11: Project/client context memory (#12)
+Accepted 2026-09-16 with no repo/config/Skill/Agent change required.
+
+Verified foundation:
+- existing Claude-native Memory behavior already handles useful durable project/client context;
+- stable context survives genuinely new Managed Sessions without transcript replay;
+- durable Memory and fresh Trello evidence can coexist coherently in one answer;
+- corrected durable context supersedes stale context in a later Session;
+- project/client facts remain correctly scoped without cross-project leakage;
+- transient task/list/due state is not trusted over fresh Trello;
+- existing `DJONIK_MEMORY_INSTRUCTIONS` already encode the durable-vs-live boundary;
+- typecheck passed, tests passed 30/30, and `git diff --check` was clean.
+
+### NOW — Foundation 12: Accepted plans and commitments (#13)
 
 Goal:
 
-`natural project/client conversation → remember stable context/decisions/preferences → recall across a new Session → combine with fresh Trello state when current work is involved`
+`planning conversation → user explicitly accepts/commits → durable accepted-plan/commitment context → later PM reasoning uses it appropriately → fresh Trello still owns current operational truth`
 
 Scope:
-- improve use of the existing `Djonik Memory` store for durable project/client context;
-- remember stable project goals, constraints, recurring client preferences, naming/mapping conventions, decisions, and useful lessons;
-- avoid treating current task status, due dates, or other live Trello facts as durable Memory truth;
-- retrieve relevant context naturally across new Sessions;
-- allow corrections to supersede stale/incorrect remembered context;
-- keep client/project context scoped to avoid cross-project leakage;
-- combine Memory with fresh Trello reads whenever an answer also depends on current operational state;
-- add no custom DB/vector/RAG/state mirror unless validation demonstrates a real need.
+- distinguish advice/suggestions from explicit plan acceptance and real commitments;
+- validate that unaccepted proposals are not remembered as commitments;
+- preserve explicitly accepted plans across new Sessions when useful;
+- preserve explicit user commitments across new Sessions;
+- allow corrections/cancellations to supersede stale commitment context;
+- distinguish `what we agreed` from `what Trello says now`;
+- use existing Claude Memory first and add no parallel commitments database/state mirror unless real validation proves a need;
+- preserve existing Skills, Telegram, Memory behavior, Trello permissions and same-card write verification.
 
 Acceptance evidence:
-- useful stable project/client context survives a new Managed Session without transcript replay;
-- corrected durable context wins in a later Session;
-- chosen project/client examples remain correctly scoped;
-- live Trello remains source of truth for current task/status/due state;
-- Memory and fresh Trello can be used together coherently in one answer;
-- existing Skills and verified Trello mutation behavior remain intact.
-
-### NEXT — Accepted plans and commitments
-
-Only after project/client context memory is reliable.
+- unaccepted suggestions are not treated as commitments;
+- explicit accepted plans/commitments survive a genuinely new Session;
+- corrections/cancellations supersede stale accepted context;
+- accepted/history context can coexist with fresh Trello live state in one answer;
+- no unnecessary new architecture is introduced.
 
 ## Capability waves after the foundation
 
