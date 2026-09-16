@@ -7,6 +7,97 @@ export interface DjonikSessionHandle {
   close(): void;
 }
 
+export type DjonikTurnSource = "telegram" | "diagnostic" | "unknown";
+
+/** Content-free summary emitted once per visible user turn when enabled by the caller. */
+export interface DjonikTurnTelemetry {
+  source: DjonikTurnSource;
+  sessionId: string;
+  modelIterations: number;
+  toolCalls: number;
+  toolNames: string[];
+  mcpResults: number;
+  verificationNudges: number;
+  skillRead: boolean;
+  memoryRead: boolean;
+  usage: {
+    inputTokens?: number;
+    cacheCreationInputTokens?: number;
+    cacheReadInputTokens?: number;
+    outputTokens?: number;
+    listCostAmount?: string;
+    listCostCurrency?: string;
+  } | null;
+}
+
+export interface DjonikTurnTelemetryCollector {
+  recordModelIteration(): void;
+  recordMcpToolUse(toolName: string): void;
+  recordMcpResult(): void;
+  recordBuiltInRead(input: Record<string, unknown>): void;
+  recordVerificationNudge(): void;
+  recordUsage(usage: {
+    input_tokens?: number;
+    cache_creation?: object | null;
+    cache_read_input_tokens?: number;
+    output_tokens?: number;
+    list_cost?: { amount: string; currency: string } | null;
+  }): void;
+  summary(): DjonikTurnTelemetry;
+}
+
+/** Aggregates event metadata only; it never accepts message, Memory, or MCP-result content. */
+export function createTurnTelemetryCollector(
+  source: DjonikTurnSource,
+  sessionId: string,
+): DjonikTurnTelemetryCollector {
+  let modelIterations = 0;
+  const toolNames: string[] = [];
+  let mcpResults = 0;
+  let verificationNudges = 0;
+  let skillRead = false;
+  let memoryRead = false;
+  let usage: DjonikTurnTelemetry["usage"] = null;
+
+  return {
+    recordModelIteration: () => { modelIterations += 1; },
+    recordMcpToolUse: (toolName) => { toolNames.push(toolName); },
+    recordMcpResult: () => { mcpResults += 1; },
+    recordBuiltInRead: (input) => {
+      const path = typeof input.file_path === "string" ? input.file_path : "";
+      skillRead ||= /(?:^|\/)skills\//.test(path);
+      memoryRead ||= /(?:^|\/)memory\//.test(path);
+    },
+    recordVerificationNudge: () => { verificationNudges += 1; },
+    recordUsage: (nextUsage) => {
+      const cacheCreationInputTokens = Object.values(nextUsage.cache_creation ?? {}).reduce(
+        (sum, value) => sum + (typeof value === "number" ? value : 0),
+        0,
+      );
+      usage = {
+        inputTokens: nextUsage.input_tokens,
+        cacheCreationInputTokens,
+        cacheReadInputTokens: nextUsage.cache_read_input_tokens,
+        outputTokens: nextUsage.output_tokens,
+        listCostAmount: nextUsage.list_cost?.amount,
+        listCostCurrency: nextUsage.list_cost?.currency,
+      };
+    },
+    summary: () => ({
+      source,
+      sessionId,
+      modelIterations,
+      toolCalls: toolNames.length,
+      toolNames: [...toolNames],
+      mcpResults,
+      verificationNudges,
+      skillRead,
+      memoryRead,
+      usage,
+    }),
+  };
+}
+
 /**
  * Thrown when the underlying Managed Session/event stream itself has died
  * (stream ended, session terminated, or a terminal session.error) rather than
@@ -158,6 +249,8 @@ export async function connectToDjonik(
   memoryStoreId: string,
   vaultId: string,
   onTrace?: (event: DjonikTraceEvent) => void,
+  onTurnTelemetry?: (telemetry: DjonikTurnTelemetry) => void,
+  turnSource: DjonikTurnSource = "unknown",
 ): Promise<DjonikSessionHandle> {
   const session = await client.beta.sessions.create({
     agent: agentId,
@@ -189,6 +282,7 @@ export async function connectToDjonik(
   /** The object id the pending write named, or null when this write tool has no known identity field
    *  (falls back to "any successful Trello read clears it"). */
   let pendingWriteObjectId: string | null = null;
+  let turnTelemetry: DjonikTurnTelemetryCollector | null = null;
 
   async function runTurn(events: SendableEvent[]): Promise<string> {
     await client.beta.sessions.events.send(session.id, { events });
@@ -220,6 +314,7 @@ export async function connectToDjonik(
             toolName: event.name,
             input: event.input as Record<string, unknown>,
           });
+          turnTelemetry?.recordMcpToolUse(event.name);
           break;
         case "agent.mcp_tool_result": {
           const call = mcpToolCallsById.get(event.mcp_tool_use_id);
@@ -230,6 +325,7 @@ export async function connectToDjonik(
               toolName: call.toolName,
               isError: Boolean(event.is_error),
             });
+            turnTelemetry?.recordMcpResult();
           }
           if (call && !event.is_error) {
             if (isTrelloWriteTool(call.serverName, call.toolName)) {
@@ -258,6 +354,17 @@ export async function connectToDjonik(
           }
           break;
         }
+        case "agent.tool_use":
+          if (event.name === "read") {
+            turnTelemetry?.recordBuiltInRead(event.input as Record<string, unknown>);
+          }
+          break;
+        case "span.model_request_end":
+          turnTelemetry?.recordModelIteration();
+          break;
+        case "session.usage":
+          turnTelemetry?.recordUsage(event.usage);
+          break;
         case "session.error":
           // "retrying" and "exhausted" are non-terminal per the Managed
           // Agents API: the session keeps running (or returns to idle to
@@ -296,22 +403,29 @@ export async function connectToDjonik(
     pendingWriteTool = null;
     pendingWriteObjectId = null;
     mcpToolCallsById.clear();
+    turnTelemetry = createTurnTelemetryCollector(turnSource, session.id);
 
-    let reply = await runTurn([{ type: "user.message", content: [{ type: "text", text }] }]);
+    try {
+      let reply = await runTurn([{ type: "user.message", content: [{ type: "text", text }] }]);
 
-    for (let attempt = 0; unverifiedTrelloWrite && attempt < MAX_VERIFICATION_NUDGES; attempt += 1) {
-      onTrace?.({ type: "verification_nudge_sent", attempt: attempt + 1 });
-      reply = await runTurn([{ type: "user.message", content: [{ type: "text", text: VERIFICATION_NUDGE_TEXT }] }]);
+      for (let attempt = 0; unverifiedTrelloWrite && attempt < MAX_VERIFICATION_NUDGES; attempt += 1) {
+        onTrace?.({ type: "verification_nudge_sent", attempt: attempt + 1 });
+        turnTelemetry.recordVerificationNudge();
+        reply = await runTurn([{ type: "user.message", content: [{ type: "text", text: VERIFICATION_NUDGE_TEXT }] }]);
+      }
+
+      if (unverifiedTrelloWrite) {
+        onTrace?.({ type: "write_unverified_failure" });
+        throw new Error(
+          "Djonik mutated Trello but did not verify the write with an independent read in this turn.",
+        );
+      }
+
+      return reply;
+    } finally {
+      onTurnTelemetry?.(turnTelemetry.summary());
+      turnTelemetry = null;
     }
-
-    if (unverifiedTrelloWrite) {
-      onTrace?.({ type: "write_unverified_failure" });
-      throw new Error(
-        "Djonik mutated Trello but did not verify the write with an independent read in this turn.",
-      );
-    }
-
-    return reply;
   }
 
   function close(): void {

@@ -21,6 +21,7 @@ async function main(): Promise<void> {
 
   const anthropic = new Anthropic({ apiKey: djonikConfig.apiKey });
   const trace = process.env.DJONIK_TRACE === "1";
+  const turnTelemetry = process.env.DJONIK_TURN_TELEMETRY === "1";
   const djonikSession = createSessionManager(() =>
     connectToDjonik(
       anthropic,
@@ -29,6 +30,8 @@ async function main(): Promise<void> {
       djonikConfig.memoryStoreId,
       djonikConfig.vaultId,
       trace ? (event) => console.error("[trace]", JSON.stringify(event)) : undefined,
+      turnTelemetry ? (summary) => console.error("[turn]", JSON.stringify(summary)) : undefined,
+      "telegram",
     ),
   );
 

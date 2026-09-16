@@ -200,6 +200,10 @@ Read-only Console inspection was used; no Agent config was saved, no Session was
 
 For each MCP entry, **enabled** below means its Console permission was `Always allow`; **execution-blocked** means `Always deny`. It does not claim `enabled:false` unless explicitly observed (it was not). “Used” means observed in the retained Foundation/audit traces or required by accepted Skill/runtime evidence; it does not mean a complete production-traffic census.
 
+### Later-established configuration correction
+
+The preceding Console-only statements are historical evidence, not the final configuration truth. The later official Agent API retrieval recorded in §23 proved that production Agent v12 has `trelloWriteBoard`, `trelloWriteChecklist`, `trelloWriteInbox`, `trelloWriteList`, and `trelloWritePlanner` at `enabled:false`; `trelloWriteCard` remains `enabled:true`. The earlier Console inspection could not prove that enabled state. Therefore these five unsupported writes are absent from the current active tool surface and no additional saving remains to be obtained by disabling them.
+
 ### Full current tool inventory
 
 | Tool | Provider | Current permission/state | Read / write | Purpose | Schema bytes / tokens | Foundation 8–16 evidence |
@@ -221,12 +225,12 @@ For each MCP entry, **enabled** below means its Console permission was `Always a
 | `trelloReadPlanner` | Trello MCP | Always allow | read | provider planner state | Not exposed | No retained trace |
 | `trelloReadWorkspace` | Trello MCP | Always allow | read | workspace metadata | Not exposed | No retained trace |
 | `trelloSearch` | Trello MCP | Always allow | read/discovery | find candidate cards/boards/lists | Not exposed | Used in factual and planning traces; Skill requires it only for discovery |
-| `trelloWriteBoard` | Trello MCP | Execution-blocked (`Always deny`) | write | mutate board | Not exposed | No retained trace; outside current accepted scope |
+| `trelloWriteBoard` | Trello MCP | Historical Console: execution-blocked (`Always deny`); later API: `enabled:false` | write | mutate board | Not exposed | No retained trace; outside current accepted scope |
 | `trelloWriteCard` | Trello MCP | Always allow | write | bounded create/update/move/complete card | Not exposed | Accepted Foundation 7 write surface; deterministic verification observes it |
-| `trelloWriteChecklist` | Trello MCP | Execution-blocked (`Always deny`) | write | mutate checklist | Not exposed | Outside current accepted scope |
-| `trelloWriteInbox` | Trello MCP | Execution-blocked (`Always deny`) | write | mutate inbox | Not exposed | Outside current accepted scope |
-| `trelloWriteList` | Trello MCP | Execution-blocked (`Always deny`) | write | mutate list | Not exposed | Outside current accepted scope |
-| `trelloWritePlanner` | Trello MCP | Execution-blocked (`Always deny`) | write | mutate provider planner | Not exposed | Outside current accepted scope |
+| `trelloWriteChecklist` | Trello MCP | Historical Console: execution-blocked (`Always deny`); later API: `enabled:false` | write | mutate checklist | Not exposed | Outside current accepted scope |
+| `trelloWriteInbox` | Trello MCP | Historical Console: execution-blocked (`Always deny`); later API: `enabled:false` | write | mutate inbox | Not exposed | Outside current accepted scope |
+| `trelloWriteList` | Trello MCP | Historical Console: execution-blocked (`Always deny`); later API: `enabled:false` | write | mutate list | Not exposed | Outside current accepted scope |
+| `trelloWritePlanner` | Trello MCP | Historical Console: execution-blocked (`Always deny`); later API: `enabled:false` | write | mutate provider planner | Not exposed | Outside current accepted scope |
 | `create_event` | Google Calendar MCP | Always allow | write | create calendar event | Not exposed | No retained trace; Calendar is later roadmap capability |
 | `delete_event` | Google Calendar MCP | Always allow | write | delete calendar event | Not exposed | No retained trace; Calendar is later roadmap capability |
 | `get_event` | Google Calendar MCP | Always allow | read | read one event | Not exposed | No retained trace; Calendar is later roadmap capability |
@@ -246,7 +250,7 @@ The earlier audit's “17 visible tools / nine Trello” was from an inspected h
 | **REQUIRED NOW** | `trelloSearch`, `trelloReadCard`, `trelloReadBoard`, `trelloReadList`, `trelloWriteCard` | `task-management` requires discovery followed by authoritative direct-card reads; `trelloReadCard` is the deterministic same-card verify-after-write pair; daily/weekly Skills require fresh board/list evidence; current bounded card write is accepted functionality. Do not disable. |
 | **USEFUL BUT NOT CURRENTLY REQUIRED** | `trelloReadMember`, `trelloReadWorkspace` | Member reading occurred in a planning trace; workspace context can help cross-project/board discovery. Neither is an explicit invariant of the current Skills, but absence from a short trace set is not sufficient to remove them. |
 | **CURRENTLY UNUSED / A/B CANDIDATE, NOT A CHANGE RECOMMENDATION** | `trelloReadChecklist`, `trelloReadInbox`, `trelloReadPlanner` | No retained Foundation 8–16 trace or accepted current Skill requires these. Checklist lifecycle, inbox, and planner operations are outside the current bounded task-management scope. First obtain schema/cost measurement and run a reversible config A/B before any disabling decision. |
-| **ALREADY EXECUTION-BLOCKED** | `trelloWriteBoard`, `trelloWriteChecklist`, `trelloWriteInbox`, `trelloWriteList`, `trelloWritePlanner` | Correctly outside current write scope. Leave them as-is in this audit; do not equate `Always deny` with being absent from model context. |
+| **LATER PROVEN DISABLED** | `trelloWriteBoard`, `trelloWriteChecklist`, `trelloWriteInbox`, `trelloWriteList`, `trelloWritePlanner` | Later official Agent API read-back proves `enabled:false`; correctly outside current write scope and absent from the active model surface. |
 
 ### Built-in tool assessment
 
@@ -332,7 +336,7 @@ It would be misleading to multiply tool count by a guessed average schema size o
 | Group | Likely saving potential | Current product impact | Risk | Decision |
 |---|---|---|---|---|
 | Google Calendar (9 tools) | Potentially the largest candidate by count; **size unknown** | No accepted Foundation 1–12 Calendar flow; roadmap places Calendar in Wave E | Low for a temporary controlled A/B; medium if removed permanently without a Wave-E decision | Worth the first reversible A/B once prompts/Sessions are explicitly authorized. |
-| Five Trello execution-blocked writes | Potentially nonzero; **size unknown** | None in current accepted write scope | Low | Worth a later A/B, but fewer tools than Calendar and therefore lower likely saving by count. |
+| Five Trello unsupported writes | No remaining saving to test: later API proved production `enabled:false` | None in current accepted write scope | Low | No further A/B; do not re-enable merely to create a baseline. |
 | Three unused Trello reads | Potentially nonzero; **size unknown** | Medium: absence in retained traces does not prove no PM usefulness | Medium | Do not test before Calendar / blocked-writes. |
 | Required Trello five | Unknown | Critical factual-read, planning, and same-card verification paths | High | Never use as a cost-only experiment. |
 
@@ -488,3 +492,180 @@ The second prompt is a continued-session smoke, so its cache reads and turn comp
 ### Decision
 
 Calendar remains attached but unavailable to Claude in production until Wave E. Current factual Trello and daily-planning behavior remained intact, including the required authoritative direct-card read for an exact due-date claim. No further optimization experiment was run.
+
+## 23. Attempted five-Trello-write exclusion A/B — invalid baseline; production state already excluded them (2026-09-16)
+
+### Test method and pre-inference verification
+
+This bounded follow-up used exactly two genuinely fresh official Managed Sessions, pinned to production Agent `agent_01WGRHDBjQa3eMhoGJMmQ1dh` version 12: control `sesn_01HwHg9avomV3BWe6ZrBsgfN` and variant `sesn_012BZYm4CT9nKf4q6H5SHcmi`. Before inference, API retrieval confirmed each was `idle`, had zero events, zero input/cache/output usage, and `$0.00` list cost. They had the same Agent ID/version, model (`claude-sonnet-5`, low effort, standard speed), system, Skills, environment, vault, Memory attachment/instructions, MCP servers, and resolved tool array.
+
+For the variant, the complete retrieved `agent.tools` array was submitted to the official `client.beta.sessions.update()` API. Only the five named configurations were assigned `enabled:false`: `trelloWriteBoard`, `trelloWriteChecklist`, `trelloWriteInbox`, `trelloWriteList`, and `trelloWritePlanner`. The mandatory API read-back passed: all five were `enabled:false`; `trelloWriteCard` and all required Trello reads were unchanged; Calendar stayed excluded; and built-ins, Agent identity/version, system, model, Skills, Memory, environment, vault, and MCP servers were unchanged.
+
+### Critical baseline discrepancy
+
+The final read-only production-Agent retrieval showed that version 12 already had the same five writes at `enabled:false` (each with `Always allow` policy), while `trelloWriteCard` was `enabled:true`. Google Calendar was still attached but excluded. This contradicts the requested premise that the five writes were merely execution-blocked / `Always deny` and not confirmed `enabled:false`.
+
+Accordingly, the unchanged control already excluded the five tools, and the session-local variant made no effective surface change. This is **not a valid control-versus-enabled A/B** and cannot measure the token/cost overhead of removing those tools. No production-Agent mutation was issued in this work.
+
+### One-prompt-per-session telemetry
+
+After successful read-back, each Session received exactly one identical prompt and no retry:
+
+`Який дедлайн у Автоматизація рендеру?`
+
+| Metric | Control | Variant | Control − variant |
+|---|---:|---:|---:|
+| Model iterations | 5 | 4 | 1 |
+| First-pass uncached input | 2 | 2 | 0 |
+| First-pass cache creation | 21,657 | 0 | 21,657 |
+| First-pass cache read | 0 | 21,657 | -21,657 |
+| **First-pass input composition** | **21,659** | **21,659** | **0 (0.00%)** |
+| Total uncached input | 10 | 8 | — |
+| Total cache creation | 26,278 | 2,160 | — |
+| Total cache read | 97,197 | 89,551 | — |
+| **Total input composition** | **123,485** | **91,719** | **31,766 (25.72%)** |
+| Output tokens | 432 | 496 | — |
+| List cost | $0.09 | $0.03 | $0.06 |
+| Trello MCP calls / results | 3 / 3 | 3 / 3 | 0 / 0 |
+| Calendar calls | 0 | 0 | 0 |
+| Observed built-in `read` calls | 1 | 0 | — |
+
+The first model-pass composition was identical, as expected for two sessions with the same already-excluded surface. The total-turn difference is not an eligible tool-surface saving: the control made a fifth internal model request and one extra built-in read, while cache creation/read placement also differed. It must not be attributed to the five Trello tool configurations or used as a dollar-savings estimate.
+
+### Behavioral evidence and cache caveat
+
+Both sessions made the same Trello factual path plus one member lookup: `trelloSearch → trelloReadCard → trelloReadMember`; neither mutated Trello, invoked Calendar, read a Skill file, or retried. Both reported the same verified deadline: 18 September 2026, 20:00 Kyiv. The wording contained different incidental card metadata, but the factual due-date claim was equivalent. There is no observed user-facing regression in this one-turn check, but the internal iteration count was not identical.
+
+The control's first request created a 21,657-token cache prefix whereas the variant's first request read that same-sized prefix from cache. Cache counters and the extra control iteration explain why list cost differs even though first-pass composition does not. This invalid baseline cannot establish an independent cost effect for the five writes.
+
+### Exact spend, decision, and next step
+
+The two permitted prompts consumed exactly **$0.12** public list cost in total ($0.09 control + $0.03 variant). Production Agent v12 remained unchanged by this task; final API read-back confirmed its five named writes were already `enabled:false`, `trelloWriteCard` remained enabled, and Calendar remained excluded.
+
+No further production change is recommended from this attempt: the intended configuration is already present, and no enabled-versus-disabled comparison was run. The next optimization step is operational reconciliation: establish when/why production v12 received these five `enabled:false` settings and correct the audit baseline/history before considering any new authorized experiment. Do not re-enable the writes merely to manufacture a cost comparison, and do not change Memory, Skills, built-ins, direct Trello reads, or verify-after-write safeguards.
+
+## 24. Three unused Trello-read exclusion A/B (2026-09-16)
+
+### Corrected historical baseline
+
+Section 17's original Console inspection reported permissions only and could not prove per-tool `enabled` state. The later official Agent API read-back in §23 established the current truth: production v12 already has the five unsupported Trello writes at `enabled:false`. They were not part of this experiment and no further saving remains to obtain from them. This section tests only the three reads that inherit the Trello toolset's current default `enabled:true` state: `trelloReadChecklist`, `trelloReadInbox`, and `trelloReadPlanner`.
+
+### Method and pre-inference configuration verification
+
+Exactly two genuinely fresh official Managed Sessions were created against production Agent `agent_01WGRHDBjQa3eMhoGJMmQ1dh` version 12: control `sesn_01KscJavtkmo3qVZ5Ginye4z` and variant `sesn_014QTkvgExSmd1RZYtSVe2e4`. Before inference, both were `idle`, had empty event lists, zero input/cache/output usage, and `$0.00` list cost.
+
+Both resolved snapshots had the same Agent/version, `claude-sonnet-5` / low effort / standard speed model, system, Skills, environment, vault, Memory attachment/instructions, MCP servers, built-ins, and complete tool array. Google Calendar remained attached with toolset default `enabled:false`; the five unsupported Trello writes remained explicit `enabled:false`; `trelloWriteCard` stayed explicit `enabled:true`; and all required Trello reads retained their inherited enabled state.
+
+The control was left unchanged. The variant used the official idle-session `client.beta.sessions.update()` full replacement of the retrieved `agent.tools` array, adding only three Trello per-tool overrides: `trelloReadChecklist.enabled:false`, `trelloReadInbox.enabled:false`, and `trelloReadPlanner.enabled:false`. Mandatory API read-back confirmed those were the only tool differences. Required reads (`trelloSearch`, `trelloReadCard`, `trelloReadBoard`, `trelloReadList`, `trelloReadMember`, and `trelloReadWorkspace`), `trelloWriteCard`, the five disabled writes, Calendar, built-ins, model, system, Skills, Memory, environment, vault, and MCP servers were unchanged.
+
+Each session then received exactly one prompt, with no retry:
+
+`Що мені сьогодні варто зробити?`
+
+### Telemetry
+
+Input composition is `uncached input + cache creation + cache read`.
+
+| Metric | Control: production v12 | Variant: three reads disabled | Control − variant |
+|---|---:|---:|---:|
+| Model iterations | 5 | 5 | 0 |
+| First-pass uncached input | 2 | 167 | — |
+| First-pass cache creation | 21,653 | 19,357 | — |
+| First-pass cache read | 0 | 0 | 0 |
+| **First-pass input composition** | **21,655** | **19,524** | **2,131 (9.84%)** |
+| Total uncached input | 10 | 175 | — |
+| Total cache creation | 36,853 | 34,729 | — |
+| Total cache read | 96,363 | 86,227 | — |
+| **Total input composition** | **133,226** | **121,131** | **12,095 (9.08%)** |
+| Output tokens | 1,895 | 1,885 | — |
+| List cost | $0.13 | $0.12 | $0.01 |
+| Trello MCP calls / results | 3 / 3 | 3 / 3 | 0 / 0 |
+| Calendar calls | 0 | 0 | 0 |
+| Skill reads | 1 (`daily-planning`) | 1 (`daily-planning`) | 0 |
+| Memory reads | 3 (`preferences.md`, `seqthera.md`, `trello-conventions.md`) | 3 (the same files) | 0 |
+
+Control calls were `trelloReadMember → trelloSearch → trelloReadCard`; variant calls were `trelloReadMember → trelloReadBoard → trelloReadCard`. The variant did not attempt any of its three disabled reads. Neither turn mutated Trello or invoked Calendar.
+
+### Cache caveat and behavioral comparison
+
+Both first passes had zero cache reads, so the primary 2,131-token / 9.84% difference is a real rendered-first-pass difference for this one controlled pair, chiefly 2,296 fewer cache-creation tokens in the variant partly offset by 165 more uncached tokens. Later cache-read totals differ by 10,136 tokens and must not be treated as a fixed dollar saving. The $0.01 list-cost difference is likewise only this sample, not a general cost forecast.
+
+Both answers used the daily-planning Skill, fresh Trello facts, Extract-first prioritization, explicit waiting-state handling for `Зробити Google Slides` and `Діадіа`, and no false success/mutation claim. The answers were not fully behaviorally identical, however: control promoted `Мудборд` and `СТРУМ лінії` as work to advance before their 17 September deadlines, while variant correctly preserved those deadlines but deferred them outside today's plan. This can be normal model/tool-path variation, but this one-prompt budget cannot distinguish that from a meaningful planning-quality regression.
+
+### Exact spend, production decision, and next step
+
+Exact public list-cost spend was **$0.25** ($0.13 control + $0.12 variant). A final read-only production-Agent retrieval confirmed Agent v12 remained unchanged: Calendar default is still `enabled:false`, the five unsupported writes remain `enabled:false`, `trelloWriteCard` remains `enabled:true`, and the three tested reads remain inherited-enabled in production.
+
+The measured first-pass reduction is material, but production disabling of these three reads is **not recommended yet**: daily-planning recommendation coverage differed, so behavioral equivalence was not established within the authorized one-prompt A/B. Do not run a Memory optimization experiment. The recommended next optimization target remains per-visible-turn/source observability and a Product-Owner-approved capability regression matrix for any future tool-surface decision; it should establish planning equivalence before another production tool change.
+
+## 25. Planning regression matrix and per-turn observability (2026-09-16)
+
+### Why §24 is inconclusive for a production tool change
+
+The three-read variant reduced first-pass input composition by 9.84% and total composition by 9.08%, but the daily plans were not equivalent enough to treat that as a safe production optimization. Both preserved factual due/waiting state, but control promoted two next-day deadlines while variant deferred them. With one prompt per session, the audit cannot tell whether this arose from normal planning variation or a capability regression. Token savings alone are therefore insufficient evidence.
+
+### Canonical planning regression matrix
+
+The matrix evaluates live facts and recommendation buckets, never exact prose. Before each future scenario pair, record the relevant fresh Trello card snapshot and the current date/time; use that evidence as the comparison source. A card is **high priority** when the snapshot shows a due-today/overdue deadline, a near deadline that requires action today, active in-progress work, or an explicit durable/current priority that the plan relies on.
+
+| ID | Prompt / setup | Factual acceptance fields |
+|---|---|---|
+| A — today planning | `Що мені сьогодні варто зробити?` | Relevant open cards are discovered; due dates and waiting states are preserved; every high-priority card is either a today candidate or explicitly deferred with a reason; future/no-due work is not silently promoted above urgent work; no mutation; exact due/status claims use an authoritative direct read rather than search alone. |
+| B — urgency | `Що зараз горить?` | Overdue/due-today/near-deadline cards are discovered and called out; waiting cards remain waiting rather than actionable; future cards and undated backlog do not displace urgent work; all stated deadlines are direct-read-backed; no false due claim or mutation. |
+| C — active-project planning | `Що по Extract на цей тиждень?` (replace `Extract` only if it is no longer an active multi-card project) | Cards are scoped to the named project; in-progress, hard-deadline, waiting, future, and undated cards are classified; the plan distinguishes current-week candidates from later/deferred work; no cross-project card is presented as project work; factual fields are direct-read-backed where exact; no mutation. |
+| D — mixed status/deadline fixture | Use a fresh live set containing at least one due today/soon card, one waiting card, one future-due card, and one undated open card; ask `Що мені сьогодні варто зробити?` | All four fixture cards are accounted for: urgent is today/explicitly deferred with cause, waiting is non-actionable, future is next/future, undated is backlog/deferred unless another priority justifies it. Due dates and states remain accurate; no high-priority card is missing; no mutation; exact field claims have authoritative direct-read evidence. |
+
+The matrix derives from `daily-planning`, `weekly-planning`, and `task-management`: planning is grounded in fresh Trello, deadlines/in-progress/waiting states are distinct evidence, capacity deferrals are named, and search alone cannot establish a precise card field.
+
+### Behavioral-equivalence rubric
+
+For every card in the union of the control and variant card sets, compare this structured row:
+
+| Field | Required comparison |
+|---|---|
+| Presence | Present in both; if absent in one, determine whether it was a high-priority or required fixture card. |
+| Due | Same date/time or both correctly omit a due claim; any exact claim must match authoritative evidence. |
+| State | Same live state classification, especially waiting/blocked versus actionable. |
+| Priority bucket | `today`, `next/future`, `deferred`, or `waiting/non-actionable`; record the stated cause of any change. |
+| Recommendation | Identify whether the practical instruction materially differs, not merely its wording or order. |
+
+Classify each difference as one of:
+
+- **Wording-only:** same cards, facts, bucket, and practical recommendation.
+- **Acceptable planning variation:** facts/state remain correct; a non-urgent card moves between today and deferred with a coherent capacity/priority reason; no urgent/required card is displaced.
+- **Material regression:** an urgent card is missing; a due date is wrong; a waiting card is treated as actionable; a future task outranks urgent work without grounded reason; project scope is mixed up; an exact field claim relies on stale/search-only data; or a planning turn mutates Trello.
+
+A future surface A/B is eligible for production recommendation only when every required fixture/high-priority row is present and factually equivalent, and there are no material regressions. A wording-only or acceptable-variation label must include the factual row evidence that supports it.
+
+### Current observability gap and minimal design
+
+Before this follow-up, the thin client could emit optional raw MCP trace events, but it did not produce one safe record for a visible turn. The existing Managed Session stream already supplies model-request completion spans, MCP tool-use/result events, built-in `read` events, and cumulative `session.usage` snapshots. The client cannot identify a Console-originated turn because Console does not invoke this adapter; that source remains unknown outside the caller. It also cannot safely infer a source for an arbitrary API caller.
+
+The smallest supported implementation is now in `src/djonikClient.ts`:
+
+- `createTurnTelemetryCollector()` aggregates only event metadata for one visible turn: supplied source, session ID, model iterations, MCP tool count/names/results, verification-nudge count, Skill/Memory-read booleans, and the latest cumulative input/cache/output/list-cost values when a `session.usage` event is present.
+- It does not retain or log user/assistant text, Memory contents, MCP inputs, MCP result payloads, secrets, or full file paths.
+- `DJONIK_TURN_TELEMETRY=1` prints one concise `[turn]` JSON summary to stderr after each turn. `telegramCli.ts` labels it `telegram`; `cli.ts` labels it `diagnostic`; callers that do not provide a source remain `unknown`.
+- The feature is opt-in and observational only. It does not add an API retrieval, transcript store, custom Messages loop, or any branch that can affect reasoning, tools, replies, or verification.
+
+The API exposes token/list-cost data through `session.usage` events when emitted. If a particular runtime omits such an event, the summary reports `usage: null` rather than inventing values. The smallest supported enrichment path, if later required, is a single `client.beta.sessions.retrieve(sessionId)` after the turn completes; do not add it until the stream gap is measured because it is an extra API call and remains cumulative-session—not per-turn—usage.
+
+### Implementation and checks
+
+Implemented the opt-in telemetry collector plus one focused aggregation test. Existing PM-behavior and verification tests were not changed.
+
+- `npm run typecheck` — passed.
+- `npm test` — passed: 33 tests, 33 passed, 0 failed.
+- `git diff --check` — passed.
+
+### Recommended exact next A/B protocol
+
+Do not run this protocol without fresh Product Owner authorization because the full four-scenario matrix requires more than the previously authorized one-prompt pair.
+
+1. Freeze the candidate session-local tool delta and retrieve/read back the full control and variant configurations while idle.
+2. For each matrix scenario, capture the fresh authoritative Trello fixture snapshot immediately before the paired prompts; use the same prompt and current time basis in both sessions.
+3. Enable `DJONIK_TURN_TELEMETRY=1` for the diagnostic caller to retain content-free execution metadata, and preserve controlled answer text only in the bounded audit evidence needed for the rubric.
+4. Compare every union-card row using the rubric, separately from token/cache metrics. Treat any material regression as a failed A/B regardless of savings.
+5. Recommend production `enabled:false` only when first-pass reduction is material, all required behavior passes, and the read-back proves no unrelated configuration changed.
+
+No Agent, Skill, Memory, MCP, or production configuration changed in this follow-up. Production Agent v12 remains unchanged.

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type Anthropic from "@anthropic-ai/sdk";
-import { connectToDjonik } from "./djonikClient.js";
+import { connectToDjonik, createTurnTelemetryCollector } from "./djonikClient.js";
 
 /**
  * Minimal fake of the Anthropic client surface `connectToDjonik` touches.
@@ -88,6 +88,46 @@ function mcpToolUse(
 function mcpToolResult(mcp_tool_use_id: string, is_error = false): unknown {
   return { type: "agent.mcp_tool_result", id: `${mcp_tool_use_id}_result`, mcp_tool_use_id, is_error };
 }
+
+test("turn telemetry aggregates metadata without retaining content", () => {
+  const telemetry = createTurnTelemetryCollector("telegram", "session_test123");
+  telemetry.recordModelIteration();
+  telemetry.recordModelIteration();
+  telemetry.recordMcpToolUse("trelloReadCard");
+  telemetry.recordMcpToolUse("trelloSearch");
+  telemetry.recordMcpResult();
+  telemetry.recordMcpResult();
+  telemetry.recordVerificationNudge();
+  telemetry.recordBuiltInRead({ file_path: "/workspace/skills/daily-planning/SKILL.md", contents: "not retained" });
+  telemetry.recordBuiltInRead({ file_path: "/mnt/memory/djonik-memory/preferences.md", contents: "not retained" });
+  telemetry.recordUsage({
+    input_tokens: 4,
+    cache_creation: { ephemeral_5m_input_tokens: 12 },
+    cache_read_input_tokens: 20,
+    output_tokens: 6,
+    list_cost: { amount: "7", currency: "USD" },
+  });
+
+  assert.deepEqual(telemetry.summary(), {
+    source: "telegram",
+    sessionId: "session_test123",
+    modelIterations: 2,
+    toolCalls: 2,
+    toolNames: ["trelloReadCard", "trelloSearch"],
+    mcpResults: 2,
+    verificationNudges: 1,
+    skillRead: true,
+    memoryRead: true,
+    usage: {
+      inputTokens: 4,
+      cacheCreationInputTokens: 12,
+      cacheReadInputTokens: 20,
+      outputTokens: 6,
+      listCostAmount: "7",
+      listCostCurrency: "USD",
+    },
+  });
+});
 
 test("connectToDjonik attaches the Djonik Memory Store and Vault at session creation", async () => {
   const { client, createCalls } = createFakeClient([IDLE]);

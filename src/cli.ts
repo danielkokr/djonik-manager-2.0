@@ -21,6 +21,7 @@ async function main(): Promise<void> {
 
   console.log("Connecting to the existing Djonik Managed Agent...");
   const trace = process.env.DJONIK_TRACE === "1";
+  const turnTelemetry = process.env.DJONIK_TURN_TELEMETRY === "1";
   const djonik = await connectToDjonik(
     client,
     config.agentId,
@@ -28,6 +29,8 @@ async function main(): Promise<void> {
     config.memoryStoreId,
     config.vaultId,
     trace ? (event) => console.error("[trace]", JSON.stringify(event)) : undefined,
+    turnTelemetry ? (summary) => console.error("[turn]", JSON.stringify(summary)) : undefined,
+    "diagnostic",
   );
   console.log(`Connected (session ${djonik.sessionId}). Type a message, or "exit" to quit.\n`);
 
