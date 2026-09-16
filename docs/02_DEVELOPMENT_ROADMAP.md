@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–11 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; `Djonik Personal` Vault supplies Trello/Google credentials; Trello MCP read/write flows work against live data; same-card verify-after-write is enforced by the thin client; dead Managed Sessions recover automatically; conversational PM, daily/weekly planning, and project/client context memory have been validated. The current focus is distinguishing suggestions from explicitly accepted plans and commitments while preserving fresh Trello as operational truth.
+Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. The current focus is closing two bounded Trello reliability gaps discovered during Foundation 12 before moving into Wave B.
 
 ## Execution order
 
@@ -97,37 +97,44 @@ Verified foundation:
 - existing `DJONIK_MEMORY_INSTRUCTIONS` already encode the durable-vs-live boundary;
 - typecheck passed, tests passed 30/30, and `git diff --check` was clean.
 
-### NOW — Foundation 12: Accepted plans and commitments (#13)
+### DONE — Foundation 12: Accepted plans and commitments (#13)
+Accepted 2026-09-16 at commit `d495d1ca7e52ff40339289c650dd22f904cf23a8`.
+
+Verified foundation:
+- unaccepted suggestions are not treated as commitments;
+- explicitly accepted plans survive genuinely new Managed Sessions;
+- explicit personal/client commitments survive new Sessions;
+- corrections/cancellations supersede stale accepted context;
+- remembered agreements are kept distinct from fresh Trello operational truth;
+- the bounded fix lives only in `DJONIK_MEMORY_INSTRUCTIONS`; no new Skill, DB, state mirror, event log, or persistence service was introduced;
+- task-management, daily-planning, weekly-planning and same-card write verification remained intact;
+- typecheck passed, tests passed 30/30, and `git diff --check` was clean.
+
+### NOW — Trello write surface: support clearing due dates (#14)
 
 Goal:
 
-`planning conversation → user explicitly accepts/commits → durable accepted-plan/commitment context → later PM reasoning uses it appropriately → fresh Trello still owns current operational truth`
+Allow an explicit request such as `прибери дедлайн` to remove a card due date completely, not replace it with another date or require manual cleanup.
 
 Scope:
-- distinguish advice/suggestions from explicit plan acceptance and real commitments;
-- validate that unaccepted proposals are not remembered as commitments;
-- preserve explicitly accepted plans across new Sessions when useful;
-- preserve explicit user commitments across new Sessions;
-- allow corrections/cancellations to supersede stale commitment context;
-- distinguish `what we agreed` from `what Trello says now`;
-- use existing Claude Memory first and add no parallel commitments database/state mirror unless real validation proves a need;
-- preserve existing Skills, Telegram, Memory behavior, Trello permissions and same-card write verification.
+- inspect the current `trelloWriteCard` schema/actions for a supported clear/unset path;
+- implement or expose the smallest provider-compatible path if one exists;
+- preserve bounded write permissions and same-card verify-after-write;
+- verify the resulting card has no due date before reporting success;
+- add focused tests for clear-due success/failure;
+- do not broaden unrelated Trello mutation behavior.
 
 Acceptance evidence:
-- unaccepted suggestions are not treated as commitments;
-- explicit accepted plans/commitments survive a genuinely new Session;
-- corrections/cancellations supersede stale accepted context;
-- accepted/history context can coexist with fresh Trello live state in one answer;
-- no unnecessary new architecture is introduced.
+- an explicit clear-due request results in no due date on the intended card;
+- same-card verification proves the cleared state;
+- wrong-target protections remain intact;
+- tests/typecheck/`git diff --check` pass.
 
-## Capability waves after the foundation
+### NEXT — Trello read surface: due-date accuracy across search vs direct card read (#15)
 
-### Wave A — Planning and work context
-- daily planning Skill;
-- weekly planning Skill;
-- workload/capacity reasoning;
-- richer project/client memory;
-- accepted plans and commitments where genuinely useful.
+After #14, validate and harden the read policy so Djonik does not make a definitive due-date claim from incomplete `trelloSearch` results when a direct card read is required.
+
+## Capability waves after reliability closeout
 
 ### Wave B — Studio intake
 - screenshots/images;
