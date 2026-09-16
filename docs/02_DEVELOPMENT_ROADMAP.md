@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing is blocked by the external Trello MCP tool surface. The Managed Agent token/cost audit is complete: Google Calendar remains attached but is disabled until Wave E, five unsupported Trello write tools are already disabled, opt-in per-turn telemetry and a planning regression matrix are live, and the three tested optional Trello reads remain enabled because the final quality gate did not establish safe behavioral equivalence. Conditional same-turn fresh-read enforcement for short planning follow-ups is a Managed Agents platform limitation under the accepted architecture; daily/weekly planning Skills continue to request fresh Trello evidence, but that guidance is best-effort rather than a hard guarantee for this edge case.
+Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing is blocked by the external Trello MCP tool surface. The Managed Agent token/cost audit is complete: Google Calendar remains attached but is disabled until Wave E, five unsupported Trello write tools are already disabled, opt-in per-turn telemetry and a planning regression matrix are live, and the three tested optional Trello reads remain enabled because the final quality gate did not establish safe behavioral equivalence. Conditional same-turn fresh-read enforcement for short planning follow-ups is a Managed Agents platform limitation under the accepted architecture; daily/weekly planning Skills continue to request fresh Trello evidence, but that guidance is best-effort rather than a hard guarantee for this edge case. A follow-up architecture/roadmap review (2026-09-16) identified the remaining unexploited, evidence-based token/cost work: separating real Telegram production usage from Console/CLI validation usage, measuring real long-lived Telegram session growth, and adopting a spend guardrail for future audits.
 
 ## Execution order
 
@@ -161,13 +161,23 @@ Outcome:
 - do not add an always-read-every-turn workaround, semantic routing, or a custom Messages API loop;
 - revisit only if Managed Agents exposes a native deterministic per-turn tool requirement or pre-response enforcement capability.
 
-### NO CANONICAL NOW
+### NOW — Source-correlated usage telemetry: separate Telegram production cost from Console/CLI validation cost (#19)
 
-After #18 closeout, the next canonical execution item is intentionally undecided pending a separate Product Owner architecture/roadmap review with another agent/model. Do not promote #17 or any other issue to NOW until that review makes an explicit decision.
+Decided 2026-09-16 by Product Owner architecture/roadmap review.
+
+Goal: make it possible to determine, for any recent time window, how much measured token/cost usage came from real Telegram traffic versus Console/CLI/diagnostic sessions, reusing the existing opt-in turn telemetry (`DJONIK_TURN_TELEMETRY=1`, source-labelled `telegram`/`diagnostic`/`unknown` since #16 §25). No custom analytics database, dashboard, or scheduled export job. No Agent/Skill/Memory/MCP/production configuration change.
+
+### QUEUED — Measure real Telegram session token growth over time using existing turn telemetry (#20)
+
+After #19 lands (or in parallel if #19's source separation is not yet needed for a clean read), observe real production Telegram sessions over an agreed window to determine whether token/cost composition grows materially with turn count, before any compaction/rollover/history-trimming work is considered. Measurement only; no session lifecycle change.
+
+### QUEUED — Adopt a development/validation spend guardrail for future token/cost audits (#21)
+
+Document, in one canonical place, the per-issue dollar ceiling and maximum session count that future Managed Agent token/cost audits and A/B follow-ups must declare before starting, generalized from the ad hoc ceilings already used in #16 (e.g. its observed $0.80 stop ceiling). Documentation/process only; no code or Agent configuration change. Can run independently of #19/#20.
 
 ### QUEUED — Project Context Bootstrap: canonical project briefs in Djonik Memory (#17)
 
-After #18 is accepted, bootstrap concise canonical project briefs into `Djonik Memory` before broader capability expansion. Stable project/client context belongs in Memory; live deadlines/status/current task state continue to come from fresh Trello.
+Bootstrap concise canonical project briefs into `Djonik Memory` before broader capability expansion. Stable project/client context belongs in Memory; live deadlines/status/current task state continue to come from fresh Trello.
 
 ## Capability waves after reliability/cost closeout
 
