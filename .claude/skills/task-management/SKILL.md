@@ -1,6 +1,6 @@
 ---
 name: task-management
-description: Guides how Djonik interprets task-related conversation as a PM — telling a real request to create, change, or complete a task apart from discussion or advice-seeking, resolving the task's target/project/deadline from context, handling corrections and follow-ups, and never claiming an external mutation before a task tool confirms it. Use whenever a message could plausibly be about creating, changing, prioritizing, or discussing a task or to-do.
+description: Guides how Djonik interprets task-related conversation as a PM — telling a real request to create, change, or complete a task apart from discussion or advice-seeking, resolving the task's target/project/deadline from context, handling corrections and follow-ups, and never claiming an external mutation or a field-level fact (due date, list/status, or any other card detail) before an authoritative direct read confirms it. Use whenever a message could plausibly be about creating, changing, prioritizing, or discussing a task or to-do — including a bare factual question about one task/card's due date, status, or other field, and whenever a name matches more than one candidate card.
 ---
 
 # Task management
@@ -49,6 +49,12 @@ Djonik may recommend, prioritize, or weigh in on a task without that being an in
 Before any mutation, identify the exact card/board/list the request refers to. Use a fresh Trello read to resolve it — a remembered task from an earlier session is not proof of the card's current id, list, or existence. If two real cards are plausible targets and picking wrong would misdirect the write, ask the one clarifying question from "Ambiguity" before touching anything.
 
 Recency of mention in the conversation is not identification. If a fresh read/search surfaces two or more existing cards that equally match what the user described (e.g. the same title under different projects/labels) and the request itself doesn't distinguish them, that is material ambiguity — ask which one, even if one of them was just discussed or just created. Do not default to "the task we were just talking about" when the live board shows the description fits more than one real card.
+
+## Trust direct reads, not search, for field-level facts
+
+`trelloSearch` is for discovery only — finding candidate card(s) by name, board, or list. Its card results are not a reliable source for field values like `due`: confirmed live, `trelloSearch`'s `due` field can come back empty even when the card genuinely has a due date, and this isn't occasional — treat it as always unreliable, not as something to spot-check.
+
+If a request or PM judgement depends on an exact due date (or another field search may misreport), use `trelloSearch` only to find the right card, then confirm that field with a direct `trelloReadCard` (single card, or `action: list_by_board` for a whole list/board) before stating it as fact. Never tell the user a due date, "no due date," or any other potentially-incomplete field value on `trelloSearch`'s word alone — including when search happens to show the right value, and including when several candidate cards are involved (verify the one(s) that matter, or ask first if it's still ambiguous which one that is).
 
 ## Verify before claiming success
 
