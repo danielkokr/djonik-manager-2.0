@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. The current focus is closing two bounded Trello reliability gaps discovered during Foundation 12 before moving into Wave B.
+Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing was investigated and is currently blocked by the external Trello MCP tool surface. The current focus is hardening due-date read accuracy before the token/cost audit and Wave B.
 
 ## Execution order
 
@@ -110,29 +110,40 @@ Verified foundation:
 - task-management, daily-planning, weekly-planning and same-card write verification remained intact;
 - typecheck passed, tests passed 30/30, and `git diff --check` was clean.
 
-### NOW — Trello write surface: support clearing due dates (#14)
+### DONE / PROVIDER LIMITATION — Trello write surface: support clearing due dates (#14)
+
+Investigated 2026-09-16 at commit `f5fa1de46fe593f5f1ee127a5306ea2b85e1b29f`.
+
+Outcome:
+- the exposed Trello MCP `trelloWriteCard` schema can set/change a due date but has no supported clear/unset/null path;
+- no other exposed Trello MCP tool provides due-date clearing;
+- Djonik now reports the limitation honestly rather than faking success or inventing a sentinel date;
+- same-card verification and normal due-date changes remain intact;
+- issue closed `not_planned` until the provider exposes a safe clearing path.
+
+### NOW — Trello read surface: due-date accuracy across search vs direct card read (#15)
 
 Goal:
 
-Allow an explicit request such as `прибери дедлайн` to remove a card due date completely, not replace it with another date or require manual cleanup.
+Ensure Djonik does not make definitive field-level claims, especially due dates, from incomplete `trelloSearch` results when a direct card read is required.
 
 Scope:
-- inspect the current `trelloWriteCard` schema/actions for a supported clear/unset path;
-- implement or expose the smallest provider-compatible path if one exists;
-- preserve bounded write permissions and same-card verify-after-write;
-- verify the resulting card has no due date before reporting success;
-- add focused tests for clear-due success/failure;
-- do not broaden unrelated Trello mutation behavior.
+- reproduce and characterize `trelloSearch` vs `trelloReadCard` due-field mismatch;
+- use search for discovery, not authoritative field-level truth when exact fields matter;
+- require direct reads for exact due/status claims where search may be incomplete;
+- preserve ambiguity handling and zero-mutation read behavior;
+- avoid custom Trello cache/state mirrors or REST clients.
 
 Acceptance evidence:
-- an explicit clear-due request results in no due date on the intended card;
-- same-card verification proves the cleared state;
-- wrong-target protections remain intact;
-- tests/typecheck/`git diff --check` pass.
+- exact due-date answers are backed by direct card reads;
+- planning judgement is not based on a false `due = null` from search results;
+- cards with no due date are only declared so after authoritative direct/read-board evidence;
+- ambiguity produces clarification rather than a false field claim;
+- regressions/tests/typecheck/`git diff --check` pass.
 
-### NEXT — Trello read surface: due-date accuracy across search vs direct card read (#15)
+### NEXT — Audit: Managed Agent token usage and cost (#16)
 
-After #14, validate and harden the read policy so Djonik does not make a definitive due-date claim from incomplete `trelloSearch` results when a direct card read is required.
+After #15, measure the real token/cost shape of representative Djonik turns before Wave B. Separate Foundation/CLI validation overhead from ordinary Telegram runtime usage and identify the dominant input-token contributors before implementing any optimization.
 
 ## Capability waves after reliability closeout
 
