@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–8 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; the custom `task-management` Skill is attached and live; `Djonik Personal` Vault supplies Trello/Google credentials; Trello MCP read/write flows work against live data; same-card verify-after-write is enforced by the thin client; dead Managed Sessions recover automatically; and realistic multi-turn PM behavior across Telegram, Trello and Memory has been validated. The current focus is Wave A: planning and work context, starting with a Claude-native daily planning Skill.
+Foundations 1–9 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management` and `daily-planning` Skills are attached and live; `Djonik Personal` Vault supplies Trello/Google credentials; Trello MCP read/write flows work against live data; same-card verify-after-write is enforced by the thin client; dead Managed Sessions recover automatically; realistic multi-turn PM behavior and daily planning have been validated. The current focus is the next Wave A capability: weekly planning and capacity reasoning.
 
 ## Execution order
 
@@ -44,7 +44,6 @@ Verified foundation:
 - one bounded corrective nudge is allowed, then fail-closed.
 
 ### DONE — Foundation 8: Conversational PM validation across Telegram and Trello (#9)
-
 Accepted 2026-09-15 at commits `f1a25bae9ad441d3dabb8ccfe6f6832cffaf7e97` and `b46824bb9a815be1d1f345e3b7503d9d63b6c727`.
 
 Verified foundation:
@@ -55,37 +54,47 @@ Verified foundation:
 - ambiguity produces clarification and zero write;
 - durable Memory survives a new Session while live Trello outranks remembered task state;
 - dead Managed Sessions are invalidated and transparently reconnected;
-- task-management Skill now explicitly treats equally matching fresh Trello results as material ambiguity;
 - typecheck passed, tests passed 30/30, and `git diff --check` was clean.
 
-### NOW — Foundation 9: Daily planning Skill and work-context reasoning (#10)
+### DONE — Foundation 9: Daily planning Skill and work-context reasoning (#10)
+Accepted 2026-09-16 at commit `d95c0e85ed6287078e944c64bbe26cce01c00b9a`.
+
+Verified foundation:
+- custom `daily-planning` Skill exists in Claude workspace and is attached to the existing Djonik agent;
+- canonical source is `.claude/skills/daily-planning/SKILL.md`;
+- daily plans are grounded in fresh Trello reads;
+- planning-only turns produce zero Trello mutation;
+- explicit priorities and conversational plan corrections are handled coherently;
+- capacity overload is handled by proposing a realistic subset instead of pretending everything fits;
+- after live Trello state changed, a fresh read changed the updated plan, proving live state outranks prior plan/Memory;
+- task-management and write-verification regressions were absent;
+- typecheck passed, tests passed 30/30, and `git diff --check` was clean.
+
+### NOW — Foundation 10: Weekly planning Skill and capacity reasoning (#11)
 
 Goal:
 
-`"що мені робити сьогодні?" → fresh Trello evidence + durable preferences/context → realistic prioritized daily plan → optional explicit task mutations only when requested`
+`"що мені робити цього тижня?" → fresh Trello evidence + durable preferences/context → realistic weekly priorities + day-level distribution → optional explicit mutations only when requested`
 
 Scope:
-- create one custom `daily-planning` Skill as Claude-native reusable planning expertise;
+- create one custom `weekly-planning` Skill;
 - use fresh Trello state as source of truth for current work;
-- use Memory only for durable work preferences, constraints and recurring context;
-- rank tasks by urgency, due dates, status, blockers, workload and user-stated priorities;
-- distinguish a proposed plan from a command to mutate Trello;
-- support follow-up changes such as `поміняй місцями`, `це сьогодні не робимо`, `додай ще Seqthera`;
-- preserve current task-management Skill and same-card write verification;
+- distinguish deadlines, in-progress work, waiting/blocked work, backlog and explicit priorities;
+- reason about realistic weekly capacity without inventing unsupported precision;
+- distribute work across days rather than returning only a flat priority list;
+- surface overload, conflicts, stale work and missing decisions;
+- keep weekly planning coherent with the existing daily-planning Skill;
+- preserve planning/advice as read-only unless the user explicitly asks for live task mutation;
 - validate through real Telegram conversation.
 
 Acceptance evidence:
-- Skill is created in Claude workspace and attached to the existing Djonik agent;
-- event trace proves the Skill was loaded when relevant;
-- daily plan is grounded in fresh Trello state;
-- durable preferences can influence planning without replacing live task state;
-- advice/planning does not mutate Trello unless explicitly requested;
-- follow-up corrections modify the conceptual plan coherently;
-- no duplicate local planning database/state mirror is introduced.
-
-### NEXT — Weekly planning Skill and capacity reasoning
-
-Only after daily planning behavior is strong.
+- Skill exists in Claude workspace and is attached alongside current Skills;
+- weekly plans use fresh Trello evidence;
+- workload/capacity judgement is realistic and explicit about uncertainty;
+- weekly→daily drill-down stays coherent;
+- planning-only turns produce zero mutation;
+- fresh live state outranks earlier plans and Memory;
+- no unnecessary new architecture is introduced.
 
 ## Capability waves after the foundation
 
