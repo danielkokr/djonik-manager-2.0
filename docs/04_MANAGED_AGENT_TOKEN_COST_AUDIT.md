@@ -669,3 +669,52 @@ Do not run this protocol without fresh Product Owner authorization because the f
 5. Recommend production `enabled:false` only when first-pass reduction is material, all required behavior passes, and the read-back proves no unrelated configuration changed.
 
 No Agent, Skill, Memory, MCP, or production configuration changed in this follow-up. Production Agent v12 remains unchanged.
+
+## 26. Final behavioral regression gate for three unused Trello reads (2026-09-16)
+
+### Configuration and budget
+
+This gate used exactly two fresh Managed Sessions pinned to production Agent `agent_01WGRHDBjQa3eMhoGJMmQ1dh` version 12: control `sesn_01UQKa54D3ea1kZjzGrMRzRH` and variant `sesn_01RcbePbUQjGExypTUubJeSu`. Before inference, both were idle/empty/zero-usage and had identical Agent version, system, model (`claude-sonnet-5`, low effort, standard speed), Skills, Memory attachment/instructions, Environment, Vault, MCP servers, Calendar exclusion, built-ins, and Trello tool surface.
+
+The variant's official session-local full `tools` replacement added only `enabled:false` overrides for `trelloReadChecklist`, `trelloReadInbox`, and `trelloReadPlanner`. Read-back confirmed required reads, `trelloWriteCard`, and the five already-disabled unsupported writes were unchanged. The final production-Agent GET remained version 12: Calendar default `enabled:false`; the five writes `enabled:false`; `trelloWriteCard` `enabled:true`; and the three candidate reads still inherited the production Trello default `enabled:true` state.
+
+`DJONIK_TURN_TELEMETRY=1` was enabled. Eight prompts completed (A–D in each Session), no Trello mutation occurred, no Calendar call occurred, no verification nudge occurred, and the candidate disabled reads were never invoked by the variant. Exact total public list-cost spend was **$0.40** ($0.22 control + $0.18 variant), below the $0.80 stop ceiling.
+
+### Execution-order limitation
+
+Each Session executed the four prompts in A → B → C → D order. However, a diagnostic wait implementation treated a prior `session.status_idle` event as completion of a newly submitted turn, so A–C were accepted before the intended pair barrier had observed the counterpart's new terminal idle event. This did not create extra prompts, sessions, or writes, but it means A–C are not cleanly serialized control/variant pairs for causal token comparison. D used a corrected per-user-event boundary. This limitation alone prevents using the gate as stronger token evidence than §24.
+
+### Scenarios and telemetry
+
+The natural mixed fixture for D existed: Google Slides and Діадіа were waiting with due-today deadlines; Мудборд/СТРУМ лінії had next-day deadlines; and multiple open undated cards existed. Input composition is `input + cache creation + cache read`; usage is calculated from per-model-request spans. List cost is cumulative-session API evidence; the API omitted a control-B usage snapshot, so no invented per-turn amount is reported.
+
+| Scenario | Control telemetry | Variant telemetry | First-pass composition (C / V) | Turn composition (C / V) | Cumulative/incremental list cost evidence |
+|---|---|---|---:|---:|---|
+| A — today | 6 iterations; `trelloReadMember → trelloReadCard → trelloSearch → trelloReadCard`; 4/4 MCP calls/results; Skill+Memory yes | 6 iterations; `trelloReadMember → trelloSearch → trelloReadCard`; 3/3; Skill+Memory yes | 21,655 / 19,524 | 159,301 / 144,356 | $0.14 / $0.13 |
+| B — urgency | 1 iteration; no MCP; no Skill/Memory read | 1 iteration; no MCP; no Skill/Memory read | 38,089 / 36,256 | 38,089 / 36,256 | Control B+C combined +$0.03; variant +$0.02 |
+| C — Extract week | 1 iteration; no MCP; no Skill/Memory read | 1 iteration; no MCP; no Skill/Memory read | 38,580 / 36,884 | 38,580 / 36,884 | Control split unavailable; variant +$0.01 |
+| D — mixed status/deadline | 2 iterations; `trelloReadCard`; 1/1; no Skill/Memory read | 1 iteration; no MCP; no Skill/Memory read | 39,190 / 37,422 | 89,351 / 37,422 | +$0.05 / +$0.02 |
+
+All turns had zero Calendar calls and zero verification nudges. The variant did not attempt `trelloReadChecklist`, `trelloReadInbox`, or `trelloReadPlanner`.
+
+### Behavioral-equivalence comparison
+
+| Scenario / union cards | Presence, due, state, project scope, and bucket comparison | Classification |
+|---|---|---|
+| A — Автоматизація рендеру; Рендер відео білих ароматів; Брендбук | Both preserve Extract scope, in-progress/backlog state, the 18 Sep deadline where claimed, and today priority. | Wording-only |
+| A — Мудборд; СТРУМ лінії | Both preserve next-day deadlines. Control promotes both; variant promotes Мудборд and defers СТРУМ. Neither silently loses the near-term cards. | Acceptable planning variation |
+| A — Google Slides; Діадіа | Both preserve Cossack Labs/A1 scope, due-today status, and Waiting/non-actionable classification. | Wording-only |
+| A — Міні-парфуми адаптація; Документи; Футболка | Both leave undated open work out of today's priority set. | Wording-only |
+| B — Google Slides; Діадіа; Мудборд; СТРУМ лінії | Both flag the two due-today waiting cards and retain next-day urgency context; variant is more expansive about the near-term cards. Both make exact current-field claims without a fresh direct read in B. | **Material regression (shared baseline)** |
+| C — Extract open cards (Автоматизація рендеру, Рендер відео білих ароматів, Брендбук, Міні-парфуми адаптація) and completed cards | Both preserve Extract scope, list states, due/undated distinctions, and weekly priority. Both make exact field/status claims without a fresh direct read in C. | **Material regression (shared baseline)** |
+| D — Google Slides; Діадіа; Автоматизація рендеру; Рендер відео білих ароматів; Мудборд; Брендбук; СТРУМ лінії; undated backlog | Both preserve the practical buckets: due-today Waiting requires a blocker follow-up, active Extract work remains today, Мудборд is near-term, and undated backlog is deferred. Variant made these exact state/due claims with **zero** Trello calls; control made one direct-card read, insufficient to prove every stated field fresh. | **Material regression (variant; and direct-read coverage incomplete in control)** |
+
+The material classifications follow the §25 rubric and current Skills: a planning turn must refresh live Trello state, and an exact due/status claim cannot rely on a prior turn's context or search-only evidence. The fact that B/C's defect appears in control as well does not make it acceptable; it shows a shared baseline-quality issue rather than a proven effect of the three-read variant.
+
+### Token/cost interpretation and decision
+
+First-pass direction remained lower in the variant in every scenario: A 9.84%, B 4.81%, C 4.40%, D 4.51%. The unweighted aggregate first-pass composition was 137,514 control versus 130,086 variant (5.40% lower). This is only directional evidence: later turns reuse different cached/session context, A–C were not pair-serialized correctly, and D has different model-iteration/tool paths. The aggregate whole-turn composition (325,321 control / 254,918 variant) is correspondingly not a production-saving forecast.
+
+**Quality conclusion:** the final gate has material regressions. **Production recommendation: do not set these three reads to `enabled:false`. Stop further cost optimization of `trelloReadChecklist`, `trelloReadInbox`, and `trelloReadPlanner` under Issue #16.** The first follow-up before any new tool-surface proposal must investigate the shared fresh-read planning gap without altering the accepted production surface. Do not start a Memory optimization experiment.
+
+Production Agent v12 remained unchanged throughout this gate; no Agent update, Skill change, Memory change, MCP change, Calendar action, or Trello mutation occurred.
