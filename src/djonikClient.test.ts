@@ -141,6 +141,10 @@ test("turn telemetry emits content-free explicit-source usage delta with determi
     hasImage: false,
     imageMimeType: null,
     imageByteSize: null,
+    hasFile: false,
+    fileMimeType: null,
+    fileByteSize: null,
+    fileNamePresent: null,
     usage: {
       inputTokens: 4,
       cacheCreationInputTokens: 12,
@@ -482,7 +486,7 @@ test("send with neither text nor an image rejects before sending anything", asyn
   const { client, sendCalls } = createFakeClient([]);
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
 
-  await assert.rejects(() => session.send(""), /requires non-empty text and\/or an image/);
+  await assert.rejects(() => session.send(""), /requires non-empty text and\/or an attachment/);
   assert.equal(sendCalls.length, 0);
   session.close();
 });
@@ -506,6 +510,125 @@ test("turn telemetry records hasImage/mimeType/byteSize for an image turn and st
   assert.equal(textOnlyTurn.hasImage, false);
   assert.equal(textOnlyTurn.imageMimeType, null);
   assert.equal(textOnlyTurn.imageByteSize, null);
+  session.close();
+});
+
+// --- Issue #24: Telegram PDF/file intake — document content-block construction. ---
+
+test("send with a document constructs a user.message with a document block before the text block", async () => {
+  const { client, sendCalls } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await session.send(
+    "Що тут по проекту?",
+    undefined,
+    { data: "ZmFrZS1wZGYtYnl0ZXM=", mediaType: "application/pdf", byteSize: 54321, filename: "brief.pdf" },
+  );
+
+  assert.deepEqual(sendCalls[0], {
+    events: [
+      {
+        type: "user.message",
+        content: [
+          {
+            type: "document",
+            source: { type: "base64", media_type: "application/pdf", data: "ZmFrZS1wZGYtYnl0ZXM=" },
+            title: "brief.pdf",
+          },
+          { type: "text", text: "Що тут по проекту?" },
+        ],
+      },
+    ],
+  });
+  session.close();
+});
+
+test("send with a document and no filename omits the title field", async () => {
+  const { client, sendCalls } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await session.send("", undefined, { data: "cGRm", mediaType: "application/pdf", byteSize: 10 });
+
+  assert.deepEqual(sendCalls[0], {
+    events: [
+      {
+        type: "user.message",
+        content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: "cGRm" } }],
+      },
+    ],
+  });
+  session.close();
+});
+
+test("send with a document and no caption omits the text block entirely", async () => {
+  const { client, sendCalls } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await session.send("", undefined, { data: "cGRmMg==", mediaType: "application/pdf", byteSize: 20, filename: "notes.pdf" });
+
+  const sent = sendCalls[0] as { events: Array<{ content: unknown[] }> };
+  assert.equal(sent.events[0].content.length, 1, "no text block when caption is empty");
+  session.close();
+});
+
+test("turn telemetry records hasFile/mimeType/byteSize/fileNamePresent for a document turn and stays null otherwise", async () => {
+  const { client } = createFakeClient([AGENT_MESSAGE, IDLE, AGENT_MESSAGE, IDLE]);
+  const telemetry: unknown[] = [];
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x", undefined, (record) => telemetry.push(record));
+
+  await session.send("що тут написано?", undefined, {
+    data: "ZG9j",
+    mediaType: "application/pdf",
+    byteSize: 88888,
+    filename: "contract.pdf",
+  });
+  await session.send("дякую");
+
+  const [fileTurn, textOnlyTurn] = telemetry as Array<{
+    hasFile: boolean;
+    fileMimeType: string | null;
+    fileByteSize: number | null;
+    fileNamePresent: boolean | null;
+  }>;
+  assert.equal(fileTurn.hasFile, true);
+  assert.equal(fileTurn.fileMimeType, "application/pdf");
+  assert.equal(fileTurn.fileByteSize, 88888);
+  assert.equal(fileTurn.fileNamePresent, true, "records only that a filename was present, never the filename itself");
+  assert.equal(textOnlyTurn.hasFile, false);
+  assert.equal(textOnlyTurn.fileMimeType, null);
+  assert.equal(textOnlyTurn.fileByteSize, null);
+  assert.equal(textOnlyTurn.fileNamePresent, null);
+  session.close();
+});
+
+test("turn telemetry records fileNamePresent as false for a document with no filename", async () => {
+  const { client } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const telemetry: unknown[] = [];
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x", undefined, (record) => telemetry.push(record));
+
+  await session.send("", undefined, { data: "eA==", mediaType: "application/pdf", byteSize: 1 });
+
+  const [fileTurn] = telemetry as Array<{ fileNamePresent: boolean | null }>;
+  assert.equal(fileTurn.fileNamePresent, false);
+  session.close();
+});
+
+test("a document turn does not disturb the #23 due-date deterministic backstop", async () => {
+  // Regression: document input must not interfere with the unrelated Issue #23
+  // write/verify + due-date finalization path when both occur in the same session.
+  const { client } = createFakeClient([
+    mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A", due: "2026-09-21T21:30:00.000Z" }),
+    mcpToolResult("call_1"),
+    mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
+    mcpToolResult("call_2", false, trelloCardReadContent("2026-09-21T21:30:00.000Z")),
+    { type: "agent.message", content: [{ type: "text", text: "Понеділок, 22 вересня 2026, 00:30" }] },
+    IDLE,
+  ]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const reply = await session.send("Онови дедлайн картки A на 22 вересня 00:30 за Києвом");
+
+  assert.equal(reply, "Готово. Trello підтвердив дедлайн: вівторок, 22 вересня 2026, 00:30 за Києвом.");
   session.close();
 });
 

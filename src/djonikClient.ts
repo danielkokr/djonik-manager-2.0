@@ -16,14 +16,33 @@ export interface DjonikImageInput {
   byteSize: number;
 }
 
+/**
+ * Raw document bytes for one multimodal turn, transported as an inline base64
+ * `document` content block on the `user.message` event (official Managed
+ * Agents Sessions support — see `docs/02_DEVELOPMENT_ROADMAP.md` #24
+ * discovery; same mechanism as images, no Files API upload step needed).
+ * `byteSize` is the decoded (non-base64) size in bytes; `filename`, when
+ * present, is passed through as the document block's `title` so the Managed
+ * Agent can ground "this came from file X" — never logged, never stored
+ * beyond the turn.
+ */
+export interface DjonikDocumentInput {
+  /** Base64-encoded document data, no `data:` URI prefix. */
+  data: string;
+  /** MIME type of the document (e.g. "application/pdf"). */
+  mediaType: string;
+  byteSize: number;
+  filename?: string;
+}
+
 export interface DjonikSessionHandle {
   sessionId: string;
   /**
-   * Sends one visible user turn. `text` may be empty when `image` is
-   * present (e.g. a Telegram photo with no caption); at least one of the
-   * two must be non-empty.
+   * Sends one visible user turn. `text` may be empty when `image` or
+   * `document` is present (e.g. a Telegram file with no caption); at least
+   * one of the three must be non-empty.
    */
-  send(text: string, image?: DjonikImageInput): Promise<string>;
+  send(text: string, image?: DjonikImageInput, document?: DjonikDocumentInput): Promise<string>;
   /** Aborts the session's open event stream so the process can exit cleanly. */
   close(): void;
 }
@@ -60,6 +79,15 @@ export interface DjonikTurnTelemetry {
   imageMimeType: string | null;
   /** Decoded byte size of the input image; not sensitive on its own. Null when `hasImage` is false. */
   imageByteSize: number | null;
+  /** Whether this visible turn included document/file input (#24). Never carries file bytes/content. */
+  hasFile: boolean;
+  /** MIME type of the input document (e.g. "application/pdf"), or null when `hasFile` is false. */
+  fileMimeType: string | null;
+  /** Decoded byte size of the input document; not sensitive on its own. Null when `hasFile` is false. */
+  fileByteSize: number | null;
+  /** Whether the document had a filename at all — never the filename itself, which could carry
+   *  client-sensitive content. Null when `hasFile` is false. */
+  fileNamePresent: boolean | null;
   /** Per-visible-turn delta, never the session's cumulative usage snapshot. */
   usage: DjonikCumulativeUsage | null;
 }
@@ -72,6 +100,9 @@ export interface DjonikTurnTelemetryCollector {
   recordVerificationNudge(): void;
   /** Records that this turn's input included an image. Content-free: mimeType/byteSize only. */
   recordInputImage(meta: { mimeType: string; byteSize: number }): void;
+  /** Records that this turn's input included a document/file (#24). Content-free: mimeType/byteSize
+   *  and whether a filename was present, never the filename or file content itself. */
+  recordInputDocument(meta: { mimeType: string; byteSize: number; hasFilename: boolean }): void;
   recordUsage(usage: {
     input_tokens?: number;
     cache_creation?: object | null;
@@ -99,6 +130,10 @@ export function createTurnTelemetryCollector(
   let hasImage = false;
   let imageMimeType: string | null = null;
   let imageByteSize: number | null = null;
+  let hasFile = false;
+  let fileMimeType: string | null = null;
+  let fileByteSize: number | null = null;
+  let fileNamePresent: boolean | null = null;
   let cumulativeUsage: DjonikCumulativeUsage | null = null;
 
   function delta(current: number | undefined, previous: number | undefined): number | undefined {
@@ -152,6 +187,12 @@ export function createTurnTelemetryCollector(
       imageMimeType = meta.mimeType;
       imageByteSize = meta.byteSize;
     },
+    recordInputDocument: (meta) => {
+      hasFile = true;
+      fileMimeType = meta.mimeType;
+      fileByteSize = meta.byteSize;
+      fileNamePresent = meta.hasFilename;
+    },
     recordUsage: (nextUsage) => {
       const cacheCreationInputTokens = Object.values(nextUsage.cache_creation ?? {}).reduce(
         (sum, value) => sum + (typeof value === "number" ? value : 0),
@@ -181,6 +222,10 @@ export function createTurnTelemetryCollector(
       hasImage,
       imageMimeType,
       imageByteSize,
+      hasFile,
+      fileMimeType,
+      fileByteSize,
+      fileNamePresent,
       usage: turnUsage(),
     }),
     cumulativeUsage: () => cumulativeUsage === null ? null : { ...cumulativeUsage },
@@ -508,7 +553,8 @@ const MAX_VERIFICATION_NUDGES = 1;
 
 type SendableContentBlock =
   | { type: "text"; text: string }
-  | { type: "image"; source: { type: "base64"; media_type: string; data: string } };
+  | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
+  | { type: "document"; source: { type: "base64"; media_type: string; data: string }; title?: string };
 
 type SendableEvent = { type: "user.message"; content: SendableContentBlock[] };
 
@@ -714,13 +760,14 @@ export async function connectToDjonik(
    * session; if it still hasn't verified, fail the turn instead of returning
    * an unverified success claim to the user.
    *
-   * `image`, when present, is sent as an inline base64 `image` content block
-   * alongside `text` in the same `user.message` event (see `DjonikImageInput`).
-   * The image is untrusted source data like any other external content — it
-   * carries no special instruction/tool authority; that boundary lives in the
-   * Managed Agent's own configuration, not in this transport code.
+   * `image`/`document`, when present, are sent as inline base64 `image`/`document`
+   * content blocks alongside `text` in the same `user.message` event (see
+   * `DjonikImageInput`/`DjonikDocumentInput`). Both are untrusted source data like
+   * any other external content — they carry no special instruction/tool authority;
+   * that boundary lives in the Managed Agent's own configuration, not in this
+   * transport code.
    */
-  async function send(text: string, image?: DjonikImageInput): Promise<string> {
+  async function send(text: string, image?: DjonikImageInput, document?: DjonikDocumentInput): Promise<string> {
     unverifiedTrelloWrite = false;
     pendingWriteTool = null;
     pendingWriteObjectId = null;
@@ -731,16 +778,30 @@ export async function connectToDjonik(
     if (image) {
       turnTelemetry.recordInputImage({ mimeType: image.mediaType, byteSize: image.byteSize });
     }
+    if (document) {
+      turnTelemetry.recordInputDocument({
+        mimeType: document.mediaType,
+        byteSize: document.byteSize,
+        hasFilename: Boolean(document.filename),
+      });
+    }
 
     const content: SendableContentBlock[] = [];
     if (image) {
       content.push({ type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } });
     }
+    if (document) {
+      content.push({
+        type: "document",
+        source: { type: "base64", media_type: document.mediaType, data: document.data },
+        ...(document.filename ? { title: document.filename } : {}),
+      });
+    }
     if (text) {
       content.push({ type: "text", text });
     }
     if (content.length === 0) {
-      throw new Error("Djonik turn requires non-empty text and/or an image.");
+      throw new Error("Djonik turn requires non-empty text and/or an attachment.");
     }
 
     try {

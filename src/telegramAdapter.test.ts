@@ -2,13 +2,21 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   createSessionManager,
+  downloadTelegramDocument,
   downloadTelegramImage,
+  exceedsDocumentSizeEstimate,
   formatUserFacingError,
   handleSessionError,
   isAllowedUser,
   MAX_BASE64_IMAGE_BYTES,
+  MAX_DOCUMENT_BASE64_LENGTH,
+  MAX_DOCUMENT_RAW_BYTES_ESTIMATE,
+  resolveDocumentFileAttachment,
   resolveDocumentImageAttachment,
   resolvePhotoAttachment,
+  SUPPORTED_DOCUMENT_MIME_TYPES,
+  TelegramDocumentDownloadError,
+  TelegramDocumentTooLargeError,
   TelegramImageDownloadError,
   TelegramImageTooLargeError,
 } from "./telegramAdapter.js";
@@ -164,6 +172,170 @@ test("downloadTelegramImage throws TelegramImageTooLargeError once the base64 pa
 
 test("MAX_BASE64_IMAGE_BYTES matches the documented Claude API direct base64 image limit (10 MB)", () => {
   assert.equal(MAX_BASE64_IMAGE_BYTES, 10 * 1024 * 1024);
+});
+
+// --- File/document intake (#24): Telegram PDF normalization, download, validation. ---
+
+test("resolveDocumentFileAttachment accepts a supported PDF and passes through the filename", () => {
+  const attachment = resolveDocumentFileAttachment({ file_id: "doc_5", mime_type: "application/pdf", file_name: "brief.pdf" });
+  assert.deepEqual(attachment, { supported: true, fileId: "doc_5", mimeType: "application/pdf", filename: "brief.pdf", fileSize: undefined });
+});
+
+test("resolveDocumentFileAttachment accepts a PDF with no filename", () => {
+  const attachment = resolveDocumentFileAttachment({ file_id: "doc_6", mime_type: "application/pdf" });
+  assert.deepEqual(attachment, { supported: true, fileId: "doc_6", mimeType: "application/pdf", filename: undefined, fileSize: undefined });
+});
+
+test("resolveDocumentFileAttachment flags an unsupported file type", () => {
+  const attachment = resolveDocumentFileAttachment({ file_id: "doc_7", mime_type: "application/zip" });
+  assert.deepEqual(attachment, { supported: false, mimeType: "application/zip" });
+});
+
+test("resolveDocumentFileAttachment flags an image MIME type too (caller checks image first)", () => {
+  // resolveDocumentFileAttachment is only reached after resolveDocumentImageAttachment
+  // returned null; called directly it has no image-awareness, which is fine since the
+  // real dispatcher (telegramCli.ts) always checks image first.
+  const attachment = resolveDocumentFileAttachment({ file_id: "doc_8", mime_type: "image/png" });
+  assert.deepEqual(attachment, { supported: false, mimeType: "image/png" });
+});
+
+test("resolveDocumentFileAttachment returns null when there is no document or no MIME type at all", () => {
+  assert.equal(resolveDocumentFileAttachment(undefined), null);
+  assert.equal(resolveDocumentFileAttachment({ file_id: "doc_9" }), null);
+});
+
+test("SUPPORTED_DOCUMENT_MIME_TYPES is exactly PDF for this slice", () => {
+  assert.deepEqual(SUPPORTED_DOCUMENT_MIME_TYPES, ["application/pdf"]);
+});
+
+test("downloadTelegramDocument base64-encodes the downloaded bytes, reports byte size, and passes through the filename", async () => {
+  const bytes = new Uint8Array([37, 80, 68, 70]); // "%PDF"
+  const document = await downloadTelegramDocument(
+    "https://api.telegram.org/file/bot123/brief.pdf",
+    "application/pdf",
+    "brief.pdf",
+    fakeImageResponse(bytes),
+  );
+
+  assert.equal(document.mediaType, "application/pdf");
+  assert.equal(document.byteSize, 4);
+  assert.equal(document.filename, "brief.pdf");
+  assert.equal(Buffer.from(document.data, "base64").equals(Buffer.from(bytes)), true);
+});
+
+test("downloadTelegramDocument omits filename when Telegram did not provide one", async () => {
+  const bytes = new Uint8Array([1, 2, 3]);
+  const document = await downloadTelegramDocument(
+    "https://api.telegram.org/file/bot123/file",
+    "application/pdf",
+    undefined,
+    fakeImageResponse(bytes),
+  );
+
+  assert.equal(document.filename, undefined);
+});
+
+test("downloadTelegramDocument throws TelegramDocumentDownloadError on a non-OK HTTP response", async () => {
+  await assert.rejects(
+    () => downloadTelegramDocument(
+      "https://api.telegram.org/file/bot123/x.pdf",
+      "application/pdf",
+      "x.pdf",
+      fakeImageResponse(new Uint8Array(), false, 404),
+    ),
+    TelegramDocumentDownloadError,
+  );
+});
+
+test("downloadTelegramDocument throws TelegramDocumentDownloadError when the fetch itself rejects", async () => {
+  const failingFetch = (async () => {
+    throw new Error("network unreachable");
+  }) as unknown as typeof fetch;
+
+  await assert.rejects(
+    () => downloadTelegramDocument("https://api.telegram.org/file/bot123/x.pdf", "application/pdf", "x.pdf", failingFetch),
+    TelegramDocumentDownloadError,
+  );
+});
+
+test("downloadTelegramDocument throws TelegramDocumentTooLargeError once the base64 payload exceeds the configured ceiling", async () => {
+  const bytes = new Uint8Array(1000); // encodes to well over a tiny custom ceiling
+  await assert.rejects(
+    () => downloadTelegramDocument(
+      "https://api.telegram.org/file/bot123/x.pdf",
+      "application/pdf",
+      "x.pdf",
+      fakeImageResponse(bytes),
+      100,
+    ),
+    TelegramDocumentTooLargeError,
+  );
+});
+
+// --- Size-guard hardening: MAX_DOCUMENT_BASE64_LENGTH stays safely below the
+// documented 32 MB whole-request ceiling, leaving headroom for the user.message
+// envelope, the document block structure, an optional title, and an optional
+// caption/text block — none of which are part of the base64 payload itself. ---
+
+test("MAX_DOCUMENT_BASE64_LENGTH is a conservative base64-length ceiling with real headroom below the 32 MB request cap", () => {
+  const CLAUDE_API_MAX_REQUEST_SIZE = 32 * 1024 * 1024;
+  assert.equal(MAX_DOCUMENT_BASE64_LENGTH, 20 * 1024 * 1024);
+  assert.ok(
+    MAX_DOCUMENT_BASE64_LENGTH < CLAUDE_API_MAX_REQUEST_SIZE,
+    "the encoded-document ceiling alone must leave room for envelope/title/caption overhead",
+  );
+  const headroomBytes = CLAUDE_API_MAX_REQUEST_SIZE - MAX_DOCUMENT_BASE64_LENGTH;
+  assert.ok(
+    headroomBytes >= 10 * 1024 * 1024,
+    "headroom should be generous (>=10 MB) relative to the few KB an envelope/title/caption actually costs",
+  );
+});
+
+test("a document just under MAX_DOCUMENT_BASE64_LENGTH is allowed", async () => {
+  // Construct raw bytes whose base64 length lands just under the ceiling.
+  const rawBytes = Math.floor((MAX_DOCUMENT_BASE64_LENGTH - 8) * 3 / 4);
+  const bytes = new Uint8Array(rawBytes);
+  const document = await downloadTelegramDocument(
+    "https://api.telegram.org/file/bot123/big-but-ok.pdf",
+    "application/pdf",
+    "big-but-ok.pdf",
+    fakeImageResponse(bytes),
+  );
+  assert.equal(document.byteSize, rawBytes);
+});
+
+test("a document just over MAX_DOCUMENT_BASE64_LENGTH is rejected", async () => {
+  // Construct raw bytes whose base64 length lands just over the ceiling.
+  const rawBytes = Math.ceil((MAX_DOCUMENT_BASE64_LENGTH + 8) * 3 / 4);
+  const bytes = new Uint8Array(rawBytes);
+  await assert.rejects(
+    () => downloadTelegramDocument(
+      "https://api.telegram.org/file/bot123/too-big.pdf",
+      "application/pdf",
+      "too-big.pdf",
+      fakeImageResponse(bytes),
+    ),
+    TelegramDocumentTooLargeError,
+  );
+});
+
+test("MAX_DOCUMENT_RAW_BYTES_ESTIMATE is derived from the base64 ceiling (~3/4, accounting for base64 expansion)", () => {
+  assert.equal(MAX_DOCUMENT_RAW_BYTES_ESTIMATE, Math.floor((MAX_DOCUMENT_BASE64_LENGTH * 3) / 4));
+  assert.equal(MAX_DOCUMENT_RAW_BYTES_ESTIMATE, 15 * 1024 * 1024);
+});
+
+test("exceedsDocumentSizeEstimate flags a Telegram-reported file_size over the raw-byte estimate", () => {
+  assert.equal(exceedsDocumentSizeEstimate(MAX_DOCUMENT_RAW_BYTES_ESTIMATE + 1), true);
+  assert.equal(exceedsDocumentSizeEstimate(MAX_DOCUMENT_RAW_BYTES_ESTIMATE), false);
+});
+
+test("exceedsDocumentSizeEstimate never rejects when Telegram reports no file_size (authoritative check still applies later)", () => {
+  assert.equal(exceedsDocumentSizeEstimate(undefined), false);
+});
+
+test("resolveDocumentFileAttachment passes through Telegram's reported file_size for early-rejection use", () => {
+  const attachment = resolveDocumentFileAttachment({ file_id: "doc_10", mime_type: "application/pdf", file_size: 123 });
+  assert.deepEqual(attachment, { supported: true, fileId: "doc_10", mimeType: "application/pdf", filename: undefined, fileSize: 123 });
 });
 
 test("handleSessionError leaves the cached session alone for an ordinary turn failure", async () => {

@@ -4,10 +4,13 @@ import { loadConfig, loadTelegramConfig, MissingConfigError, type DjonikClientCo
 import { connectToDjonik } from "./djonikClient.js";
 import {
   createSessionManager,
+  downloadTelegramDocument,
   downloadTelegramImage,
+  exceedsDocumentSizeEstimate,
   formatUserFacingError,
   handleSessionError,
   isAllowedUser,
+  resolveDocumentFileAttachment,
   resolveDocumentImageAttachment,
   resolvePhotoAttachment,
 } from "./telegramAdapter.js";
@@ -71,6 +74,37 @@ async function main(): Promise<void> {
     }
   }
 
+  /**
+   * Downloads one Telegram PDF/file attachment and sends it (plus any
+   * caption) as a single Djonik turn (#24). A download/size failure produces
+   * a visible user-facing error and never reaches `session.send`, so a
+   * broken file can never trigger a Trello mutation.
+   */
+  async function handleDocumentFileTurn(
+    ctx: Context,
+    fileId: string,
+    mimeType: string,
+    filename: string | undefined,
+    caption: string,
+  ): Promise<void> {
+    try {
+      const file = await ctx.api.getFile(fileId);
+      if (!file.file_path) {
+        throw new Error("Telegram did not return a file path for this document.");
+      }
+      const fileUrl = `https://api.telegram.org/file/bot${telegramConfig.botToken}/${file.file_path}`;
+      const document = await downloadTelegramDocument(fileUrl, mimeType, filename);
+
+      const session = await djonikSession.getSession();
+      const reply = await session.send(caption, undefined, document);
+      await ctx.reply(reply);
+    } catch (error) {
+      console.error("Djonik document turn failed:", error);
+      handleSessionError(djonikSession, error);
+      await ctx.reply(formatUserFacingError(error));
+    }
+  }
+
   // Text-only: this is a thin channel adapter, not an intent router. The
   // raw text goes to Djonik unmodified; Djonik decides what it means.
   bot.on("message:text", async (ctx) => {
@@ -102,25 +136,46 @@ async function main(): Promise<void> {
     await handleImageTurn(ctx, attachment.fileId, attachment.mimeType, ctx.message.caption ?? "");
   });
 
-  // Image documents (e.g. an uncompressed screenshot sent as a file): only
-  // MIME types the Claude API accepts are in scope. Non-image documents
-  // (PDFs, arbitrary source files) are explicitly out of scope for this
-  // slice and are silently ignored, matching the pre-existing behavior for
-  // every other unhandled Telegram message type.
+  // Documents: an image-shaped document (e.g. an uncompressed screenshot sent
+  // as a file, #22) takes priority; anything else is now file/PDF intake
+  // (#24). A supported file (PDF) reaches Djonik as document content; an
+  // unsupported type gets a concise visible rejection rather than being
+  // silently dropped, per the issue's explicit "unsupported type -> visible
+  // error, zero mutation" requirement.
   bot.on("message:document", async (ctx) => {
     if (!isAllowedUser(ctx.from?.id, telegramConfig.allowedUserId)) {
       console.warn(`Ignored Telegram document from unauthorized user id ${ctx.from?.id ?? "unknown"}.`);
       return;
     }
-    const resolved = resolveDocumentImageAttachment(ctx.message.document);
-    if (resolved === null) return;
-    if (!resolved.supported) {
+    const imageAttachment = resolveDocumentImageAttachment(ctx.message.document);
+    if (imageAttachment !== null) {
+      if (!imageAttachment.supported) {
+        await ctx.reply(
+          `⚠️ Джонік поки не підтримує цей формат зображення (${imageAttachment.mimeType}). Підтримуються: JPEG, PNG, GIF, WebP.`,
+        );
+        return;
+      }
+      await handleImageTurn(ctx, imageAttachment.fileId, imageAttachment.mimeType, ctx.message.caption ?? "");
+      return;
+    }
+
+    const fileAttachment = resolveDocumentFileAttachment(ctx.message.document);
+    if (fileAttachment === null) return;
+    if (!fileAttachment.supported) {
       await ctx.reply(
-        `⚠️ Джонік поки не підтримує цей формат зображення (${resolved.mimeType}). Підтримуються: JPEG, PNG, GIF, WebP.`,
+        `⚠️ Джонік поки не підтримує цей тип файлу (${fileAttachment.mimeType}). Підтримується: PDF.`,
       );
       return;
     }
-    await handleImageTurn(ctx, resolved.fileId, resolved.mimeType, ctx.message.caption ?? "");
+    // Optimistic early rejection from Telegram's self-reported file_size, skipping a
+    // wasted download for an obviously oversized PDF. Not authoritative: downloadTelegramDocument
+    // still enforces the real ceiling against the actual encoded payload either way.
+    if (exceedsDocumentSizeEstimate(fileAttachment.fileSize)) {
+      const megabytes = ((fileAttachment.fileSize ?? 0) / (1024 * 1024)).toFixed(1);
+      await ctx.reply(`⚠️ Файл завеликий (${megabytes} MB). Джонік поки підтримує файли до ~15 MB.`);
+      return;
+    }
+    await handleDocumentFileTurn(ctx, fileAttachment.fileId, fileAttachment.mimeType, fileAttachment.filename, ctx.message.caption ?? "");
   });
 
   bot.catch((error) => {
