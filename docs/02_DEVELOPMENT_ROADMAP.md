@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing is blocked by the external Trello MCP tool surface. The Managed Agent token/cost audit is complete: Google Calendar remains attached but is disabled until Wave E, five unsupported Trello write tools are already disabled, opt-in per-turn telemetry and a planning regression matrix are live, and the three tested optional Trello reads remain enabled because the final quality gate did not establish safe behavioral equivalence. Conditional same-turn fresh-read enforcement for short planning follow-ups is a Managed Agents platform limitation under the accepted architecture; daily/weekly planning Skills continue to request fresh Trello evidence, but that guidance is best-effort rather than a hard guarantee for this edge case. Source-correlated Telegram usage telemetry (#19) is accepted and validated against an independent Console export for one real UTC hour. The next canonical cost/reliability measurement is real long-lived Telegram session growth (#20); the development/validation spend guardrail (#21) remains queued.
+Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing is blocked by the external Trello MCP tool surface. The Managed Agent token/cost audit is complete: Google Calendar remains attached but is disabled until Wave E, five unsupported Trello write tools are already disabled, opt-in per-turn telemetry and a planning regression matrix are live, and the three tested optional Trello reads remain enabled because the final quality gate did not establish safe behavioral equivalence. Conditional same-turn fresh-read enforcement for short planning follow-ups is a Managed Agents platform limitation under the accepted architecture; daily/weekly planning Skills continue to request fresh evidence, but that guidance is best-effort rather than a hard guarantee for this edge case. Source-correlated Telegram usage telemetry (#19) is accepted and validated against an independent Console export. Real Telegram session-growth measurement (#20) found a modest ~19% increase in input composition across comparable early vs late turns in one 7-turn session, but no material list-cost shift; rollover/compaction is therefore not justified by current evidence. The next canonical cost/reliability item is the development/validation spend guardrail (#21).
 
 ## Execution order
 
@@ -175,15 +175,25 @@ Verified outcome:
 - no Agent/Skill/Memory/MCP/Calendar/Trello production configuration changed;
 - typecheck passed, tests passed 40/40, and `git diff --check` was clean.
 
-### NOW — Measure real Telegram session token growth over time using existing turn telemetry (#20)
+### DONE — Measure real Telegram session token growth over time using existing turn telemetry (#20)
 
-Promoted after #19 acceptance on 2026-09-16.
+Accepted 2026-09-17 at commit `fbd82d20b190e8efd322ecb5ffe9b526b89933d5`.
 
-Observe real production Telegram sessions over an agreed window to determine whether token/cost composition grows materially with turn count, before any compaction/rollover/history-trimming work is considered. Measurement only; no session lifecycle change.
+Verified outcome:
+- one continuous real Telegram Managed Session was observed for 7 natural visible turns;
+- a content-free local reporting mode groups telemetry by `sessionId`, orders turns by timestamp, and assigns deterministic per-session turn indexes;
+- the clean comparable subset (turns 2, 3, 6, 7: one model iteration, zero tools, no Skill/Memory reads) increased from ~39,958 average input-composition tokens early to ~47,611 late, approximately +19.15%;
+- comparable early and late turns stayed in the same observed 1–2¢ list-cost band;
+- higher-cost turns correlated with extra model iterations, Trello tool work, and/or Skill loading rather than turn position;
+- current evidence therefore does not justify rollover, compaction, or history trimming; revisit only if later natural production telemetry shows materially higher late-session cost, latency, context pressure, or quality degradation;
+- no Agent/Skill/Memory/MCP/session-lifecycle behavior changed;
+- typecheck passed, tests passed 46/46, and `git diff --check` was clean.
 
-### QUEUED — Adopt a development/validation spend guardrail for future token/cost audits (#21)
+### NOW — Adopt a development/validation spend guardrail for future token/cost audits (#21)
 
-Document, in one canonical place, the per-issue dollar ceiling and maximum session count that future Managed Agent token/cost audits and A/B follow-ups must declare before starting, generalized from the ad hoc ceilings already used in #16 (e.g. its observed $0.80 stop ceiling). Documentation/process only; no code or Agent configuration change. Can run independently of #19/#20.
+Promoted after #20 acceptance on 2026-09-17.
+
+Document, in one canonical place, the per-issue dollar ceiling and maximum session count that future Managed Agent token/cost audits and A/B follow-ups must declare before starting, generalized from the ad hoc ceilings already used in #16 (e.g. its observed $0.80 stop ceiling). Documentation/process only; no code or Agent configuration change.
 
 ### QUEUED — Project Context Bootstrap: canonical project briefs in Djonik Memory (#17)
 
