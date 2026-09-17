@@ -120,6 +120,9 @@ test("turn telemetry emits content-free explicit-source usage delta with determi
     verificationNudges: 1,
     skillRead: true,
     memoryRead: true,
+    hasImage: false,
+    imageMimeType: null,
+    imageByteSize: null,
     usage: {
       inputTokens: 4,
       cacheCreationInputTokens: 12,
@@ -411,6 +414,80 @@ test("a due-clear write verified by a same-card read succeeds like any other wri
 
   assert.equal(reply, "Дедлайн знято з картки A.");
   assert.equal(sendCalls.length, 1, "no corrective nudge needed when the read matches the written card");
+  session.close();
+});
+
+// --- Multimodal input (#22): image content blocks on user.message. ---
+
+test("send with an image constructs a user.message with an image block before the text block", async () => {
+  const { client, sendCalls } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await session.send("з цього зроби задачу по Extract", {
+    data: "ZmFrZS1pbWFnZS1ieXRlcw==",
+    mediaType: "image/jpeg",
+    byteSize: 12345,
+  });
+
+  assert.deepEqual(sendCalls[0], {
+    events: [
+      {
+        type: "user.message",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "ZmFrZS1pbWFnZS1ieXRlcw==" } },
+          { type: "text", text: "з цього зроби задачу по Extract" },
+        ],
+      },
+    ],
+  });
+  session.close();
+});
+
+test("send with an image and no caption omits the text block entirely", async () => {
+  const { client, sendCalls } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await session.send("", { data: "aW1hZ2UtZGF0YQ==", mediaType: "image/png", byteSize: 99 });
+
+  assert.deepEqual(sendCalls[0], {
+    events: [
+      {
+        type: "user.message",
+        content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "aW1hZ2UtZGF0YQ==" } }],
+      },
+    ],
+  });
+  session.close();
+});
+
+test("send with neither text nor an image rejects before sending anything", async () => {
+  const { client, sendCalls } = createFakeClient([]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await assert.rejects(() => session.send(""), /requires non-empty text and\/or an image/);
+  assert.equal(sendCalls.length, 0);
+  session.close();
+});
+
+test("turn telemetry records hasImage/mimeType/byteSize for an image turn and stays null for a text-only turn", async () => {
+  const { client } = createFakeClient([AGENT_MESSAGE, IDLE, AGENT_MESSAGE, IDLE]);
+  const telemetry: unknown[] = [];
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x", undefined, (record) => telemetry.push(record));
+
+  await session.send("що тут треба зробити?", { data: "aW1n", mediaType: "image/webp", byteSize: 4096 });
+  await session.send("дякую");
+
+  const [imageTurn, textOnlyTurn] = telemetry as Array<{
+    hasImage: boolean;
+    imageMimeType: string | null;
+    imageByteSize: number | null;
+  }>;
+  assert.equal(imageTurn.hasImage, true);
+  assert.equal(imageTurn.imageMimeType, "image/webp");
+  assert.equal(imageTurn.imageByteSize, 4096);
+  assert.equal(textOnlyTurn.hasImage, false);
+  assert.equal(textOnlyTurn.imageMimeType, null);
+  assert.equal(textOnlyTurn.imageByteSize, null);
   session.close();
 });
 

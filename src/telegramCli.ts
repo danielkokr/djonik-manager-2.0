@@ -1,12 +1,20 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { Bot } from "grammy";
-import { loadConfig, loadTelegramConfig, MissingConfigError } from "./config.js";
+import { Bot, type Context } from "grammy";
+import { loadConfig, loadTelegramConfig, MissingConfigError, type DjonikClientConfig, type TelegramAdapterConfig } from "./config.js";
 import { connectToDjonik } from "./djonikClient.js";
-import { createSessionManager, formatUserFacingError, handleSessionError, isAllowedUser } from "./telegramAdapter.js";
+import {
+  createSessionManager,
+  downloadTelegramImage,
+  formatUserFacingError,
+  handleSessionError,
+  isAllowedUser,
+  resolveDocumentImageAttachment,
+  resolvePhotoAttachment,
+} from "./telegramAdapter.js";
 
 async function main(): Promise<void> {
-  let djonikConfig;
-  let telegramConfig;
+  let djonikConfig: DjonikClientConfig;
+  let telegramConfig: TelegramAdapterConfig;
   try {
     djonikConfig = loadConfig();
     telegramConfig = loadTelegramConfig();
@@ -37,6 +45,32 @@ async function main(): Promise<void> {
 
   const bot = new Bot(telegramConfig.botToken);
 
+  /**
+   * Downloads one Telegram image attachment and sends it (plus any caption)
+   * as a single Djonik turn. Shared by the photo and image-document handlers
+   * below. A download/size failure produces a visible user-facing error and
+   * never reaches `session.send`, so a broken image can never trigger a
+   * Trello mutation.
+   */
+  async function handleImageTurn(ctx: Context, fileId: string, mimeType: string, caption: string): Promise<void> {
+    try {
+      const file = await ctx.api.getFile(fileId);
+      if (!file.file_path) {
+        throw new Error("Telegram did not return a file path for this image.");
+      }
+      const fileUrl = `https://api.telegram.org/file/bot${telegramConfig.botToken}/${file.file_path}`;
+      const image = await downloadTelegramImage(fileUrl, mimeType);
+
+      const session = await djonikSession.getSession();
+      const reply = await session.send(caption, image);
+      await ctx.reply(reply);
+    } catch (error) {
+      console.error("Djonik image turn failed:", error);
+      handleSessionError(djonikSession, error);
+      await ctx.reply(formatUserFacingError(error));
+    }
+  }
+
   // Text-only: this is a thin channel adapter, not an intent router. The
   // raw text goes to Djonik unmodified; Djonik decides what it means.
   bot.on("message:text", async (ctx) => {
@@ -54,6 +88,39 @@ async function main(): Promise<void> {
       handleSessionError(djonikSession, error);
       await ctx.reply(formatUserFacingError(error));
     }
+  });
+
+  // Telegram photos: always re-encoded to JPEG by Telegram itself. The
+  // caption (if any) travels with the image in the same visible turn.
+  bot.on("message:photo", async (ctx) => {
+    if (!isAllowedUser(ctx.from?.id, telegramConfig.allowedUserId)) {
+      console.warn(`Ignored Telegram photo from unauthorized user id ${ctx.from?.id ?? "unknown"}.`);
+      return;
+    }
+    const attachment = resolvePhotoAttachment(ctx.message.photo);
+    if (!attachment) return;
+    await handleImageTurn(ctx, attachment.fileId, attachment.mimeType, ctx.message.caption ?? "");
+  });
+
+  // Image documents (e.g. an uncompressed screenshot sent as a file): only
+  // MIME types the Claude API accepts are in scope. Non-image documents
+  // (PDFs, arbitrary source files) are explicitly out of scope for this
+  // slice and are silently ignored, matching the pre-existing behavior for
+  // every other unhandled Telegram message type.
+  bot.on("message:document", async (ctx) => {
+    if (!isAllowedUser(ctx.from?.id, telegramConfig.allowedUserId)) {
+      console.warn(`Ignored Telegram document from unauthorized user id ${ctx.from?.id ?? "unknown"}.`);
+      return;
+    }
+    const resolved = resolveDocumentImageAttachment(ctx.message.document);
+    if (resolved === null) return;
+    if (!resolved.supported) {
+      await ctx.reply(
+        `⚠️ Джонік поки не підтримує цей формат зображення (${resolved.mimeType}). Підтримуються: JPEG, PNG, GIF, WebP.`,
+      );
+      return;
+    }
+    await handleImageTurn(ctx, resolved.fileId, resolved.mimeType, ctx.message.caption ?? "");
   });
 
   bot.catch((error) => {

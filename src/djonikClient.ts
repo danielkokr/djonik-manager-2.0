@@ -1,8 +1,29 @@
 import Anthropic from "@anthropic-ai/sdk";
 
+/**
+ * Raw image bytes for one multimodal turn, transported as an inline base64
+ * `image` content block on the `user.message` event (official Managed
+ * Agents Sessions support — see `docs/02_DEVELOPMENT_ROADMAP.md` #22
+ * discovery). `byteSize` is the decoded (non-base64) size in bytes; it is
+ * carried through only for content-free telemetry, never logged as image
+ * content.
+ */
+export interface DjonikImageInput {
+  /** Base64-encoded image data, no `data:` URI prefix. */
+  data: string;
+  /** One of the four MIME types the Claude API accepts: jpeg/png/gif/webp. */
+  mediaType: string;
+  byteSize: number;
+}
+
 export interface DjonikSessionHandle {
   sessionId: string;
-  send(text: string): Promise<string>;
+  /**
+   * Sends one visible user turn. `text` may be empty when `image` is
+   * present (e.g. a Telegram photo with no caption); at least one of the
+   * two must be non-empty.
+   */
+  send(text: string, image?: DjonikImageInput): Promise<string>;
   /** Aborts the session's open event stream so the process can exit cleanly. */
   close(): void;
 }
@@ -33,6 +54,12 @@ export interface DjonikTurnTelemetry {
   verificationNudges: number;
   skillRead: boolean;
   memoryRead: boolean;
+  /** Whether this visible turn included image input. Never carries image bytes/content. */
+  hasImage: boolean;
+  /** MIME type of the input image (e.g. "image/jpeg"), or null when `hasImage` is false. */
+  imageMimeType: string | null;
+  /** Decoded byte size of the input image; not sensitive on its own. Null when `hasImage` is false. */
+  imageByteSize: number | null;
   /** Per-visible-turn delta, never the session's cumulative usage snapshot. */
   usage: DjonikCumulativeUsage | null;
 }
@@ -43,6 +70,8 @@ export interface DjonikTurnTelemetryCollector {
   recordMcpResult(): void;
   recordBuiltInRead(input: Record<string, unknown>): void;
   recordVerificationNudge(): void;
+  /** Records that this turn's input included an image. Content-free: mimeType/byteSize only. */
+  recordInputImage(meta: { mimeType: string; byteSize: number }): void;
   recordUsage(usage: {
     input_tokens?: number;
     cache_creation?: object | null;
@@ -67,6 +96,9 @@ export function createTurnTelemetryCollector(
   let verificationNudges = 0;
   let skillRead = false;
   let memoryRead = false;
+  let hasImage = false;
+  let imageMimeType: string | null = null;
+  let imageByteSize: number | null = null;
   let cumulativeUsage: DjonikCumulativeUsage | null = null;
 
   function delta(current: number | undefined, previous: number | undefined): number | undefined {
@@ -115,6 +147,11 @@ export function createTurnTelemetryCollector(
       memoryRead ||= /(?:^|\/)memory\//.test(path);
     },
     recordVerificationNudge: () => { verificationNudges += 1; },
+    recordInputImage: (meta) => {
+      hasImage = true;
+      imageMimeType = meta.mimeType;
+      imageByteSize = meta.byteSize;
+    },
     recordUsage: (nextUsage) => {
       const cacheCreationInputTokens = Object.values(nextUsage.cache_creation ?? {}).reduce(
         (sum, value) => sum + (typeof value === "number" ? value : 0),
@@ -141,6 +178,9 @@ export function createTurnTelemetryCollector(
       verificationNudges,
       skillRead,
       memoryRead,
+      hasImage,
+      imageMimeType,
+      imageByteSize,
       usage: turnUsage(),
     }),
     cumulativeUsage: () => cumulativeUsage === null ? null : { ...cumulativeUsage },
@@ -271,7 +311,11 @@ const VERIFICATION_NUDGE_TEXT =
 
 const MAX_VERIFICATION_NUDGES = 1;
 
-type SendableEvent = { type: "user.message"; content: Array<{ type: "text"; text: string }> };
+type SendableContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; source: { type: "base64"; media_type: string; data: string } };
+
+type SendableEvent = { type: "user.message"; content: SendableContentBlock[] };
 
 /**
  * Connects to the already-existing Djonik Managed Agent (Claude Console is
@@ -448,16 +492,36 @@ export async function connectToDjonik(
    * blocker), nudge the agent once to verify and reply again in the same
    * session; if it still hasn't verified, fail the turn instead of returning
    * an unverified success claim to the user.
+   *
+   * `image`, when present, is sent as an inline base64 `image` content block
+   * alongside `text` in the same `user.message` event (see `DjonikImageInput`).
+   * The image is untrusted source data like any other external content — it
+   * carries no special instruction/tool authority; that boundary lives in the
+   * Managed Agent's own configuration, not in this transport code.
    */
-  async function send(text: string): Promise<string> {
+  async function send(text: string, image?: DjonikImageInput): Promise<string> {
     unverifiedTrelloWrite = false;
     pendingWriteTool = null;
     pendingWriteObjectId = null;
     mcpToolCallsById.clear();
     turnTelemetry = createTurnTelemetryCollector(turnSource, session.id, previousSessionUsage);
+    if (image) {
+      turnTelemetry.recordInputImage({ mimeType: image.mediaType, byteSize: image.byteSize });
+    }
+
+    const content: SendableContentBlock[] = [];
+    if (image) {
+      content.push({ type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } });
+    }
+    if (text) {
+      content.push({ type: "text", text });
+    }
+    if (content.length === 0) {
+      throw new Error("Djonik turn requires non-empty text and/or an image.");
+    }
 
     try {
-      let reply = await runTurn([{ type: "user.message", content: [{ type: "text", text }] }]);
+      let reply = await runTurn([{ type: "user.message", content }]);
 
       for (let attempt = 0; unverifiedTrelloWrite && attempt < MAX_VERIFICATION_NUDGES; attempt += 1) {
         onTrace?.({ type: "verification_nudge_sent", attempt: attempt + 1 });
