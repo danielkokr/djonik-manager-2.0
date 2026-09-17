@@ -207,7 +207,8 @@ export type DjonikTraceEvent =
   | { type: "mcp_tool_use"; serverName: string; toolName: string; input: Record<string, unknown> }
   | { type: "mcp_tool_result"; serverName: string; toolName: string; isError: boolean }
   | { type: "verification_nudge_sent"; attempt: number }
-  | { type: "write_unverified_failure" };
+  | { type: "write_unverified_failure" }
+  | { type: "due_date_reply_finalized"; verifiedDue: string; kyivDate: string; weekdayEn: string; mismatch: boolean };
 
 /**
  * Session-specific guidance shown to the agent alongside the memory store's
@@ -302,6 +303,200 @@ function readVerifiesWrite(
   );
 }
 
+/**
+ * Deterministic backstop for Issue #23 (post-write due-date wording must match the
+ * verified Trello field). Prompt/Skill-level guidance was tried twice and failed
+ * twice on the same reproducible case: given a verified UTC `due` whose Kyiv-local
+ * calendar date differs from its UTC calendar date, the model correctly converts
+ * the date but states the *UTC* date's weekday instead of the *Kyiv-local* date's
+ * weekday. This is narrowly scoped to exactly that one fact: Trello due-date write
+ * -> same-card verified read -> exact post-write due-date confirmation. It never
+ * rewrites general assistant text, never parses arbitrary prose, and never touches
+ * any other field or turn shape.
+ */
+const ISO_UTC_DUE_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+
+/** Bounded (depth-limited) structured lookup for a `due` field in a Trello MCP tool
+ *  result's parsed JSON — not a generic object walker, only ever looking for this
+ *  one key, and only trusting a value shaped like a Trello UTC due timestamp. */
+function findDueField(value: unknown, depth: number): string | null {
+  if (depth < 0 || value === null || typeof value !== "object") return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findDueField(item, depth - 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.due === "string" && ISO_UTC_DUE_PATTERN.test(obj.due)) return obj.due;
+  for (const key of Object.keys(obj)) {
+    const found = findDueField(obj[key], depth - 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Extracts the verified `due` value from a `trelloReadCard` MCP tool result's
+ * content blocks. Only text blocks are inspected; the text is first tried as JSON
+ * (the expected shape), then, if that fails, scanned with a narrow `"due":"..."`
+ * regex as a tolerant fallback. Returns null (never throws) when no due-shaped
+ * value can be found, so the deterministic safeguard cleanly no-ops rather than
+ * fabricating a value or crashing the turn.
+ */
+export function extractVerifiedDueFromTrelloReadContent(
+  content: Array<{ type: string; text?: string }> | undefined,
+): string | null {
+  if (!content) return null;
+  for (const block of content) {
+    if (block.type !== "text" || typeof block.text !== "string") continue;
+    try {
+      const parsed = findDueField(JSON.parse(block.text), 3);
+      if (parsed) return parsed;
+    } catch {
+      // fall through to the regex fallback below
+    }
+    const match = block.text.match(/"due"\s*:\s*"([^"]+)"/);
+    if (match && ISO_UTC_DUE_PATTERN.test(match[1])) return match[1];
+  }
+  return null;
+}
+
+/** Verified Trello `due`, deterministically converted to Europe/Kyiv using the
+ *  platform's own IANA timezone database (via `Intl`) — never a hardcoded
+ *  UTC+2/+3 offset, so this stays correct across the DST transition. */
+export interface VerifiedDueFacts {
+  /** The raw verified UTC value, unchanged, for display/traceability. */
+  isoUtc: string;
+  /** Kyiv-local calendar date, `YYYY-MM-DD`. */
+  kyivDate: string;
+  /** Kyiv-local time, `HH:MM` (24h). */
+  kyivTime: string;
+  /** English weekday name for the Kyiv-local calendar date, e.g. "Tuesday". */
+  weekdayEn: string;
+  /** Ukrainian nominative weekday name for the Kyiv-local calendar date, e.g. "вівторок". */
+  weekdayUk: string;
+  /** 1-indexed day of month (Kyiv-local). */
+  day: number;
+  /** 1-indexed month (Kyiv-local). */
+  month: number;
+  /** Full year (Kyiv-local). */
+  year: number;
+}
+
+const EN_TO_UA_WEEKDAY: Record<string, string> = {
+  Sunday: "неділя",
+  Monday: "понеділок",
+  Tuesday: "вівторок",
+  Wednesday: "середа",
+  Thursday: "четвер",
+  Friday: "пʼятниця",
+  Saturday: "субота",
+};
+
+const UA_MONTH_GENITIVE = [
+  "січня", "лютого", "березня", "квітня", "травня", "червня",
+  "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
+] as const;
+
+export function computeKyivDueFacts(isoUtc: string): VerifiedDueFacts | null {
+  const date = new Date(isoUtc);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Europe/Kyiv",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    weekday: "long",
+  });
+  const parts = formatter.formatToParts(date);
+  const part = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+
+  const year = part("year");
+  const month = part("month");
+  const day = part("day");
+  let hour = part("hour");
+  const minute = part("minute");
+  if (hour === "24") hour = "00"; // some ICU builds emit "24" for midnight under hour12:false
+  const weekdayEn = part("weekday");
+  if (!year || !month || !day || !weekdayEn) return null;
+
+  return {
+    isoUtc,
+    kyivDate: `${year}-${month}-${day}`,
+    kyivTime: `${hour}:${minute}`,
+    weekdayEn,
+    weekdayUk: EN_TO_UA_WEEKDAY[weekdayEn] ?? weekdayEn,
+    day: Number(day),
+    month: Number(month),
+    year: Number(year),
+  };
+}
+
+/**
+ * A due-bearing Trello write whose SAME card was verified by a `trelloReadCard`
+ * whose result yielded a parseable `due`. `intendedDue` is the write's own `due`
+ * argument, kept only for this one same-turn comparison — never stored beyond
+ * the turn, never trusted as the answer itself.
+ */
+export interface DueWriteOutcome {
+  intendedDue: string;
+  verifiedFacts: VerifiedDueFacts;
+}
+
+/**
+ * Canonical, fully deterministic due-date confirmation sentence — every field
+ * (date, time, weekday) comes from the same `Intl`-formatted Kyiv-local instant,
+ * so they cannot disagree with each other by construction. Does not depend on,
+ * or even look at, anything the model said.
+ */
+export function buildVerifiedDueConfirmation(outcome: DueWriteOutcome): string {
+  const f = outcome.verifiedFacts;
+  const kyivPhrase = `${f.weekdayUk}, ${f.day} ${UA_MONTH_GENITIVE[f.month - 1]} ${f.year}, ${f.kyivTime} за Києвом`;
+  const intendedMs = new Date(outcome.intendedDue).getTime();
+  const verifiedMs = new Date(f.isoUtc).getTime();
+  const sameInstant = !Number.isNaN(intendedMs) && intendedMs === verifiedMs;
+  return sameInstant
+    ? `Готово. Trello підтвердив дедлайн: ${kyivPhrase}.`
+    : `Картку оновлено, але Trello підтвердив дедлайн: ${kyivPhrase}. Це відрізняється від значення, яке було відправлено.`;
+}
+
+/**
+ * Issue #23's actual guarantee: for a turn whose due-date write was verified
+ * (identity + a parseable same-card `due`), the wrapper — not the model — owns
+ * the whole final due-date confirmation, replacing the model's reply outright
+ * rather than trying to detect and patch just the wrong part of its prose. This
+ * is deliberately the "cleaner and safer" option: no parsing of arbitrary
+ * assistant text is needed for correctness, so a wrong weekday, a wrong
+ * calendar date, a wrong time, or entirely different wording all fail the same
+ * (harmless) way — they're simply never consulted. When `outcome` is null (no
+ * due-date write this turn, or the write's due value never changed), the reply
+ * is returned completely untouched.
+ */
+export function finalizeDueDateReply(reply: string, outcome: DueWriteOutcome | null): string {
+  return outcome ? buildVerifiedDueConfirmation(outcome) : reply;
+}
+
+/** Trace payload for a finalized due-date reply, or null when no due-date write
+ *  was finalized this turn. Takes `outcome` as a plain parameter (rather than
+ *  reading a closed-over mutable variable) so its type narrows normally. */
+export function describeDueOutcomeForTrace(
+  outcome: DueWriteOutcome | null,
+): { verifiedDue: string; kyivDate: string; weekdayEn: string; mismatch: boolean } | null {
+  if (!outcome) return null;
+  return {
+    verifiedDue: outcome.verifiedFacts.isoUtc,
+    kyivDate: outcome.verifiedFacts.kyivDate,
+    weekdayEn: outcome.verifiedFacts.weekdayEn,
+    mismatch: new Date(outcome.intendedDue).getTime() !== new Date(outcome.verifiedFacts.isoUtc).getTime(),
+  };
+}
+
 const VERIFICATION_NUDGE_TEXT =
   "Системна перевірка: у цьому turn був виклик Trello write-інструменту без " +
   "наступного read-виклику САМЕ ТОГО Ж об'єкта (той самий cardId), що підтверджує " +
@@ -375,6 +570,13 @@ export async function connectToDjonik(
   /** The object id the pending write named, or null when this write tool has no known identity field
    *  (falls back to "any successful Trello read clears it"). */
   let pendingWriteObjectId: string | null = null;
+  /** The `due` value the pending write's own input named, if any — never trusted as
+   *  the final answer, only used to know a due-date claim needs deterministic backup. */
+  let pendingWriteDue: string | null = null;
+  /** Set once this turn's pending due-date write is verified by a same-card read whose
+   *  result contains a parseable `due` — at that point the wrapper, not the model,
+   *  owns the turn's final due-date confirmation wording (Issue #23). */
+  let dueOutcomeForTurn: DueWriteOutcome | null = null;
   let turnTelemetry: DjonikTurnTelemetryCollector | null = null;
   /** Session usage events are cumulative; this is the completed-turn baseline. */
   let previousSessionUsage: DjonikCumulativeUsage | null = null;
@@ -427,23 +629,42 @@ export async function connectToDjonik(
               unverifiedTrelloWrite = true;
               pendingWriteTool = call.toolName;
               pendingWriteObjectId = writeObjectId(call.toolName, call.input);
+              pendingWriteDue = readStringField(call.input, "due");
             } else if (isTrelloReadTool(call.serverName, call.toolName) && unverifiedTrelloWrite) {
-              if (pendingWriteObjectId !== null) {
-                // Identity known: only a read of the exact same object verifies it.
-                // An unrelated or mismatched-id read leaves the write unverified.
-                if (
-                  pendingWriteTool !== null &&
-                  readVerifiesWrite(pendingWriteTool, pendingWriteObjectId, call.toolName, call.input)
-                ) {
+              // Identity known: only a read of the exact same object verifies it. An
+              // unrelated or mismatched-id read leaves the write unverified. No identity
+              // field known for this write tool type (e.g. a card create, before an id
+              // exists): fall back to the looser "any successful Trello read clears it".
+              const identityVerified =
+                pendingWriteObjectId !== null
+                  ? pendingWriteTool !== null &&
+                    readVerifiesWrite(pendingWriteTool, pendingWriteObjectId, call.toolName, call.input)
+                  : true;
+
+              if (identityVerified && pendingWriteDue === null) {
+                // Ordinary write with no due-date change: identity verification alone
+                // is sufficient, exactly as before Issue #23.
+                unverifiedTrelloWrite = false;
+                pendingWriteTool = null;
+                pendingWriteObjectId = null;
+              } else if (identityVerified && pendingWriteDue !== null) {
+                // Issue #23: a due-bearing write additionally requires a parseable
+                // verified `due` from THIS SAME read before the write counts as
+                // verified at all — never the write's own input, never memory, never
+                // an earlier turn. If extraction fails, deliberately leave the write
+                // state untouched (still unverified) so the existing corrective-nudge
+                // / fail-closed mechanism below applies to due-date writes exactly as
+                // it already does to identity — no fabricated exact due confirmation
+                // is ever produced from an unconfirmable read.
+                const verifiedDue = extractVerifiedDueFromTrelloReadContent(event.content);
+                const verifiedFacts = verifiedDue !== null ? computeKyivDueFacts(verifiedDue) : null;
+                if (verifiedDue !== null && verifiedFacts !== null) {
+                  dueOutcomeForTurn = { intendedDue: pendingWriteDue, verifiedFacts };
                   unverifiedTrelloWrite = false;
                   pendingWriteTool = null;
                   pendingWriteObjectId = null;
+                  pendingWriteDue = null;
                 }
-              } else {
-                // No identity field known for this write tool type: fall back to the
-                // looser "any successful Trello read clears it" behavior.
-                unverifiedTrelloWrite = false;
-                pendingWriteTool = null;
               }
             }
           }
@@ -503,6 +724,8 @@ export async function connectToDjonik(
     unverifiedTrelloWrite = false;
     pendingWriteTool = null;
     pendingWriteObjectId = null;
+    pendingWriteDue = null;
+    dueOutcomeForTurn = null;
     mcpToolCallsById.clear();
     turnTelemetry = createTurnTelemetryCollector(turnSource, session.id, previousSessionUsage);
     if (image) {
@@ -535,6 +758,15 @@ export async function connectToDjonik(
           "Djonik mutated Trello but did not verify the write with an independent read in this turn.",
         );
       }
+
+      // Issue #23: prompt/Skill guidance alone was tried twice and failed twice on the
+      // same reproducible case, including a weekday-only contradiction check that a
+      // wrong-date-but-right-weekday reply would slip past. For a verified due-date
+      // write, the wrapper now owns the entire final due-date confirmation
+      // deterministically instead of trusting or patching the model's wording.
+      const dueTrace = describeDueOutcomeForTrace(dueOutcomeForTurn);
+      if (dueTrace) onTrace?.({ type: "due_date_reply_finalized", ...dueTrace });
+      reply = finalizeDueDateReply(reply, dueOutcomeForTurn);
 
       return reply;
     } finally {

@@ -1,7 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type Anthropic from "@anthropic-ai/sdk";
-import { connectToDjonik, createTurnTelemetryCollector } from "./djonikClient.js";
+import {
+  connectToDjonik,
+  createTurnTelemetryCollector,
+  computeKyivDueFacts,
+  extractVerifiedDueFromTrelloReadContent,
+  buildVerifiedDueConfirmation,
+  finalizeDueDateReply,
+} from "./djonikClient.js";
 
 /**
  * Minimal fake of the Anthropic client surface `connectToDjonik` touches.
@@ -85,8 +92,19 @@ function mcpToolUse(
   return { type: "agent.mcp_tool_use", id, name, mcp_server_name, input };
 }
 
-function mcpToolResult(mcp_tool_use_id: string, is_error = false): unknown {
-  return { type: "agent.mcp_tool_result", id: `${mcp_tool_use_id}_result`, mcp_tool_use_id, is_error };
+function mcpToolResult(
+  mcp_tool_use_id: string,
+  is_error = false,
+  content?: Array<{ type: string; text?: string }>,
+): unknown {
+  return { type: "agent.mcp_tool_result", id: `${mcp_tool_use_id}_result`, mcp_tool_use_id, is_error, content };
+}
+
+/** A `trelloReadCard` result whose content is the tool's JSON payload, as the real
+ *  Trello MCP server returns it — used to exercise the Issue #23 deterministic
+ *  due-date/weekday backstop against a realistic same-card read result. */
+function trelloCardReadContent(due: string): Array<{ type: string; text: string }> {
+  return [{ type: "text", text: JSON.stringify({ id: "card_A", name: "Test card", due }) }];
 }
 
 test("turn telemetry emits content-free explicit-source usage delta with deterministic time", () => {
@@ -510,5 +528,257 @@ test("write card A with no read, then read card A after the corrective nudge, ve
 
   assert.equal(reply, "Перевірив card A: усе гаразд.");
   assert.equal(sendCalls.length, 2, "exactly one corrective nudge should have been sent");
+  session.close();
+});
+
+// --- Issue #23: post-write due-date wording must match the verified Trello field. ---
+// Prompt/Skill-level guidance was tried twice and failed twice on the same reproducible
+// case (correct Kyiv-local date, wrong weekday carried over from the UTC calendar
+// date), so this deterministic backstop is narrowly scoped to exactly that one fact.
+
+test("computeKyivDueFacts: no calendar-boundary crossing (Saturday stays Saturday)", () => {
+  const facts = computeKyivDueFacts("2026-09-19T19:00:00.000Z");
+  assert.ok(facts);
+  assert.equal(facts!.kyivDate, "2026-09-19");
+  assert.equal(facts!.kyivTime, "22:00");
+  assert.equal(facts!.weekdayEn, "Saturday");
+  assert.equal(facts!.weekdayUk, "субота");
+});
+
+test("computeKyivDueFacts: critical rollover — UTC date is Monday, Kyiv-local date is Tuesday", () => {
+  const facts = computeKyivDueFacts("2026-09-21T21:30:00.000Z");
+  assert.ok(facts);
+  assert.equal(facts!.kyivDate, "2026-09-22", "Kyiv-local calendar date must roll over past midnight UTC+3");
+  assert.equal(facts!.kyivTime, "00:30");
+  assert.equal(facts!.weekdayEn, "Tuesday", "weekday must come from the Kyiv-local date (22 Sep), never the UTC date (21 Sep = Monday)");
+  assert.notEqual(facts!.weekdayEn, "Monday");
+  assert.equal(facts!.weekdayUk, "вівторок");
+});
+
+test("computeKyivDueFacts: UTC calendar date and Kyiv-local calendar date genuinely differ for this timestamp", () => {
+  const facts = computeKyivDueFacts("2026-09-21T21:30:00.000Z")!;
+  const utcDate = "2026-09-21T21:30:00.000Z".slice(0, 10);
+  assert.notEqual(facts.kyivDate, utcDate, "this test case only proves anything if the two dates differ");
+});
+
+test("computeKyivDueFacts returns null for an unparseable timestamp", () => {
+  assert.equal(computeKyivDueFacts("not-a-date"), null);
+});
+
+test("extractVerifiedDueFromTrelloReadContent finds a top-level due field in the read result's JSON", () => {
+  const content = [{ type: "text", text: JSON.stringify({ id: "card_A", due: "2026-09-21T21:30:00.000Z" }) }];
+  assert.equal(extractVerifiedDueFromTrelloReadContent(content), "2026-09-21T21:30:00.000Z");
+});
+
+test("extractVerifiedDueFromTrelloReadContent finds a due field nested one level under a wrapper key", () => {
+  const content = [{ type: "text", text: JSON.stringify({ card: { id: "card_A", due: "2026-09-19T19:00:00.000Z" } }) }];
+  assert.equal(extractVerifiedDueFromTrelloReadContent(content), "2026-09-19T19:00:00.000Z");
+});
+
+test("extractVerifiedDueFromTrelloReadContent returns null when there is no due-shaped field", () => {
+  const content = [{ type: "text", text: JSON.stringify({ id: "card_A", name: "No due date" }) }];
+  assert.equal(extractVerifiedDueFromTrelloReadContent(content), null);
+});
+
+test("extractVerifiedDueFromTrelloReadContent returns null for non-JSON text and undefined content", () => {
+  assert.equal(extractVerifiedDueFromTrelloReadContent([{ type: "text", text: "not json at all" }]), null);
+  assert.equal(extractVerifiedDueFromTrelloReadContent(undefined), null);
+});
+
+// A weekday-only contradiction check would miss a wrong-date-but-right-weekday
+// reply (e.g. "Вівторок, 23 вересня 2026" when verified is 22 September). So for
+// a verified due-date write, the wrapper now deterministically OWNS the entire
+// final due-date confirmation instead of trying to detect/patch specific wrong
+// words in the model's prose — see `buildVerifiedDueConfirmation`/`finalizeDueDateReply`.
+
+test("buildVerifiedDueConfirmation: verified equals intended — normal success wording", () => {
+  const facts = computeKyivDueFacts("2026-09-21T21:30:00.000Z")!;
+  const text = buildVerifiedDueConfirmation({ intendedDue: "2026-09-21T21:30:00.000Z", verifiedFacts: facts });
+  assert.equal(text, "Готово. Trello підтвердив дедлайн: вівторок, 22 вересня 2026, 00:30 за Києвом.");
+});
+
+test("buildVerifiedDueConfirmation: intended differs from verified — mismatch is surfaced explicitly", () => {
+  const facts = computeKyivDueFacts("2026-09-21T21:30:00.000Z")!;
+  const text = buildVerifiedDueConfirmation({ intendedDue: "2026-09-22T00:00:00.000Z", verifiedFacts: facts });
+  assert.equal(
+    text,
+    "Картку оновлено, але Trello підтвердив дедлайн: вівторок, 22 вересня 2026, 00:30 за Києвом. Це відрізняється від значення, яке було відправлено.",
+  );
+});
+
+test("buildVerifiedDueConfirmation: intended and verified are the same instant in different string formats", () => {
+  const facts = computeKyivDueFacts("2026-09-21T21:30:00.000Z")!;
+  // "Z" vs ".000Z" — same instant, different literal string.
+  const text = buildVerifiedDueConfirmation({ intendedDue: "2026-09-21T21:30:00Z", verifiedFacts: facts });
+  assert.match(text, /^Готово\./, "same instant should not be treated as a mismatch merely because the string differs");
+});
+
+test("finalizeDueDateReply returns the reply unchanged when no due-date write was verified this turn", () => {
+  assert.equal(finalizeDueDateReply("Готово.", null), "Готово.");
+});
+
+for (const [label, modelReply] of [
+  ["wrong weekday, correct date", "Понеділок, 22 вересня 2026, 00:30"],
+  ["correct weekday, wrong calendar date", "Вівторок, 23 вересня 2026, 00:30"],
+  ["correct weekday and date, wrong time", "Вівторок, 22 вересня 2026, 03:15"],
+  ["completely wrong wording", "Дедлайн: п'ятниця, 1 січня 2027"],
+] as const) {
+  test(`finalizeDueDateReply: ${label} — deterministic output is correct regardless`, () => {
+    const facts = computeKyivDueFacts("2026-09-21T21:30:00.000Z")!;
+    const result = finalizeDueDateReply(modelReply, { intendedDue: "2026-09-21T21:30:00.000Z", verifiedFacts: facts });
+    assert.equal(result, "Готово. Trello підтвердив дедлайн: вівторок, 22 вересня 2026, 00:30 за Києвом.");
+    assert.doesNotMatch(result, /понеділок|23 вересня|03:15|1 січня 2027/i, "no trace of the wrong model wording survives");
+  });
+}
+
+test("end-to-end: critical rollover — final reply is the deterministic confirmation, not the model's wrong weekday", async () => {
+  const { client } = createFakeClient([
+    mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A", due: "2026-09-21T21:30:00.000Z" }),
+    mcpToolResult("call_1"),
+    mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
+    mcpToolResult("call_2", false, trelloCardReadContent("2026-09-21T21:30:00.000Z")),
+    { type: "agent.message", content: [{ type: "text", text: "Понеділок, 22 вересня 2026, 00:30" }] },
+    IDLE,
+  ]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const reply = await session.send("Онови дедлайн картки A на 22 вересня 00:30 за Києвом");
+
+  assert.equal(reply, "Готово. Trello підтвердив дедлайн: вівторок, 22 вересня 2026, 00:30 за Києвом.");
+  assert.doesNotMatch(reply, /понеділок/i, "the model's wrong weekday must not reach the user");
+  session.close();
+});
+
+test("end-to-end: correct weekday but wrong calendar date in the model's reply is still overridden", async () => {
+  const { client } = createFakeClient([
+    mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A", due: "2026-09-21T21:30:00.000Z" }),
+    mcpToolResult("call_1"),
+    mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
+    mcpToolResult("call_2", false, trelloCardReadContent("2026-09-21T21:30:00.000Z")),
+    { type: "agent.message", content: [{ type: "text", text: "Вівторок, 23 вересня 2026, 00:30" }] },
+    IDLE,
+  ]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const reply = await session.send("Онови дедлайн картки A");
+
+  assert.equal(reply, "Готово. Trello підтвердив дедлайн: вівторок, 22 вересня 2026, 00:30 за Києвом.");
+  assert.doesNotMatch(reply, /23 вересня/, "a right-weekday-wrong-date reply must not slip through a weekday-only check");
+  session.close();
+});
+
+test("end-to-end: verified due equals intended due — normal success wording, no mismatch note", async () => {
+  const { client } = createFakeClient([
+    mcpToolUse("call_1", "trelloWriteCard", { action: "create", cardId: "card_A", due: "2026-09-19T19:00:00.000Z" }),
+    mcpToolResult("call_1"),
+    mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
+    mcpToolResult("call_2", false, trelloCardReadContent("2026-09-19T19:00:00.000Z")),
+    { type: "agent.message", content: [{ type: "text", text: "Субота, 19 вересня 2026, 22:00" }] },
+    IDLE,
+  ]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const reply = await session.send("Створи картку A з дедлайном 19 вересня 22:00 за Києвом");
+
+  assert.equal(reply, "Готово. Trello підтвердив дедлайн: субота, 19 вересня 2026, 22:00 за Києвом.");
+  assert.doesNotMatch(reply, /відрізняється/, "no mismatch wording when verified equals intended");
+  session.close();
+});
+
+test("end-to-end: intended differs from verified — deterministic reply reports the verified value and the mismatch", async () => {
+  const { client } = createFakeClient([
+    mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A", due: "2026-09-22T00:00:00.000Z" }),
+    mcpToolResult("call_1"),
+    mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
+    mcpToolResult("call_2", false, trelloCardReadContent("2026-09-21T21:30:00.000Z")),
+    { type: "agent.message", content: [{ type: "text", text: "Trello підтвердив: понеділок, 22 вересня 2026, 00:30." }] },
+    IDLE,
+  ]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const reply = await session.send("Онови дедлайн картки A");
+
+  assert.equal(
+    reply,
+    "Картку оновлено, але Trello підтвердив дедлайн: вівторок, 22 вересня 2026, 00:30 за Києвом. Це відрізняється від значення, яке було відправлено.",
+  );
+  session.close();
+});
+
+test("end-to-end: verified due missing/unparseable from the read result — fails closed, no fabricated confirmation", async () => {
+  const { client, sendCalls } = createFakeClient([
+    // First turn: write with a due, but the read-back result carries no due field at all.
+    mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A", due: "2026-09-21T21:30:00.000Z" }),
+    mcpToolResult("call_1"),
+    mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
+    mcpToolResult("call_2", false, [{ type: "text", text: JSON.stringify({ id: "card_A", name: "Test card" }) }]),
+    { type: "agent.message", content: [{ type: "text", text: "Готово. Дедлайн оновлено на вівторок, 22 вересня." }] },
+    IDLE,
+    // Corrective turn: still no parseable due in the read-back.
+    mcpToolUse("call_3", "trelloReadCard", { cardIdOrUrl: "card_A" }),
+    mcpToolResult("call_3", false, [{ type: "text", text: JSON.stringify({ id: "card_A", name: "Test card" }) }]),
+    { type: "agent.message", content: [{ type: "text", text: "Готово (все ще без підтвердженого due)." }] },
+    IDLE,
+  ]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await assert.rejects(
+    () => session.send("Онови дедлайн картки A"),
+    /did not verify the write/,
+    "an unconfirmable due-date write must fail the whole turn rather than let any exact due claim through",
+  );
+  assert.equal(sendCalls.length, 2, "one corrective nudge should have been attempted before failing closed");
+  session.close();
+});
+
+test("normal Trello writes without a due-date change are unaffected by the backstop", async () => {
+  const { client, sendCalls } = createFakeClient([
+    mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A", name: "Renamed" }),
+    mcpToolResult("call_1"),
+    mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
+    mcpToolResult("call_2", false, trelloCardReadContent("2026-09-21T21:30:00.000Z")),
+    { type: "agent.message", content: [{ type: "text", text: "Назву картки A оновлено." }] },
+    IDLE,
+  ]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const reply = await session.send("Перейменуй картку A");
+
+  assert.equal(reply, "Назву картки A оновлено.", "no due-date confirmation replaces a non-due-date reply");
+  assert.equal(sendCalls.length, 1);
+  session.close();
+});
+
+test("existing same-card identity verification is unaffected by the due-date backstop", async () => {
+  const { client, sendCalls } = createFakeClient([
+    mcpToolUse("call_1", "trelloWriteCard", { cardId: "card_A", due: "2026-09-21T21:30:00.000Z" }),
+    mcpToolResult("call_1"),
+    mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_B" }),
+    mcpToolResult("call_2", false, trelloCardReadContent("2026-09-21T21:30:00.000Z")),
+    { type: "agent.message", content: [{ type: "text", text: "Готово (помилково)." }] },
+    IDLE,
+    mcpToolUse("call_3", "trelloReadCard", { cardIdOrUrl: "card_B" }),
+    mcpToolResult("call_3", false, trelloCardReadContent("2026-09-21T21:30:00.000Z")),
+    { type: "agent.message", content: [{ type: "text", text: "Готово (все ще помилково)." }] },
+    IDLE,
+  ]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await assert.rejects(
+    () => session.send("Онови картку A"),
+    /did not verify the write/,
+    "a read of the wrong card must still fail identity verification, due-date content notwithstanding",
+  );
+  assert.equal(sendCalls.length, 2);
+  session.close();
+});
+
+test("text-only and image turns with no Trello activity are unaffected by the due-date backstop", async () => {
+  const { client } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const reply = await session.send("Привіт!");
+
+  assert.equal(reply, "Готово.");
   session.close();
 });
