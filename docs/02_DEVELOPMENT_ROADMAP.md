@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing is blocked by the external Trello MCP tool surface. The Managed Agent token/cost audit is complete: Google Calendar remains attached but is disabled until Wave E, five unsupported Trello write tools are already disabled, opt-in per-turn telemetry and a planning regression matrix are live, and the three tested optional Trello reads remain enabled because the final quality gate did not establish safe behavioral equivalence. Conditional same-turn fresh-read enforcement for short planning follow-ups is a Managed Agents platform limitation under the accepted architecture; daily/weekly planning Skills continue to request fresh evidence, but that guidance is best-effort rather than a hard guarantee for this edge case. Source-correlated Telegram usage telemetry (#19) is accepted and validated against an independent Console export. Real Telegram session-growth measurement (#20) found a modest ~19% increase in input composition across comparable early vs late turns in one 7-turn session, but no material list-cost shift; rollover/compaction is therefore not justified by current evidence. The development/validation spend guardrail (#21) is now canonical in `docs/04_MANAGED_AGENT_TOKEN_COST_AUDIT.md` §27. The next canonical item is Project Context Bootstrap (#17).
+Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing is blocked by the external Trello MCP tool surface. The Managed Agent token/cost audit is complete: Google Calendar remains attached but is disabled until Wave E, five unsupported Trello write tools are already disabled, opt-in per-turn telemetry and a planning regression matrix are live, and the three tested optional Trello reads remain enabled because the final quality gate did not establish safe behavioral equivalence. Conditional same-turn fresh-read enforcement for short planning follow-ups is a Managed Agents platform limitation under the accepted architecture; daily/weekly planning Skills continue to request fresh evidence, but that guidance is best-effort rather than a hard guarantee for this edge case. Source-correlated Telegram usage telemetry (#19) is accepted and validated against an independent Console export. Real Telegram session-growth measurement (#20) found a modest ~19% increase in input composition across comparable early vs late turns in one 7-turn session, but no material list-cost shift; rollover/compaction is therefore not justified by current evidence. The development/validation spend guardrail (#21) is now canonical in `docs/04_MANAGED_AGENT_TOKEN_COST_AUDIT.md` §27. Project Context Bootstrap (#17) is accepted: canonical project briefs now exist in `Djonik Memory`; durable recall was validated across new Managed Sessions; durable Memory and fresh Trello were successfully combined in one answer; cross-project isolation passed; a correction superseding stale Memory passed; validation used 3 paid Sessions and $0.27 total, within the declared $0.50 guardrail. The next canonical item is Wave B1: Telegram screenshot/image intake into the Djonik Managed Agent (#22).
 
 ## Execution order
 
@@ -201,9 +201,21 @@ Verified outcome:
 - passive natural-usage telemetry such as #19/#20 is excluded unless it deliberately generates extra Managed Agent traffic;
 - no runtime or Agent configuration changed.
 
-### NOW — Project Context Bootstrap: canonical project briefs in Djonik Memory (#17)
+### DONE — Project Context Bootstrap: canonical project briefs in Djonik Memory (#17)
 
-Bootstrap concise canonical project briefs into `Djonik Memory` before broader capability expansion. Stable project/client context belongs in Memory; live deadlines/status/current task state continue to come from fresh Trello.
+Accepted 2026-09-17.
+
+Verified outcome:
+- canonical project briefs now exist in `Djonik Memory`;
+- durable recall was validated across new Managed Sessions;
+- durable Memory and fresh Trello were successfully combined in one answer;
+- cross-project isolation passed;
+- a correction superseding stale Memory passed;
+- validation used 3 paid Sessions and $0.27 total, within the declared $0.50 guardrail.
+
+### NOW — Wave B1: Telegram screenshot/image intake into Djonik Managed Agent (#22)
+
+Telegram image/screenshot → actual visual input to the existing Managed Agent → interpretation → optional safe verified Trello task creation.
 
 ## Capability waves after reliability/cost closeout
 
