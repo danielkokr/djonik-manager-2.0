@@ -235,6 +235,18 @@ export function formatUserFacingError(error: unknown): string {
   return `⚠️ Джонік не зміг відповісти на це повідомлення: ${message}`;
 }
 
+/**
+ * Bounds a failed *grouped* intake (#25) to a short, secret-free,
+ * user-visible message. Deliberately distinct wording from
+ * `formatUserFacingError`: a grouped-intake failure means the whole related
+ * batch of fragments was discarded (fail-closed, zero Trello mutation), not
+ * just one ordinary single-message turn.
+ */
+export function formatGroupFailureError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return `⚠️ Джонік не зміг обробити цю групу повідомлень: ${message}`;
+}
+
 export interface DjonikSessionManager {
   /** Resolves the single in-process Djonik session, connecting it on first use. */
   getSession(): Promise<DjonikSessionHandle>;

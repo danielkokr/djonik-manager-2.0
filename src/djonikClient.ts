@@ -38,11 +38,21 @@ export interface DjonikDocumentInput {
 export interface DjonikSessionHandle {
   sessionId: string;
   /**
-   * Sends one visible user turn. `text` may be empty when `image` or
+   * Sends one visible user turn. `text` may be empty when `image` and/or
    * `document` is present (e.g. a Telegram file with no caption); at least
-   * one of the three must be non-empty.
+   * one of the three must be non-empty. `image`/`document` each accept
+   * either a single attachment (the #22/#24 shape, unchanged) or an array —
+   * the bounded generalization #25 needed to send a Telegram album or a
+   * multi-attachment grouped intake as one native `user.message` event
+   * (multiple `image`/`document` content blocks are an already-accepted
+   * provider shape; this is not a new transport). Order within each array
+   * is preserved as the block order.
    */
-  send(text: string, image?: DjonikImageInput, document?: DjonikDocumentInput): Promise<string>;
+  send(
+    text: string,
+    image?: DjonikImageInput | DjonikImageInput[],
+    document?: DjonikDocumentInput | DjonikDocumentInput[],
+  ): Promise<string>;
   /** Aborts the session's open event stream so the process can exit cleanly. */
   close(): void;
 }
@@ -767,34 +777,45 @@ export async function connectToDjonik(
    * that boundary lives in the Managed Agent's own configuration, not in this
    * transport code.
    */
-  async function send(text: string, image?: DjonikImageInput, document?: DjonikDocumentInput): Promise<string> {
+  async function send(
+    text: string,
+    image?: DjonikImageInput | DjonikImageInput[],
+    document?: DjonikDocumentInput | DjonikDocumentInput[],
+  ): Promise<string> {
     unverifiedTrelloWrite = false;
     pendingWriteTool = null;
     pendingWriteObjectId = null;
     pendingWriteDue = null;
     dueOutcomeForTurn = null;
     mcpToolCallsById.clear();
+    const images = image === undefined ? [] : Array.isArray(image) ? image : [image];
+    const documents = document === undefined ? [] : Array.isArray(document) ? document : [document];
     turnTelemetry = createTurnTelemetryCollector(turnSource, session.id, previousSessionUsage);
-    if (image) {
-      turnTelemetry.recordInputImage({ mimeType: image.mediaType, byteSize: image.byteSize });
+    // A grouped multi-attachment turn (#25) still records only the first
+    // image/document here — this per-turn telemetry shape predates grouping
+    // and existing consumers/tests depend on it. Full per-fragment counts
+    // for a grouped turn are recorded separately by the adapter's
+    // content-free grouping telemetry (`buildGroupingTelemetry`).
+    if (images.length > 0) {
+      turnTelemetry.recordInputImage({ mimeType: images[0].mediaType, byteSize: images[0].byteSize });
     }
-    if (document) {
+    if (documents.length > 0) {
       turnTelemetry.recordInputDocument({
-        mimeType: document.mediaType,
-        byteSize: document.byteSize,
-        hasFilename: Boolean(document.filename),
+        mimeType: documents[0].mediaType,
+        byteSize: documents[0].byteSize,
+        hasFilename: Boolean(documents[0].filename),
       });
     }
 
     const content: SendableContentBlock[] = [];
-    if (image) {
-      content.push({ type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } });
+    for (const img of images) {
+      content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
     }
-    if (document) {
+    for (const doc of documents) {
       content.push({
         type: "document",
-        source: { type: "base64", media_type: document.mediaType, data: document.data },
-        ...(document.filename ? { title: document.filename } : {}),
+        source: { type: "base64", media_type: doc.mediaType, data: doc.data },
+        ...(doc.filename ? { title: doc.filename } : {}),
       });
     }
     if (text) {

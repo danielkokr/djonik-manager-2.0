@@ -5,6 +5,7 @@ import {
   downloadTelegramDocument,
   downloadTelegramImage,
   exceedsDocumentSizeEstimate,
+  formatGroupFailureError,
   formatUserFacingError,
   handleSessionError,
   isAllowedUser,
@@ -38,6 +39,12 @@ test("formatUserFacingError includes the underlying error message", () => {
 
 test("formatUserFacingError handles non-Error throws", () => {
   assert.match(formatUserFacingError("boom"), /boom/);
+});
+
+test("formatGroupFailureError includes the underlying error message and is worded distinctly from a single-turn failure (#25)", () => {
+  const message = formatGroupFailureError(new Error("file too large"));
+  assert.match(message, /file too large/);
+  assert.notEqual(message, formatUserFacingError(new Error("file too large")));
 });
 
 test("createSessionManager connects once and reuses the session across calls", async () => {

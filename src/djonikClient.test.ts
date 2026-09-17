@@ -613,6 +613,87 @@ test("turn telemetry records fileNamePresent as false for a document with no fil
   session.close();
 });
 
+// --- #25: bounded generalization to multiple images/documents per turn (grouped intake). ---
+
+test("send accepts an array of images and constructs one content block per image, in array order", async () => {
+  const { client, sendCalls } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await session.send("альбом", [
+    { data: "QQ==", mediaType: "image/jpeg", byteSize: 1 },
+    { data: "Qg==", mediaType: "image/jpeg", byteSize: 2 },
+  ]);
+
+  assert.deepEqual(sendCalls[0], {
+    events: [
+      {
+        type: "user.message",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "QQ==" } },
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "Qg==" } },
+          { type: "text", text: "альбом" },
+        ],
+      },
+    ],
+  });
+  session.close();
+});
+
+test("send accepts a mixed grouped intake: multiple images and a document together", async () => {
+  const { client, sendCalls } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await session.send(
+    "текст групи",
+    [{ data: "QQ==", mediaType: "image/jpeg", byteSize: 1 }],
+    [{ data: "cGRm", mediaType: "application/pdf", byteSize: 3, filename: "brief.pdf" }],
+  );
+
+  const sent = sendCalls[0] as { events: Array<{ content: Array<{ type: string }> }> };
+  assert.deepEqual(
+    sent.events[0].content.map((block) => block.type),
+    ["image", "document", "text"],
+  );
+  session.close();
+});
+
+test("a single image/document object still works exactly as before the array generalization (regression)", async () => {
+  const { client, sendCalls } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await session.send("одне фото", { data: "QQ==", mediaType: "image/jpeg", byteSize: 1 });
+
+  assert.deepEqual(sendCalls[0], {
+    events: [
+      {
+        type: "user.message",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "QQ==" } },
+          { type: "text", text: "одне фото" },
+        ],
+      },
+    ],
+  });
+  session.close();
+});
+
+test("turn telemetry for a multi-image turn records the first image's mime/size (documented behavior)", async () => {
+  const { client } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const telemetry: unknown[] = [];
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x", undefined, (record) => telemetry.push(record));
+
+  await session.send("альбом", [
+    { data: "QQ==", mediaType: "image/jpeg", byteSize: 111 },
+    { data: "Qg==", mediaType: "image/png", byteSize: 222 },
+  ]);
+
+  const [turn] = telemetry as Array<{ hasImage: boolean; imageMimeType: string | null; imageByteSize: number | null }>;
+  assert.equal(turn.hasImage, true);
+  assert.equal(turn.imageMimeType, "image/jpeg");
+  assert.equal(turn.imageByteSize, 111);
+  session.close();
+});
+
 test("a document turn does not disturb the #23 due-date deterministic backstop", async () => {
   // Regression: document input must not interfere with the unrelated Issue #23
   // write/verify + due-date finalization path when both occur in the same session.
