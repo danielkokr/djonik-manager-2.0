@@ -3,6 +3,8 @@
 > **Scope:** Issue #16. Audit-first evidence only; no runtime optimization or product-semantic change was made.
 >
 > **Audit date:** 2026-09-16. **Evidence labels:** **Measured** means Claude Console/Analytics or repository evidence. **Inference** is constrained by that evidence. **Not measured** is deliberately not estimated.
+>
+> **Canonical spend policy (Issue #21):** any future paid Managed Agent audit or A/B validation follow-up in this repository must declare its budget before starting per **§27, Development / validation spend guardrail**.
 
 ## 1. Executive summary
 
@@ -718,3 +720,77 @@ First-pass direction remained lower in the variant in every scenario: A 9.84%, B
 **Quality conclusion:** the final gate has material regressions. **Production recommendation: do not set these three reads to `enabled:false`. Stop further cost optimization of `trelloReadChecklist`, `trelloReadInbox`, and `trelloReadPlanner` under Issue #16.** The first follow-up before any new tool-surface proposal must investigate the shared fresh-read planning gap without altering the accepted production surface. Do not start a Memory optimization experiment.
 
 Production Agent v12 remained unchanged throughout this gate; no Agent update, Skill change, Memory change, MCP change, Calendar action, or Trello mutation occurred.
+
+## 27. Development / validation spend guardrail (Issue #21)
+
+> **Process/documentation only.** This section adds no runtime enforcement code, billing API, database, dashboard, scheduled usage polling, or Agent/Skill/Memory/MCP/session-lifecycle change. It generalizes the ad hoc ceilings already used informally in §16 ($0.18 bounded-test spend), §21 ($0.17), §23 ($0.12), §24 ($0.25), and §26 (an explicit "$0.80 stop ceiling," reached at $0.40) into one reusable rule for future work.
+
+### Scope
+
+This guardrail applies to:
+
+- Managed Agent token/cost audits (work of the kind done under #16);
+- paid Console/CLI A/B experiments comparing Agent/session configurations;
+- any other bounded validation run that intentionally generates additional Managed Agent traffic beyond real product usage.
+
+It does **not** need to apply mechanically to:
+
+- ordinary real Telegram production usage;
+- passive telemetry collection from natural usage (e.g. the `#19` per-turn telemetry, or the `#20` session-growth observation, which only reads telemetry already produced by real traffic);
+- local unit tests, typecheck, or other checks that make no Managed Agent API call;
+- static code inspection;
+- documentation-only work;
+- already-occurring user traffic that is merely being observed rather than deliberately generated for the validation.
+
+### Required declaration before execution
+
+Before running any paid Managed Agent audit or A/B validation follow-up in scope above, the bounded issue or its working plan must declare, in writing, before the first Session is created or the first prompt is sent:
+
+1. **Maximum dollar spend** for the follow-up (Console public list cost).
+2. **Maximum number of paid Managed Sessions** the follow-up will create.
+3. **What evidence is expected** from those sessions — the specific measurement or comparison the spend is meant to produce, stated concretely enough that "we already have that evidence" or "this run added nothing new" can be judged afterward.
+4. **Explicit stop condition** — which of the stop rules below (or a stricter one) ends the run.
+5. **Whether further spend beyond the declared ceiling requires Product Owner approval** — for any follow-up using the default ceiling below, the answer is always yes.
+
+### Default guardrail
+
+Unless the canonical evidence already collected for the specific follow-up strongly suggests a different value, and that different value is declared upfront per the previous section, use:
+
+- **Default bounded follow-up spend ceiling: $0.50** (Console public list cost).
+- **Default maximum paid Managed Sessions: 5.**
+
+These are defaults for an ordinary bounded follow-up, not absolute universal limits. A bounded issue may declare a different ceiling or session count when the declaration above justifies it (for example, a multi-scenario behavioral-equivalence gate like §26 needed a higher ceiling than a single-prompt A/B like §21) — but the different ceiling must be declared before starting, not discovered by exceeding the default.
+
+### Stop rules
+
+Validation work in scope must stop when **any** of the following happens, whichever comes first:
+
+1. the declared dollar ceiling is reached;
+2. the declared paid-session-count ceiling is reached;
+3. the required evidence declared before starting is already sufficient;
+4. repeated runs are no longer producing materially new evidence (diminishing returns — e.g. two consecutive scenario pairs would tell the same story as the ones already captured);
+5. an unexpected high-cost session materially consumes the remaining declared budget (for example, one session alone burning most of a $0.50 ceiling), even if the raw dollar ceiling has not technically been crossed yet.
+
+If the result is still inconclusive at the point a stop rule triggers, the correct recorded outcome is exactly:
+
+`inconclusive — additional spend requires Product Owner approval`
+
+Do not silently continue past a triggered stop rule, and do not quietly round up the declared ceiling to accommodate "one more" session.
+
+### Cost accounting in audit reports
+
+Where practical, future audit/validation reports should separate production/user traffic from deliberate validation/test traffic, using the source-correlated telemetry and reconciliation method introduced in `#19` (`src/reconcileTelemetry.ts`, `usageScope: "turn_delta"`, `source` labelling). Deliberate validation spend must be reported as part of the audit's own evidence (as every bounded follow-up in this document already does per-session), not folded silently into a general Console Usage total where it cannot be distinguished from real Telegram traffic.
+
+### Rationale for the $0.50 / 5-session default
+
+**Measured basis.** Every individual bounded follow-up actually run and accepted in this audit (§16, §21, §23, §24, §26) spent between $0.12 and $0.40 in Console public list cost, using between two and eight paid Sessions. The one follow-up that named an explicit ceiling in advance (§26) used **$0.80** and stayed within it at $0.40 actually spent, with two Sessions and eight total prompts.
+
+**Why $0.50, not $0.80.** $0.80 was this audit's own ad hoc ceiling for its single largest, most evidence-dense follow-up (an eight-prompt, two-Session behavioral-equivalence gate across four planning scenarios) — the highest-cost bounded run actually observed here, not a typical one. Generalizing it as the default would set the routine ceiling at the historical maximum rather than the historical norm. $0.50 sits above every other individual follow-up's actual spend ($0.12–$0.40) while still leaving headroom below the one outlier case, so an ordinary single-comparison or few-scenario A/B fits comfortably inside it without the default being set so low that legitimate two/three-session comparisons routinely need an override.
+
+**Why 5 sessions, not 2 or 8.** Most follow-ups here used exactly two Sessions (one control, one variant). The largest one (§26) used two Sessions but eight total prompts across four scenarios. Five paid Sessions covers a control/variant pair plus meaningful headroom for a slightly larger comparison (e.g. a three-way or re-run-after-a-fix case) without defaulting to a number large enough to make repeated, low-value re-runs cheap to justify. A follow-up genuinely needing more — like a multi-scenario behavioral gate — declares that need and a higher ceiling upfront, as §26 effectively did.
+
+**Not a hard-coded restatement of one experiment.** The default is derived from the *range* of actual accepted spend across five independent follow-ups, not copied from any single one, and it remains explicitly overridable when a bounded issue declares a different, justified ceiling before starting.
+
+### How this interacts with #19/#20
+
+`#19`'s source-correlated telemetry and `#20`'s session-growth analysis both read telemetry that real Telegram production traffic already produced; neither deliberately generates new Managed Agent traffic to obtain evidence, so neither is itself subject to a spend ceiling under this guardrail's scope rule above. If a future `#19`/`#20`-style measurement ever needs to *generate* additional Managed Agent traffic beyond what real usage already produced (for example, deliberately running extra Console turns to fill a thin sample), that generation step becomes an in-scope bounded validation follow-up and must declare its own budget/session count under this guardrail before it starts.
