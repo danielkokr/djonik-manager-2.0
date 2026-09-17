@@ -6,6 +6,13 @@ export interface TurnUsageRecord {
   recordedAt: string;
   source: "telegram" | "diagnostic" | "unknown";
   usageScope: "turn_delta";
+  sessionId: string;
+  modelIterations: number;
+  toolCalls: number;
+  toolNames: string[];
+  memoryRead: boolean;
+  skillRead: boolean;
+  verificationNudges: number;
   usage: {
     inputTokens: number;
     cacheCreationInputTokens: number;
@@ -14,6 +21,38 @@ export interface TurnUsageRecord {
     listCostAmount: string;
     listCostCurrency: string;
   } | null;
+}
+
+/** One real turn's position within its own session (#20): content-free, no message/Memory/MCP-result text. */
+export interface SessionTurnRecord {
+  turnIndex: number;
+  recordedAt: string;
+  sessionId: string;
+  modelIterations: number;
+  toolCalls: number;
+  toolNames: string[];
+  memoryRead: boolean;
+  skillRead: boolean;
+  verificationNudges: number;
+  uncachedInputTokens: number | null;
+  cacheCreationInputTokens: number | null;
+  cacheReadInputTokens: number | null;
+  totalInputCompositionTokens: number | null;
+  outputTokens: number | null;
+  listCostAmount: string | null;
+  listCostCurrency: string | null;
+}
+
+export interface SessionTurnGroup {
+  sessionId: string;
+  turnCount: number;
+  turns: SessionTurnRecord[];
+}
+
+export interface SessionGrowthReport {
+  sessionCount: number;
+  totalTurns: number;
+  sessions: SessionTurnGroup[];
 }
 
 export interface ReconciliationReport {
@@ -41,6 +80,14 @@ function isUtcInstant(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value) && !Number.isNaN(Date.parse(value));
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
 function isCompleteUsage(value: unknown): value is NonNullable<TurnUsageRecord["usage"]> {
   if (!value || typeof value !== "object") return false;
   const usage = value as Record<string, unknown>;
@@ -55,11 +102,25 @@ function asTurnUsageRecord(value: unknown): TurnUsageRecord | null {
   const record = value as Record<string, unknown>;
   if (!isUtcInstant(String(record.recordedAt)) ||
       !["telegram", "diagnostic", "unknown"].includes(String(record.source)) ||
-      record.usageScope !== "turn_delta") return null;
+      record.usageScope !== "turn_delta" ||
+      typeof record.sessionId !== "string" || record.sessionId.length === 0 ||
+      !isNonNegativeInteger(record.modelIterations) ||
+      !isNonNegativeInteger(record.toolCalls) ||
+      !isStringArray(record.toolNames) ||
+      typeof record.memoryRead !== "boolean" ||
+      typeof record.skillRead !== "boolean" ||
+      !isNonNegativeInteger(record.verificationNudges)) return null;
   return {
     recordedAt: record.recordedAt as string,
     source: record.source as TurnUsageRecord["source"],
     usageScope: "turn_delta",
+    sessionId: record.sessionId,
+    modelIterations: record.modelIterations,
+    toolCalls: record.toolCalls,
+    toolNames: [...(record.toolNames as string[])],
+    memoryRead: record.memoryRead,
+    skillRead: record.skillRead,
+    verificationNudges: record.verificationNudges,
     usage: isCompleteUsage(record.usage) ? record.usage : null,
   };
 }
@@ -179,8 +240,63 @@ export function reconcileTelemetry(
   return report;
 }
 
+/**
+ * Groups real Telegram turn_delta records by sessionId and assigns a sequential
+ * turnIndex per session ordered by recordedAt (#20), so early vs later turns in
+ * the SAME real Telegram session can be compared. Local, stateless, content-free:
+ * it derives no trend and changes no session lifecycle behavior.
+ */
+export function groupTelegramTurnsBySession(records: TurnUsageRecord[]): SessionGrowthReport {
+  const bySession = new Map<string, TurnUsageRecord[]>();
+  for (const record of records) {
+    if (record.source !== "telegram") continue;
+    const group = bySession.get(record.sessionId);
+    if (group) group.push(record);
+    else bySession.set(record.sessionId, [record]);
+  }
+
+  const sessions: SessionTurnGroup[] = [...bySession.entries()]
+    .map(([sessionId, turns]) => {
+      const ordered = [...turns].sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+      return {
+        sessionId,
+        turnCount: ordered.length,
+        turns: ordered.map((record, index): SessionTurnRecord => ({
+          turnIndex: index + 1,
+          recordedAt: record.recordedAt,
+          sessionId: record.sessionId,
+          modelIterations: record.modelIterations,
+          toolCalls: record.toolCalls,
+          toolNames: record.toolNames,
+          memoryRead: record.memoryRead,
+          skillRead: record.skillRead,
+          verificationNudges: record.verificationNudges,
+          uncachedInputTokens: record.usage?.inputTokens ?? null,
+          cacheCreationInputTokens: record.usage?.cacheCreationInputTokens ?? null,
+          cacheReadInputTokens: record.usage?.cacheReadInputTokens ?? null,
+          totalInputCompositionTokens: record.usage
+            ? record.usage.inputTokens + record.usage.cacheCreationInputTokens + record.usage.cacheReadInputTokens
+            : null,
+          outputTokens: record.usage?.outputTokens ?? null,
+          listCostAmount: record.usage?.listCostAmount ?? null,
+          listCostCurrency: record.usage?.listCostCurrency ?? null,
+        })),
+      };
+    })
+    .sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+
+  return {
+    sessionCount: sessions.length,
+    totalTurns: sessions.reduce((sum, session) => sum + session.turnCount, 0),
+    sessions,
+  };
+}
+
 function usage(): never {
-  throw new Error("Usage: npm run telemetry:reconcile -- -- --from <UTC> --to <UTC> [--file <path>] [--console-list-cost <integer>]");
+  throw new Error(
+    "Usage: npm run telemetry:reconcile -- -- --from <UTC> --to <UTC> [--file <path>] [--console-list-cost <integer>]\n" +
+    "   or: npm run telemetry:reconcile -- -- --mode session-growth [--file <path>]",
+  );
 }
 
 function option(args: string[], name: string): string | undefined {
@@ -206,11 +322,26 @@ async function readInput(file: string | undefined): Promise<string> {
 async function main(): Promise<void> {
   // npm's Windows argument forwarding can retain one or more separator tokens.
   const args = process.argv.slice(2).filter((argument) => argument !== "--");
+  const mode = option(args, "--mode") ?? "reconcile";
+  if (mode !== "reconcile" && mode !== "session-growth") usage();
+
+  const input = await readInput(option(args, "--file"));
+  const parsed = parseTelemetryLines(input.split(/\r?\n/));
+
+  if (mode === "session-growth") {
+    const report = groupTelegramTurnsBySession(parsed.records);
+    console.log(JSON.stringify({
+      ...report,
+      ignoredNonTelemetryLines: parsed.ignoredNonTelemetryLines,
+      ignoredMalformedTelemetryLines: parsed.ignoredMalformedTelemetryLines,
+      ignoredNonTurnDeltaRecords: parsed.ignoredNonTurnDeltaRecords,
+    }, null, 2));
+    return;
+  }
+
   const from = option(args, "--from");
   const to = option(args, "--to");
   if (!from || !to) usage();
-  const input = await readInput(option(args, "--file"));
-  const parsed = parseTelemetryLines(input.split(/\r?\n/));
   const report = reconcileTelemetry(parsed.records, from, to, option(args, "--console-list-cost"));
   console.log(JSON.stringify({
     ...report,
