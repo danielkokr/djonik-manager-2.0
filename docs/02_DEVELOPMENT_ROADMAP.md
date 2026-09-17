@@ -8,7 +8,7 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 ## Current state
 
-Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing is blocked by the external Trello MCP tool surface. The Managed Agent token/cost audit is complete: Google Calendar remains attached but is disabled until Wave E, five unsupported Trello write tools are already disabled, opt-in per-turn telemetry and a planning regression matrix are live, and the three tested optional Trello reads remain enabled because the final quality gate did not establish safe behavioral equivalence. Conditional same-turn fresh-read enforcement for short planning follow-ups is a Managed Agents platform limitation under the accepted architecture; daily/weekly planning Skills continue to request fresh evidence, but that guidance is best-effort rather than a hard guarantee for this edge case. Source-correlated Telegram usage telemetry (#19) is accepted and validated against an independent Console export. Real Telegram session-growth measurement (#20) found a modest ~19% increase in input composition across comparable early vs late turns in one 7-turn session, but no material list-cost shift; rollover/compaction is therefore not justified by current evidence. The next canonical cost/reliability item is the development/validation spend guardrail (#21).
+Foundations 1–12 are accepted. `Джонік` is the authoritative Claude Managed Agent; Telegram is the thin channel adapter; `Djonik Memory` provides durable cross-session memory; `task-management`, `daily-planning`, and `weekly-planning` Skills are attached and live; Trello MCP read/write flows work against live data with same-card verify-after-write; daily/weekly planning, project/client context, and accepted plans/commitments have been validated. Due-date clearing is blocked by the external Trello MCP tool surface. The Managed Agent token/cost audit is complete: Google Calendar remains attached but is disabled until Wave E, five unsupported Trello write tools are already disabled, opt-in per-turn telemetry and a planning regression matrix are live, and the three tested optional Trello reads remain enabled because the final quality gate did not establish safe behavioral equivalence. Conditional same-turn fresh-read enforcement for short planning follow-ups is a Managed Agents platform limitation under the accepted architecture; daily/weekly planning Skills continue to request fresh evidence, but that guidance is best-effort rather than a hard guarantee for this edge case. Source-correlated Telegram usage telemetry (#19) is accepted and validated against an independent Console export. Real Telegram session-growth measurement (#20) found a modest ~19% increase in input composition across comparable early vs late turns in one 7-turn session, but no material list-cost shift; rollover/compaction is therefore not justified by current evidence. The development/validation spend guardrail (#21) is now canonical in `docs/04_MANAGED_AGENT_TOKEN_COST_AUDIT.md` §27. The next canonical item is Project Context Bootstrap (#17).
 
 ## Execution order
 
@@ -189,13 +189,19 @@ Verified outcome:
 - no Agent/Skill/Memory/MCP/session-lifecycle behavior changed;
 - typecheck passed, tests passed 46/46, and `git diff --check` was clean.
 
-### NOW — Adopt a development/validation spend guardrail for future token/cost audits (#21)
+### DONE — Adopt a development/validation spend guardrail for future token/cost audits (#21)
 
-Promoted after #20 acceptance on 2026-09-17.
+Accepted 2026-09-17 at commit `f7331b4fd1749006936f271cccfd10faafc79de4`.
 
-Document, in one canonical place, the per-issue dollar ceiling and maximum session count that future Managed Agent token/cost audits and A/B follow-ups must declare before starting, generalized from the ad hoc ceilings already used in #16 (e.g. its observed $0.80 stop ceiling). Documentation/process only; no code or Agent configuration change.
+Verified outcome:
+- canonical policy lives in `docs/04_MANAGED_AGENT_TOKEN_COST_AUDIT.md` §27;
+- every future paid Managed Agent audit/A-B follow-up must declare maximum dollar spend, maximum paid Sessions, expected evidence, stop condition, and PO-approval trigger before execution;
+- default guardrail is $0.50 / 5 paid Sessions, with justified upfront overrides allowed;
+- validation stops on budget/session ceiling, sufficient evidence, diminishing returns, or a materially high-cost session; inconclusive work requires Product Owner approval for further spend;
+- passive natural-usage telemetry such as #19/#20 is excluded unless it deliberately generates extra Managed Agent traffic;
+- no runtime or Agent configuration changed.
 
-### QUEUED — Project Context Bootstrap: canonical project briefs in Djonik Memory (#17)
+### NOW — Project Context Bootstrap: canonical project briefs in Djonik Memory (#17)
 
 Bootstrap concise canonical project briefs into `Djonik Memory` before broader capability expansion. Stable project/client context belongs in Memory; live deadlines/status/current task state continue to come from fresh Trello.
 
