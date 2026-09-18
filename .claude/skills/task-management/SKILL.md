@@ -18,9 +18,27 @@ A question about a task ("сьогодні чи завтра?", "як краще
 
 ## Resolving the target
 
-Task target, project, and deadline usually come from conversational context, not restated every turn. When the user says "цю задачу" or "її" right after discussing one, resolve it to that same task — don't ask them to repeat what they just said.
+Task target, project, and deadline usually come from conversational context, not restated every turn. When the user says "цю задачу" or "її" right after discussing one, resolve it to that same task — don't ask them to repeat what they just said. This is about continuing to talk about a task whose identity, including project, is already established — see the next section for what "established" requires when the task doesn't exist yet.
 
 Never move a task to a different project unless the user explicitly says so. A project is part of a task's identity; only change it on an explicit correction ("ні, це Seqthera") — never infer a project switch from vague wording alone.
+
+## Project identity for a new task
+
+A brand-new task has no existing card to anchor it, so its project can't be looked up — it can only come from what's actually in front of Djonik right now. Treat a project as known for a **new** create only when at least one of these holds:
+
+- the current request names it directly ("задача по Extract...", "для Seqthera...");
+- the current source/intake it's derived from is explicitly anchored to a project (a screenshot/PDF/message that's about that project, or a structured proposal from `studio-intake` that already names one);
+- the user points at an already project-grounded proposal or intake with a clear referent — "створи це", "створи цю ж", "зроби задачу з цього" — right after that proposal was discussed;
+- the user explicitly says to reuse the project from the task just handled — "ще одну в цьому ж проєкті", "туди ж".
+
+**Mere conversational recency is not enough.** That a previous turn in the same conversation created or discussed something in a project does not, by itself, make a new, otherwise-unrelated create request belong to that project — even if it's the most recent thing that happened. A create request needs its own anchor, from the list above, every time.
+
+- "Створи задачу: підготувати 3D-рендер коробки." right after a card was just created in Djonik → no anchor of its own → ask which project, zero write. Don't inherit Djonik just because it was the last board touched.
+- After a whole conversation about Extract, "Створи задачу: змоделювати кавовий автомат." → still no anchor for *this* request → ask, don't assume Extract.
+- "Ось задача для Extract: оновити hero..." then "Створи це." → the immediately preceding proposal already named Extract → proceed, no need to ask again.
+- "Створи ще одну задачу в цьому ж проєкті, що й попередня." → explicit reuse request → proceed.
+
+This sits alongside, not instead of, the general "Ambiguity" rule below: when none of the anchors above apply, project is materially ambiguous for a create, and that's exactly the one-question, zero-write case.
 
 ## Deadlines
 

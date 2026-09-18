@@ -535,6 +535,55 @@ test("send with an image constructs a user.message with an image block before th
   session.close();
 });
 
+test("send with a real tiny PNG fixture produces the exact schema-conformant outbound image block (Issue #26 blocker diagnostic)", async () => {
+  // A genuinely valid, decodable 1x1 PNG (not an arbitrary fake string), to
+  // rule out "something about real PNG bytes specifically" as a cause of the
+  // empty-reply defect observed live against the production Haiku Agent.
+  const realPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+  // Sanity: this fixture really is a valid PNG (magic bytes + IHDR-declared
+  // 1x1 dimensions), decoded independently of djonikClient's own code path,
+  // so this test cannot pass merely because both sides share a bug.
+  const decoded = Buffer.from(realPngBase64, "base64");
+  assert.equal(decoded.subarray(0, 8).toString("hex"), "89504e470d0a1a0a", "not a real PNG magic number");
+  assert.equal(decoded.readUInt32BE(16), 1, "fixture width must be 1");
+  assert.equal(decoded.readUInt32BE(20), 1, "fixture height must be 1");
+  assert.ok(!realPngBase64.startsWith("data:"), "fixture must not carry a data: URI prefix");
+
+  const { client, sendCalls } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await session.send("Що на цьому зображенні?", {
+    data: realPngBase64,
+    mediaType: "image/png",
+    byteSize: decoded.length,
+  });
+
+  const sent = sendCalls[0] as { events: Array<{ type: string; content: unknown[] }> };
+  assert.equal(sent.events.length, 1);
+  assert.equal(sent.events[0].type, "user.message");
+  const imageBlock = sent.events[0].content[0] as {
+    type: string;
+    source: { type: string; media_type: string; data: string };
+  };
+  // Exact official Managed Agents schema (BetaManagedAgentsImageBlock): only
+  // `type` and `source`; `source` is only `type`/`media_type`/`data` — no
+  // extra/undefined fields, no accidental mutation from the #25 array
+  // generalization.
+  assert.deepEqual(Object.keys(imageBlock).sort(), ["source", "type"]);
+  assert.equal(imageBlock.type, "image");
+  assert.deepEqual(Object.keys(imageBlock.source).sort(), ["data", "media_type", "type"]);
+  assert.equal(imageBlock.source.type, "base64");
+  assert.equal(imageBlock.source.media_type, "image/png");
+  assert.equal(imageBlock.source.data, realPngBase64);
+  assert.ok(!imageBlock.source.data.startsWith("data:"), "outbound data must not carry a data: URI prefix");
+  assert.ok(imageBlock.source.data.length > 0, "outbound data must be non-empty");
+  // Round-trip: what actually goes out over the wire decodes back to the
+  // exact same real PNG bytes — no corruption/truncation in transport.
+  assert.deepEqual(Buffer.from(imageBlock.source.data, "base64"), decoded);
+
+  session.close();
+});
+
 test("send with an image and no caption omits the text block entirely", async () => {
   const { client, sendCalls } = createFakeClient([AGENT_MESSAGE, IDLE]);
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
