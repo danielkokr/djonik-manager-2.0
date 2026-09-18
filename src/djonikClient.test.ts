@@ -215,6 +215,10 @@ test("turn telemetry emits content-free explicit-source usage delta with determi
     fileMimeType: null,
     fileByteSize: null,
     fileNamePresent: null,
+    sourceBlockCount: 0,
+    textBlockCount: 0,
+    imageBlockCount: 0,
+    documentBlockCount: 0,
     usage: {
       inputTokens: 4,
       cacheCreationInputTokens: 12,
@@ -796,6 +800,136 @@ test("a single image/document object still works exactly as before the array gen
   session.close();
 });
 
+// --- Issue #27: sendOrdered — caller-supplied ordered text/image/document parts. ---
+
+test("sendOrdered builds content blocks in exactly the given part order (text -> image -> text)", async () => {
+  const { client, sendCalls } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await session.sendOrdered([
+    { type: "text", text: "Зроби два варіанти" },
+    { type: "image", image: { data: "aW1n", mediaType: "image/png", byteSize: 10 } },
+    { type: "text", text: "Корекція: залиш тільки один варіант" },
+  ]);
+
+  assert.deepEqual(sendCalls[0], {
+    events: [
+      {
+        type: "user.message",
+        content: [
+          { type: "text", text: "Зроби два варіанти" },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "aW1n" } },
+          { type: "text", text: "Корекція: залиш тільки один варіант" },
+        ],
+      },
+    ],
+  });
+  session.close();
+});
+
+test("sendOrdered builds content blocks in exactly the given part order (image -> caption)", async () => {
+  const { client, sendCalls } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await session.sendOrdered([
+    { type: "image", image: { data: "QQ==", mediaType: "image/jpeg", byteSize: 1 } },
+    { type: "text", text: "тільки мобільна версія" },
+  ]);
+
+  assert.deepEqual(
+    (sendCalls[0] as { events: Array<{ content: Array<{ type: string }> }> }).events[0].content.map((b) => b.type),
+    ["image", "text"],
+  );
+  session.close();
+});
+
+test("sendOrdered rejects an empty parts list before sending anything", async () => {
+  const { client, sendCalls } = createFakeClient([]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await assert.rejects(() => session.sendOrdered([]), /requires non-empty text and\/or an attachment/);
+  assert.equal(sendCalls.length, 0);
+  session.close();
+});
+
+test("sendOrdered skips an empty text part (e.g. a medialess fragment with no caption)", async () => {
+  const { client, sendCalls } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await session.sendOrdered([
+    { type: "image", image: { data: "QQ==", mediaType: "image/jpeg", byteSize: 1 } },
+    { type: "text", text: "" },
+  ]);
+
+  const sent = sendCalls[0] as { events: Array<{ content: unknown[] }> };
+  assert.equal(sent.events[0].content.length, 1, "empty text part must not produce a text block");
+  session.close();
+});
+
+test("sendOrdered still enforces write-verify and due-date finalization (shares one pipeline with send)", async () => {
+  const { client, sendCalls } = createFakeClient([
+    mcpToolUse("call_1", "trelloWriteCard", { action: "create", cardId: "card_A" }),
+    mcpToolResult("call_1"),
+    AGENT_MESSAGE,
+    IDLE,
+    // Corrective-nudge turn: agent still doesn't verify, so the write ultimately fails closed.
+    AGENT_MESSAGE,
+    IDLE,
+  ]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await assert.rejects(
+    () => session.sendOrdered([{ type: "text", text: "Створи задачу" }]),
+    /did not verify the write with an independent read/,
+  );
+  assert.equal(sendCalls.length, 2, "one initial send plus exactly one corrective nudge");
+  session.close();
+});
+
+test("turn telemetry records bounded content-block counts for an ordered mixed turn, never block content", async () => {
+  const { client } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const telemetry: unknown[] = [];
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x", undefined, (record) => telemetry.push(record));
+
+  await session.sendOrdered([
+    { type: "text", text: "секретний текст клієнта" },
+    { type: "image", image: { data: "c2VjcmV0", mediaType: "image/png", byteSize: 5 } },
+    { type: "text", text: "друга репліка" },
+  ]);
+
+  const [turn] = telemetry as Array<{
+    sourceBlockCount: number;
+    textBlockCount: number;
+    imageBlockCount: number;
+    documentBlockCount: number;
+  }>;
+  assert.equal(turn.sourceBlockCount, 3);
+  assert.equal(turn.textBlockCount, 2);
+  assert.equal(turn.imageBlockCount, 1);
+  assert.equal(turn.documentBlockCount, 0);
+  const serialized = JSON.stringify(turn);
+  assert.ok(!serialized.includes("секретний"), "content-block telemetry must never carry text content");
+  assert.ok(!serialized.includes("c2VjcmV0"), "content-block telemetry must never carry image bytes");
+  session.close();
+});
+
+test("send()'s legacy fixed order (images, documents, text) is unchanged after the #27 sendOrdered refactor", async () => {
+  const { client, sendCalls } = createFakeClient([AGENT_MESSAGE, IDLE]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await session.send(
+    "текст групи",
+    [{ data: "QQ==", mediaType: "image/jpeg", byteSize: 1 }],
+    [{ data: "cGRm", mediaType: "application/pdf", byteSize: 3, filename: "brief.pdf" }],
+  );
+
+  assert.deepEqual(
+    (sendCalls[0] as { events: Array<{ content: Array<{ type: string }> }> }).events[0].content.map((b) => b.type),
+    ["image", "document", "text"],
+  );
+  session.close();
+});
+
 test("turn telemetry for a multi-image turn records the first image's mime/size (documented behavior)", async () => {
   const { client } = createFakeClient([AGENT_MESSAGE, IDLE]);
   const telemetry: unknown[] = [];
@@ -1245,6 +1379,101 @@ test("Scenario E: a concurrently queued read-only turn cannot reset an earlier q
   push({ type: "agent.message", content: [{ type: "text", text: "Сонячно." }] });
   push({ type: "session.status_idle" });
   assert.equal(await p2, "Сонячно.", "turn 2's reply remains its own, unaffected by turn 1's write");
+
+  session.close();
+});
+
+// --- Issue #27 Product Lead review point 1: send() and sendOrdered() must
+// share the exact same FIFO queue/pipeline, not a second parallel one. ---
+
+test("Scenario F (#27): send() and sendOrdered() interleaved on one handle FIFO-serialize into the same queue — sendOrdered's provider turn never starts before send()'s finishes", async () => {
+  const { client, sendCalls, push } = createStreamedFakeClient();
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  // p1 via the legacy send(); p2 via the new sendOrdered() — issued back to
+  // back, exactly like two independent grouped Telegram dispatches (or one
+  // grouped dispatch racing the diagnostic cli.ts path) could in production.
+  const p1 = session.send("перший (send)");
+  const p2 = session.sendOrdered([{ type: "text", text: "другий (sendOrdered)" }]);
+
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 1, "sendOrdered's provider turn must not start before send()'s turn has even begun resolving — proves one shared queue, not two independent ones");
+
+  push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 1" }] });
+  push({ type: "session.status_idle" });
+  assert.equal(await p1, "Відповідь 1");
+
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 2, "sendOrdered's own provider turn starts only once send()'s turn has fully settled");
+
+  push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 2" }] });
+  push({ type: "session.status_idle" });
+  assert.equal(await p2, "Відповідь 2", "sendOrdered's reply stays attributed to its own call, not swapped with send()'s");
+
+  session.close();
+});
+
+test("Scenario G (#27): the reverse order — sendOrdered() first, then send() — still FIFO-serializes on the same queue", async () => {
+  const { client, sendCalls, push } = createStreamedFakeClient();
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const p1 = session.sendOrdered([
+    { type: "image", image: { data: "QQ==", mediaType: "image/jpeg", byteSize: 1 } },
+    { type: "text", text: "caption" },
+  ]);
+  const p2 = session.send("звичайний текст");
+
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 1, "send()'s provider turn must not start before sendOrdered()'s turn has even begun resolving");
+
+  push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 1" }] });
+  push({ type: "session.status_idle" });
+  assert.equal(await p1, "Відповідь 1");
+
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 2, "send()'s turn starts only once sendOrdered()'s turn has fully settled");
+
+  push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 2" }] });
+  push({ type: "session.status_idle" });
+  assert.equal(await p2, "Відповідь 2");
+
+  session.close();
+});
+
+test("Scenario H (#27): sendOrdered() shares the exact same event-stream iterator as send() — no second iterator, no second live subscription", async () => {
+  // If sendOrdered had its own parallel queue/iterator, this turn's events
+  // (pushed onto the ONE fake stream both methods must read from) would
+  // never be consumed by it and the call would hang/timeout instead of
+  // resolving. Resolving here is itself the proof there is exactly one
+  // iterator being advanced by both send() and sendOrdered().
+  const { client, push } = createStreamedFakeClient();
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const p = session.sendOrdered([{ type: "text", text: "чи бачиш цей event?" }]);
+  await flushMicrotasks();
+  push({ type: "agent.message", content: [{ type: "text", text: "Так, бачу." }] });
+  push({ type: "session.status_idle" });
+
+  assert.equal(await p, "Так, бачу.", "sendOrdered consumed events from the same single stream iterator send() uses");
+  session.close();
+});
+
+test("Scenario I (#27): a DjonikSessionDeadError raised by sendOrdered() behaves identically to send() — same dead-session typing, same non-reconnecting queue", async () => {
+  const { client, sendCalls, push } = createStreamedFakeClient();
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const p1 = session.sendOrdered([{ type: "text", text: "перший" }]);
+  const p2 = session.sendOrdered([{ type: "text", text: "другий" }]);
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 1);
+
+  push({ type: "session.status_terminated" });
+  await assert.rejects(() => p1, DjonikSessionDeadError);
+
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 2, "the queue still attempts the next sendOrdered() turn rather than skipping it — identical to send()'s documented behavior");
+  push({ type: "session.status_terminated" });
+  await assert.rejects(() => p2, DjonikSessionDeadError);
 
   session.close();
 });

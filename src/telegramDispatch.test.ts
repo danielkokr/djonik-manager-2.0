@@ -1,7 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type Anthropic from "@anthropic-ai/sdk";
-import { connectToDjonik, type DjonikDocumentInput, type DjonikImageInput, type DjonikSessionHandle } from "./djonikClient.js";
+import {
+  connectToDjonik,
+  type DjonikDocumentInput,
+  type DjonikImageInput,
+  type DjonikSessionHandle,
+  type DjonikTurnPart,
+} from "./djonikClient.js";
 import type { DjonikSessionManager } from "./telegramAdapter.js";
 import { MessageGroupBuffer } from "./messageGrouping.js";
 import { createGroupDispatchHandlers } from "./telegramDispatch.js";
@@ -23,23 +29,26 @@ function sleep(ms: number): Promise<void> {
 
 const WINDOW_MS = 30;
 
-interface SendCall {
-  text: string;
-  image?: DjonikImageInput | DjonikImageInput[];
-  document?: DjonikDocumentInput | DjonikDocumentInput[];
-}
-
-function createFakeSession(): { session: DjonikSessionHandle; calls: SendCall[] } {
-  const calls: SendCall[] = [];
+/**
+ * `createGroupDispatchHandlers` calls `session.sendOrdered(intake.parts)`
+ * (#27), so this fake records ordered-part calls; the legacy `send` is still
+ * implemented (interface requirement) but production `onDispatch` no longer
+ * calls it, so no test here should assert on `send`-shaped calls.
+ */
+function createFakeSession(): { session: DjonikSessionHandle; orderedCalls: DjonikTurnPart[][] } {
+  const orderedCalls: DjonikTurnPart[][] = [];
   const session: DjonikSessionHandle = {
     sessionId: "fake_session",
-    send: async (text, image, document) => {
-      calls.push({ text, image, document });
+    send: async () => {
+      throw new Error("send() should not be called by grouped dispatch — use sendOrdered");
+    },
+    sendOrdered: async (parts) => {
+      orderedCalls.push(parts);
       return "Готово.";
     },
     close: () => {},
   };
-  return { session, calls };
+  return { session, orderedCalls };
 }
 
 function createFakeSessionManager(session: DjonikSessionHandle): DjonikSessionManager {
@@ -51,7 +60,7 @@ function createFakeSessionManager(session: DjonikSessionHandle): DjonikSessionMa
 }
 
 function setUp() {
-  const { session, calls } = createFakeSession();
+  const { session, orderedCalls } = createFakeSession();
   const djonikSession = createFakeSessionManager(session);
   const sentMessages: Array<{ chatId: number; text: string }> = [];
   const { onDispatch, onFailure } = createGroupDispatchHandlers({
@@ -67,28 +76,50 @@ function setUp() {
     onDispatch,
     onFailure,
   });
-  return { buffer, calls, sentMessages };
+  return { buffer, orderedCalls, sentMessages };
 }
 
-test("integration: two grouped text fragments produce exactly one Managed Agent session.send call", async () => {
-  const { buffer, calls, sentMessages } = setUp();
+test("integration: two grouped text fragments produce exactly one Managed Agent sendOrdered call, order preserved", async () => {
+  const { buffer, orderedCalls, sentMessages } = setUp();
 
   buffer.addFragment({ chatId: 1, userId: 100, messageId: 1, text: "По Djonik треба оновити onboarding." });
   buffer.addFragment({ chatId: 1, userId: 100, messageId: 2, text: "Зроби з цього одну задачу, без дедлайну." });
 
   await sleep(WINDOW_MS + 40);
 
-  assert.equal(calls.length, 1, "exactly one call into the Managed Agent session for the whole grouped intake");
-  assert.equal(
-    calls[0].text,
-    "[Fragment 1]\nПо Djonik треба оновити onboarding.\n\n[Fragment 2]\nЗроби з цього одну задачу, без дедлайну.",
-  );
+  assert.equal(orderedCalls.length, 1, "exactly one call into the Managed Agent session for the whole grouped intake");
+  assert.deepEqual(orderedCalls[0], [
+    { type: "text", text: "По Djonik треба оновити onboarding." },
+    { type: "text", text: "Зроби з цього одну задачу, без дедлайну." },
+  ]);
   assert.equal(sentMessages.length, 1);
   assert.equal(sentMessages[0].chatId, 1);
 });
 
-test("integration: text + image produces exactly one Managed Agent session.send call carrying both", async () => {
-  const { buffer, calls } = setUp();
+test("integration (#27, Product Lead review point 7): grouped dispatch never sends the legacy [Fragment N]-labeled combined text — only the unlabeled ordered parts", async () => {
+  const { buffer, orderedCalls } = setUp();
+
+  buffer.addFragment({ chatId: 1, userId: 100, messageId: 1, text: "перший фрагмент" });
+  buffer.addFragment({ chatId: 1, userId: 100, messageId: 2, text: "другий фрагмент" });
+  buffer.addFragment({ chatId: 1, userId: 100, messageId: 3, text: "третій фрагмент" });
+
+  await sleep(WINDOW_MS + 40);
+
+  assert.equal(orderedCalls.length, 1);
+  const serialized = JSON.stringify(orderedCalls[0]);
+  assert.ok(!serialized.includes("[Fragment"), "the model-facing ordered parts must never carry the legacy [Fragment N] labels");
+  // Each fragment's own text is its own separate, unlabeled block — proving
+  // no duplication through a second, legacy-text codepath (Product Lead
+  // review point 4): three fragments in, exactly three text parts out.
+  assert.deepEqual(orderedCalls[0], [
+    { type: "text", text: "перший фрагмент" },
+    { type: "text", text: "другий фрагмент" },
+    { type: "text", text: "третій фрагмент" },
+  ]);
+});
+
+test("integration: text + image produces exactly one Managed Agent sendOrdered call carrying both, in order", async () => {
+  const { buffer, orderedCalls } = setUp();
   const image: DjonikImageInput = { data: "aW1n", mediaType: "image/jpeg", byteSize: 42 };
 
   buffer.addFragment({ chatId: 1, userId: 100, messageId: 1, text: "ось референс" });
@@ -102,14 +133,15 @@ test("integration: text + image produces exactly one Managed Agent session.send 
 
   await sleep(WINDOW_MS + 40);
 
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].text, "ось референс");
-  assert.deepEqual(calls[0].image, [image]);
-  assert.equal(calls[0].document, undefined);
+  assert.equal(orderedCalls.length, 1);
+  assert.deepEqual(orderedCalls[0], [
+    { type: "text", text: "ось референс" },
+    { type: "image", image },
+  ]);
 });
 
-test("integration: text + PDF produces exactly one Managed Agent session.send call carrying both", async () => {
-  const { buffer, calls } = setUp();
+test("integration: text + PDF produces exactly one Managed Agent sendOrdered call carrying both, in order", async () => {
+  const { buffer, orderedCalls } = setUp();
   const document: DjonikDocumentInput = { data: "cGRm", mediaType: "application/pdf", byteSize: 99, filename: "brief.pdf" };
 
   buffer.addFragment({ chatId: 1, userId: 100, messageId: 1, text: "деталі проєкту тут" });
@@ -123,14 +155,15 @@ test("integration: text + PDF produces exactly one Managed Agent session.send ca
 
   await sleep(WINDOW_MS + 40);
 
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].text, "деталі проєкту тут");
-  assert.deepEqual(calls[0].document, [document]);
-  assert.equal(calls[0].image, undefined);
+  assert.equal(orderedCalls.length, 1);
+  assert.deepEqual(orderedCalls[0], [
+    { type: "text", text: "деталі проєкту тут" },
+    { type: "document", document },
+  ]);
 });
 
-test("integration: a media_group_id album (3 items) produces exactly one Managed Agent session.send call", async () => {
-  const { buffer, calls } = setUp();
+test("integration: a media_group_id album (3 items) produces exactly one Managed Agent sendOrdered call, message_id order", async () => {
+  const { buffer, orderedCalls } = setUp();
   const images: DjonikImageInput[] = [
     { data: "QQ==", mediaType: "image/jpeg", byteSize: 1 },
     { data: "Qg==", mediaType: "image/jpeg", byteSize: 2 },
@@ -152,12 +185,12 @@ test("integration: a media_group_id album (3 items) produces exactly one Managed
 
   await sleep(WINDOW_MS + 40);
 
-  assert.equal(calls.length, 1, "exactly one call for the whole 3-item album");
-  assert.deepEqual(calls[0].image, images);
+  assert.equal(orderedCalls.length, 1, "exactly one call for the whole 3-item album");
+  assert.deepEqual(orderedCalls[0], images.map((image) => ({ type: "image" as const, image })));
 });
 
-test("integration: a failed grouped attachment never calls session.send (structural zero-mutation guarantee)", async () => {
-  const { buffer, calls, sentMessages } = setUp();
+test("integration: a failed grouped attachment never calls sendOrdered (structural zero-mutation guarantee)", async () => {
+  const { buffer, orderedCalls, sentMessages } = setUp();
 
   buffer.addFragment({ chatId: 1, userId: 100, messageId: 1, text: "зроби задачу з цього" });
   buffer.addFragment({
@@ -170,7 +203,7 @@ test("integration: a failed grouped attachment never calls session.send (structu
 
   await sleep(WINDOW_MS + 40);
 
-  assert.equal(calls.length, 0, "session.send must never be called for a failed grouped intake");
+  assert.equal(orderedCalls.length, 0, "sendOrdered must never be called for a failed grouped intake");
   assert.equal(sentMessages.length, 1, "the user still gets exactly one visible failure message");
   assert.match(sentMessages[0].text, /file too large/);
 });

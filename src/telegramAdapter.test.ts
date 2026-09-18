@@ -52,6 +52,7 @@ test("createSessionManager connects once and reuses the session across calls", a
   const fakeSession: DjonikSessionHandle = {
     sessionId: "sess_1",
     send: async (text) => `echo:${text}`,
+    sendOrdered: async () => "ok",
     close: () => {},
   };
   const manager = createSessionManager(async () => {
@@ -74,7 +75,7 @@ test("createSessionManager allows retry after a failed connect", async () => {
     if (connectCalls === 1) {
       throw new Error("connect failed");
     }
-    return { sessionId: "sess_2", send: async () => "ok", close: () => {} };
+    return { sessionId: "sess_2", send: async () => "ok", sendOrdered: async () => "ok", close: () => {} };
   });
 
   await assert.rejects(manager.getSession());
@@ -88,7 +89,7 @@ test("handleSessionError invalidates the cached session on a dead-session error,
   let connectCalls = 0;
   const manager = createSessionManager(async () => {
     connectCalls += 1;
-    return { sessionId: `sess_${connectCalls}`, send: async () => "ok", close: () => {} };
+    return { sessionId: `sess_${connectCalls}`, send: async () => "ok", sendOrdered: async () => "ok", close: () => {} };
   });
 
   const first = await manager.getSession();
@@ -349,7 +350,7 @@ test("handleSessionError leaves the cached session alone for an ordinary turn fa
   let connectCalls = 0;
   const manager = createSessionManager(async () => {
     connectCalls += 1;
-    return { sessionId: `sess_${connectCalls}`, send: async () => "ok", close: () => {} };
+    return { sessionId: `sess_${connectCalls}`, send: async () => "ok", sendOrdered: async () => "ok", close: () => {} };
   });
 
   const first = await manager.getSession();

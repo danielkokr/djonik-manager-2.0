@@ -113,6 +113,7 @@ test("buildGroupingTelemetry contains only bounded metadata fields, never text/m
     text: "very secret client content",
     images: [{ data: "secretbytes", mediaType: "image/jpeg", byteSize: 10 }],
     documents: [],
+    parts: [],
     fragmentCount: 2,
     textCount: 1,
     imageCount: 1,
@@ -151,6 +152,12 @@ test("two text fragments inside the window dispatch once with original order pre
   assert.equal(dispatches[0].intake.groupingReason, "adjacent_window");
   assert.equal(dispatches[0].intake.fragmentCount, 2);
   assert.equal(dispatches[0].intake.textCount, 2);
+  // #27 Scenario A: ordered parts preserve each fragment's own boundary as a
+  // separate text block, unlabeled and in original order — no merging/rewriting.
+  assert.deepEqual(dispatches[0].intake.parts, [
+    { type: "text", text: "По Djonik треба оновити onboarding." },
+    { type: "text", text: "Зроби з цього одну задачу, без дедлайну." },
+  ]);
 });
 
 // --- Scenario 2: text + image -> one intake, actual image block included ---
@@ -170,6 +177,11 @@ test("text followed by an image dispatches once with both text and the resolved 
   assert.equal(dispatches[0].intake.text, "ось референс");
   assert.deepEqual(dispatches[0].intake.images, [image]);
   assert.equal(dispatches[0].intake.imageCount, 1);
+  // #27: text fragment, then the image fragment (no caption of its own) — order preserved.
+  assert.deepEqual(dispatches[0].intake.parts, [
+    { type: "text", text: "ось референс" },
+    { type: "image", image },
+  ]);
 });
 
 // --- Scenario 3: text + PDF -> one intake, actual document block included ---
@@ -189,6 +201,10 @@ test("text followed by a PDF dispatches once with both text and the resolved doc
   assert.equal(dispatches[0].intake.text, "деталі проєкту тут");
   assert.deepEqual(dispatches[0].intake.documents, [document]);
   assert.equal(dispatches[0].intake.documentCount, 1);
+  assert.deepEqual(dispatches[0].intake.parts, [
+    { type: "text", text: "деталі проєкту тут" },
+    { type: "document", document },
+  ]);
 });
 
 // --- Scenario 4: media_group_id with 2+ items -> grouped explicitly, one dispatch, order preserved ---
@@ -210,6 +226,11 @@ test("fragments sharing a media_group_id are grouped explicitly with order prese
   assert.equal(dispatches.length, 1);
   assert.equal(dispatches[0].intake.groupingReason, "media_group_id");
   assert.deepEqual(dispatches[0].intake.images, [imageA, imageB], "message_id order preserved regardless of arrival order");
+  // #27 Scenario E: native album ordering carried into `parts` too, by message_id, not arrival order.
+  assert.deepEqual(dispatches[0].intake.parts, [
+    { type: "image", image: imageA },
+    { type: "image", image: imageB },
+  ]);
 });
 
 test("a different media_group_id never merges into an already-locked album — it flushes and starts a new group", async () => {
@@ -365,6 +386,115 @@ test("a standalone text message with no follow-up dispatches exactly once, unwra
   assert.equal(dispatches[0].intake.groupingReason, "single");
   assert.equal(dispatches[0].intake.images.length, 0);
   assert.equal(dispatches[0].intake.documents.length, 0);
+  // #27 regression: standalone text produces exactly one plain text part.
+  assert.deepEqual(dispatches[0].intake.parts, [{ type: "text", text: "Привіт!" }]);
+});
+
+// --- #27: ordered parts preserve cross-modal order and caption/attachment relationship ---
+
+test("Scenario B: text -> image -> correcting text keeps that exact order in parts", async () => {
+  const { buffer, dispatches } = makeBuffer();
+  const image = { data: "aW1n", mediaType: "image/png", byteSize: 10 };
+
+  buffer.addFragment(textFragment({ messageId: 1, text: "Зроби два варіанти" }));
+  buffer.addFragment(
+    textFragment({ messageId: 2, text: "", media: { kind: "image", promise: Promise.resolve(image) } }),
+  );
+  buffer.addFragment(textFragment({ messageId: 3, text: "Корекція: залиш тільки один варіант" }));
+
+  await sleep(ADJACENT_WINDOW_MS + 40);
+
+  assert.equal(dispatches.length, 1);
+  assert.deepEqual(dispatches[0].intake.parts, [
+    { type: "text", text: "Зроби два варіанти" },
+    { type: "image", image },
+    { type: "text", text: "Корекція: залиш тільки один варіант" },
+  ]);
+});
+
+test("Scenario C: a caption arriving with its image stays adjacent to that image, image block first", async () => {
+  const { buffer, dispatches } = makeBuffer();
+  const image = { data: "aW1n", mediaType: "image/jpeg", byteSize: 5 };
+
+  buffer.addFragment(
+    textFragment({
+      messageId: 1,
+      text: "тільки мобільна версія",
+      media: { kind: "image", promise: Promise.resolve(image) },
+    }),
+  );
+
+  await sleep(ADJACENT_WINDOW_MS + 40);
+
+  assert.equal(dispatches.length, 1);
+  assert.deepEqual(dispatches[0].intake.parts, [
+    { type: "image", image },
+    { type: "text", text: "тільки мобільна версія" },
+  ]);
+});
+
+test("Scenario D: text -> PDF -> correcting text keeps that exact order in parts", async () => {
+  const { buffer, dispatches } = makeBuffer();
+  const document = { data: "cGRm", mediaType: "application/pdf", byteSize: 20, filename: "brief.pdf" };
+
+  buffer.addFragment(textFragment({ messageId: 1, text: "ось бриф" }));
+  buffer.addFragment(
+    textFragment({ messageId: 2, text: "", media: { kind: "document", promise: Promise.resolve(document) } }),
+  );
+  buffer.addFragment(textFragment({ messageId: 3, text: "Корекція: дедлайну немає" }));
+
+  await sleep(ADJACENT_WINDOW_MS + 40);
+
+  assert.equal(dispatches.length, 1);
+  assert.deepEqual(dispatches[0].intake.parts, [
+    { type: "text", text: "ось бриф" },
+    { type: "document", document },
+    { type: "text", text: "Корекція: дедлайну немає" },
+  ]);
+});
+
+test("Scenario G (mixed): image + PDF + text together preserve message_id order across kinds", async () => {
+  const { buffer, dispatches } = makeBuffer();
+  const image = { data: "aW1n", mediaType: "image/png", byteSize: 1 };
+  const document = { data: "cGRm", mediaType: "application/pdf", byteSize: 2, filename: "spec.pdf" };
+
+  buffer.addFragment(
+    textFragment({ messageId: 1, text: "", media: { kind: "image", promise: Promise.resolve(image) } }),
+  );
+  buffer.addFragment(
+    textFragment({ messageId: 2, text: "", media: { kind: "document", promise: Promise.resolve(document) } }),
+  );
+  buffer.addFragment(textFragment({ messageId: 3, text: "Зроби це для Extract" }));
+
+  await sleep(ADJACENT_WINDOW_MS + 40);
+
+  assert.equal(dispatches.length, 1);
+  assert.deepEqual(dispatches[0].intake.parts, [
+    { type: "image", image },
+    { type: "document", document },
+    { type: "text", text: "Зроби це для Extract" },
+  ]);
+});
+
+test("parts never carry chatId/userId/messageId/mediaGroupId — only text/image/document content", async () => {
+  const { buffer, dispatches } = makeBuffer();
+  const image = { data: "aW1n", mediaType: "image/jpeg", byteSize: 1 };
+
+  buffer.addFragment(
+    textFragment({
+      messageId: 99,
+      mediaGroupId: "album_secret",
+      text: "caption",
+      media: { kind: "image", promise: Promise.resolve(image) },
+    }),
+  );
+
+  await sleep(ALBUM_SETTLE_WINDOW_MS + 40);
+
+  const serialized = JSON.stringify(dispatches[0].intake.parts);
+  assert.ok(!serialized.includes("album_secret"), "media_group_id must never leak into a content part");
+  assert.ok(!serialized.includes("99"), "message_id must never leak into a content part");
+  assert.ok(!serialized.includes("chatId") && !serialized.includes("userId"));
 });
 
 // --- Concurrency: two groups active in different chats settle independently ---

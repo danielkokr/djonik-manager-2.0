@@ -1,4 +1,4 @@
-import type { DjonikDocumentInput, DjonikImageInput } from "./djonikClient.js";
+import type { DjonikDocumentInput, DjonikImageInput, DjonikTurnPart } from "./djonikClient.js";
 
 /**
  * Deterministic, in-memory grouping of related Telegram fragments into one
@@ -42,6 +42,21 @@ export interface GroupedIntake {
   images: DjonikImageInput[];
   /** Resolved documents in Telegram message-id order. */
   documents: DjonikDocumentInput[];
+  /**
+   * Ordered text/image/document parts, one per fragment's own content, in
+   * Telegram `message_id` order (#27). Unlike `text`/`images`/`documents`
+   * above (which flatten the group into three separate groups, losing
+   * cross-modal order and caption ↔ attachment association), `parts`
+   * preserves each fragment's own media immediately alongside that same
+   * fragment's own text — a caption stays next to its image, and a
+   * text → image → correcting-text sequence keeps that exact order. Within
+   * one fragment, its media part (if any) comes before its text part (if
+   * any), matching the pre-#27 fixed single-attachment order so a
+   * single-fragment intake (plain text, one image+caption, one PDF+caption)
+   * produces byte-identical content blocks to before. Feed this to
+   * `DjonikSessionHandle.sendOrdered`, not `send`.
+   */
+  parts: DjonikTurnPart[];
   fragmentCount: number;
   textCount: number;
   imageCount: number;
@@ -293,17 +308,26 @@ export class MessageGroupBuffer {
     const images: DjonikImageInput[] = [];
     const documents: DjonikDocumentInput[] = [];
     const textFragments: Array<{ order: number; text: string }> = [];
+    const parts: DjonikTurnPart[] = [];
 
     try {
       for (const fragment of sorted) {
         if (fragment.text) textFragments.push({ order: fragment.messageId, text: fragment.text });
         if (fragment.media) {
           if (fragment.media.kind === "image") {
-            images.push(await fragment.media.promise);
+            const image = await fragment.media.promise;
+            images.push(image);
+            parts.push({ type: "image", image });
           } else {
-            documents.push(await fragment.media.promise);
+            const document = await fragment.media.promise;
+            documents.push(document);
+            parts.push({ type: "document", document });
           }
         }
+        // Media part (if any) precedes this fragment's own text part, matching
+        // the pre-#27 fixed single-attachment order (image/document block,
+        // then its caption) — see the `parts` field doc above.
+        if (fragment.text) parts.push({ type: "text", text: fragment.text });
       }
     } catch (error) {
       // A slow attachment can still fail after the window already elapsed
@@ -322,6 +346,7 @@ export class MessageGroupBuffer {
       text: buildCombinedText(textFragments),
       images,
       documents,
+      parts,
       fragmentCount: sorted.length,
       textCount: textFragments.length,
       imageCount: images.length,

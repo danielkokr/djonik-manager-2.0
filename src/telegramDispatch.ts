@@ -39,11 +39,11 @@ export function createGroupDispatchHandlers(deps: GroupDispatchDeps): GroupDispa
       deps.onGroupTelemetry?.(buildGroupingTelemetry(intake));
       try {
         const session = await deps.djonikSession.getSession();
-        const reply = await session.send(
-          intake.text,
-          intake.images.length > 0 ? intake.images : undefined,
-          intake.documents.length > 0 ? intake.documents : undefined,
-        );
+        // #27: send in original Telegram order/relationship (caption next to
+        // its own image, text → image → correction kept in sequence) via
+        // `sendOrdered`, not the legacy `send(text, images, documents)`
+        // flattening, which loses that structure.
+        const reply = await session.sendOrdered(intake.parts);
         await deps.sendMessage(chatId, reply);
       } catch (error) {
         logError("Djonik grouped turn failed:", error);

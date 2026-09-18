@@ -35,6 +35,18 @@ export interface DjonikDocumentInput {
   filename?: string;
 }
 
+/**
+ * One text/image/document part of a turn, in the exact order it should
+ * appear as a `user.message` content block (#27). This is the single
+ * ordered representation `sendOrdered` builds content from; `send`'s
+ * legacy `(text, image, document)` shape is converted into this same
+ * representation internally rather than having its own parallel transport.
+ */
+export type DjonikTurnPart =
+  | { type: "text"; text: string }
+  | { type: "image"; image: DjonikImageInput }
+  | { type: "document"; document: DjonikDocumentInput };
+
 export interface DjonikSessionHandle {
   sessionId: string;
   /**
@@ -47,12 +59,30 @@ export interface DjonikSessionHandle {
    * (multiple `image`/`document` content blocks are an already-accepted
    * provider shape; this is not a new transport). Order within each array
    * is preserved as the block order.
+   *
+   * The resulting content-block order is fixed: every image, then every
+   * document, then the text block (if any) — the historical #22/#24/#25
+   * order, unchanged. For a turn that needs a different, source-faithful
+   * interleaving of text/image/document (e.g. text → image → correcting
+   * text), use `sendOrdered` instead.
    */
   send(
     text: string,
     image?: DjonikImageInput | DjonikImageInput[],
     document?: DjonikDocumentInput | DjonikDocumentInput[],
   ): Promise<string>;
+  /**
+   * Sends one visible user turn whose `user.message` content blocks are
+   * built in exactly `parts`' order (#27) — the mechanism a rich, ordered
+   * Telegram intake (grouped text/image/document fragments, a caption next
+   * to its own image, a later correction after a screenshot) needs to reach
+   * the Managed Agent with its original cross-modal order and caption
+   * association intact, instead of being flattened into separate
+   * images/documents/text groups. Shares the same content-block builder,
+   * write-verification, due-date finalization, and telemetry pipeline as
+   * `send` — this is not a second transport.
+   */
+  sendOrdered(parts: DjonikTurnPart[]): Promise<string>;
   /** Aborts the session's open event stream so the process can exit cleanly. */
   close(): void;
 }
@@ -98,6 +128,15 @@ export interface DjonikTurnTelemetry {
   /** Whether the document had a filename at all — never the filename itself, which could carry
    *  client-sensitive content. Null when `hasFile` is false. */
   fileNamePresent: boolean | null;
+  /** Total content blocks sent this turn (text + image + document). Bounded count only,
+   *  never the blocks' content (#27). */
+  sourceBlockCount: number;
+  /** Text content blocks sent this turn. Bounded count only (#27). */
+  textBlockCount: number;
+  /** Image content blocks sent this turn. Bounded count only (#27). */
+  imageBlockCount: number;
+  /** Document content blocks sent this turn. Bounded count only (#27). */
+  documentBlockCount: number;
   /** Per-visible-turn delta, never the session's cumulative usage snapshot. */
   usage: DjonikCumulativeUsage | null;
 }
@@ -113,6 +152,8 @@ export interface DjonikTurnTelemetryCollector {
   /** Records that this turn's input included a document/file (#24). Content-free: mimeType/byteSize
    *  and whether a filename was present, never the filename or file content itself. */
   recordInputDocument(meta: { mimeType: string; byteSize: number; hasFilename: boolean }): void;
+  /** Records bounded per-type content-block counts for this turn (#27) — counts only, never block content. */
+  recordContentBlockCounts(counts: { textBlockCount: number; imageBlockCount: number; documentBlockCount: number }): void;
   recordUsage(usage: {
     input_tokens?: number;
     cache_creation?: object | null;
@@ -144,6 +185,9 @@ export function createTurnTelemetryCollector(
   let fileMimeType: string | null = null;
   let fileByteSize: number | null = null;
   let fileNamePresent: boolean | null = null;
+  let textBlockCount = 0;
+  let imageBlockCount = 0;
+  let documentBlockCount = 0;
   let cumulativeUsage: DjonikCumulativeUsage | null = null;
 
   function delta(current: number | undefined, previous: number | undefined): number | undefined {
@@ -203,6 +247,11 @@ export function createTurnTelemetryCollector(
       fileByteSize = meta.byteSize;
       fileNamePresent = meta.hasFilename;
     },
+    recordContentBlockCounts: (counts) => {
+      textBlockCount = counts.textBlockCount;
+      imageBlockCount = counts.imageBlockCount;
+      documentBlockCount = counts.documentBlockCount;
+    },
     recordUsage: (nextUsage) => {
       const cacheCreationInputTokens = Object.values(nextUsage.cache_creation ?? {}).reduce(
         (sum, value) => sum + (typeof value === "number" ? value : 0),
@@ -236,6 +285,10 @@ export function createTurnTelemetryCollector(
       fileMimeType,
       fileByteSize,
       fileNamePresent,
+      sourceBlockCount: textBlockCount + imageBlockCount + documentBlockCount,
+      textBlockCount,
+      imageBlockCount,
+      documentBlockCount,
       usage: turnUsage(),
     }),
     cumulativeUsage: () => cumulativeUsage === null ? null : { ...cumulativeUsage },
@@ -761,6 +814,32 @@ export async function connectToDjonik(
     }
   }
 
+  /** Canonical content-block builder (#27): the only place a `DjonikTurnPart[]`
+   *  becomes `SendableContentBlock[]`, used by both `send` (legacy fixed order)
+   *  and `sendOrdered` (caller-supplied order) — never duplicated. Empty text
+   *  parts are skipped, matching the pre-#27 "omit the text block when there's
+   *  no caption" behavior. */
+  function buildContentBlocks(parts: DjonikTurnPart[]): SendableContentBlock[] {
+    const content: SendableContentBlock[] = [];
+    for (const part of parts) {
+      if (part.type === "image") {
+        content.push({
+          type: "image",
+          source: { type: "base64", media_type: part.image.mediaType, data: part.image.data },
+        });
+      } else if (part.type === "document") {
+        content.push({
+          type: "document",
+          source: { type: "base64", media_type: part.document.mediaType, data: part.document.data },
+          ...(part.document.filename ? { title: part.document.filename } : {}),
+        });
+      } else if (part.text) {
+        content.push({ type: "text", text: part.text });
+      }
+    }
+    return content;
+  }
+
   /**
    * Sends one user turn, then enforces verify-after-write deterministically:
    * if the turn ends with a successful Trello write and no successful Trello
@@ -770,57 +849,51 @@ export async function connectToDjonik(
    * session; if it still hasn't verified, fail the turn instead of returning
    * an unverified success claim to the user.
    *
-   * `image`/`document`, when present, are sent as inline base64 `image`/`document`
-   * content blocks alongside `text` in the same `user.message` event (see
-   * `DjonikImageInput`/`DjonikDocumentInput`). Both are untrusted source data like
-   * any other external content — they carry no special instruction/tool authority;
-   * that boundary lives in the Managed Agent's own configuration, not in this
-   * transport code.
+   * `parts`' image/document entries are sent as inline base64 `image`/`document`
+   * content blocks in exactly `parts`' order (see `DjonikTurnPart`). All of them
+   * are untrusted source data like any other external content — they carry no
+   * special instruction/tool authority; that boundary lives in the Managed
+   * Agent's own configuration, not in this transport code.
+   *
+   * This is the single implementation both `send` and `sendOrdered` share —
+   * see the FIFO `send`/`sendOrdered` wrappers below for why every call must
+   * still go through one queue.
    */
-  async function sendSerial(
-    text: string,
-    image?: DjonikImageInput | DjonikImageInput[],
-    document?: DjonikDocumentInput | DjonikDocumentInput[],
-  ): Promise<string> {
+  async function sendPartsSerial(parts: DjonikTurnPart[]): Promise<string> {
     unverifiedTrelloWrite = false;
     pendingWriteTool = null;
     pendingWriteObjectId = null;
     pendingWriteDue = null;
     dueOutcomeForTurn = null;
     mcpToolCallsById.clear();
-    const images = image === undefined ? [] : Array.isArray(image) ? image : [image];
-    const documents = document === undefined ? [] : Array.isArray(document) ? document : [document];
     turnTelemetry = createTurnTelemetryCollector(turnSource, session.id, previousSessionUsage);
+
     // A grouped multi-attachment turn (#25) still records only the first
     // image/document here — this per-turn telemetry shape predates grouping
     // and existing consumers/tests depend on it. Full per-fragment counts
     // for a grouped turn are recorded separately by the adapter's
     // content-free grouping telemetry (`buildGroupingTelemetry`).
-    if (images.length > 0) {
-      turnTelemetry.recordInputImage({ mimeType: images[0].mediaType, byteSize: images[0].byteSize });
+    const firstImagePart = parts.find((part): part is Extract<DjonikTurnPart, { type: "image" }> => part.type === "image");
+    const firstDocumentPart = parts.find(
+      (part): part is Extract<DjonikTurnPart, { type: "document" }> => part.type === "document",
+    );
+    if (firstImagePart) {
+      turnTelemetry.recordInputImage({ mimeType: firstImagePart.image.mediaType, byteSize: firstImagePart.image.byteSize });
     }
-    if (documents.length > 0) {
+    if (firstDocumentPart) {
       turnTelemetry.recordInputDocument({
-        mimeType: documents[0].mediaType,
-        byteSize: documents[0].byteSize,
-        hasFilename: Boolean(documents[0].filename),
+        mimeType: firstDocumentPart.document.mediaType,
+        byteSize: firstDocumentPart.document.byteSize,
+        hasFilename: Boolean(firstDocumentPart.document.filename),
       });
     }
 
-    const content: SendableContentBlock[] = [];
-    for (const img of images) {
-      content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
-    }
-    for (const doc of documents) {
-      content.push({
-        type: "document",
-        source: { type: "base64", media_type: doc.mediaType, data: doc.data },
-        ...(doc.filename ? { title: doc.filename } : {}),
-      });
-    }
-    if (text) {
-      content.push({ type: "text", text });
-    }
+    const content = buildContentBlocks(parts);
+    turnTelemetry.recordContentBlockCounts({
+      textBlockCount: content.filter((block) => block.type === "text").length,
+      imageBlockCount: content.filter((block) => block.type === "image").length,
+      documentBlockCount: content.filter((block) => block.type === "document").length,
+    });
     if (content.length === 0) {
       throw new Error("Djonik turn requires non-empty text and/or an attachment.");
     }
@@ -862,34 +935,29 @@ export async function connectToDjonik(
   /**
    * FIFO serialization boundary (#25 live-validation blocker fix). Grouped
    * Telegram dispatches settle on independent timers and can therefore call
-   * `send()` concurrently on the same handle; `sendSerial` above and its
-   * private closure state (`turnTelemetry`, `pendingWriteTool`,
+   * `send`/`sendOrdered` concurrently on the same handle; `sendPartsSerial`
+   * above and its private closure state (`turnTelemetry`, `pendingWriteTool`,
    * `pendingWriteObjectId`, `pendingWriteDue`, `dueOutcomeForTurn`,
    * `unverifiedTrelloWrite`, `mcpToolCallsById`) and the single event-stream
-   * `iterator` are only safe for one in-flight turn at a time. `send` is a
-   * thin queue in front of the unchanged `sendSerial` logic: each call waits
-   * for every previously queued call to fully settle (resolve or reject)
-   * before its own `sendSerial` starts, so at most one turn ever touches the
-   * shared state or reads from `iterator` concurrently. `queueTail` is
-   * derived with a swallowing `.then(ok, ok)` specifically so a failed turn
-   * (an ordinary turn-level error, or even `DjonikSessionDeadError`) never
-   * poisons the chain — the next queued call still runs (and, for a dead
-   * session, will independently discover and report that same dead state;
-   * this handle does not reconnect itself, matching `DjonikSessionManager`
-   * owning that responsibility).
+   * `iterator` are only safe for one in-flight turn at a time. `enqueue` is a
+   * thin queue in front of the unchanged `sendPartsSerial` logic: each call
+   * waits for every previously queued call to fully settle (resolve or
+   * reject) before its own `sendPartsSerial` starts, so at most one turn ever
+   * touches the shared state or reads from `iterator` concurrently.
+   * `queueTail` is derived with a swallowing `.then(ok, ok)` specifically so a
+   * failed turn (an ordinary turn-level error, or even
+   * `DjonikSessionDeadError`) never poisons the chain — the next queued call
+   * still runs (and, for a dead session, will independently discover and
+   * report that same dead state; this handle does not reconnect itself,
+   * matching `DjonikSessionManager` owning that responsibility). Both `send`
+   * and `sendOrdered` (#27) go through this one queue, since both ultimately
+   * call the same `sendPartsSerial`.
    */
   let queueTail: Promise<void> = Promise.resolve();
 
-  function send(
-    text: string,
-    image?: DjonikImageInput | DjonikImageInput[],
-    document?: DjonikDocumentInput | DjonikDocumentInput[],
-  ): Promise<string> {
+  function enqueue(run: () => Promise<string>): Promise<string> {
     const previous = queueTail;
-    const result = previous.then(
-      () => sendSerial(text, image, document),
-      () => sendSerial(text, image, document),
-    );
+    const result = previous.then(run, run);
     queueTail = result.then(
       () => undefined,
       () => undefined,
@@ -897,9 +965,30 @@ export async function connectToDjonik(
     return result;
   }
 
+  function send(
+    text: string,
+    image?: DjonikImageInput | DjonikImageInput[],
+    document?: DjonikDocumentInput | DjonikDocumentInput[],
+  ): Promise<string> {
+    const images = image === undefined ? [] : Array.isArray(image) ? image : [image];
+    const documents = document === undefined ? [] : Array.isArray(document) ? document : [document];
+    // Legacy fixed order (#22/#24/#25, unchanged): every image, then every
+    // document, then the text block (if any).
+    const parts: DjonikTurnPart[] = [
+      ...images.map((img): DjonikTurnPart => ({ type: "image", image: img })),
+      ...documents.map((doc): DjonikTurnPart => ({ type: "document", document: doc })),
+      ...(text ? [{ type: "text", text } as const] : []),
+    ];
+    return enqueue(() => sendPartsSerial(parts));
+  }
+
+  function sendOrdered(parts: DjonikTurnPart[]): Promise<string> {
+    return enqueue(() => sendPartsSerial(parts));
+  }
+
   function close(): void {
     stream.controller.abort();
   }
 
-  return { sessionId: session.id, send, close };
+  return { sessionId: session.id, send, sendOrdered, close };
 }
