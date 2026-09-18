@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { DjonikDocumentInput, DjonikImageInput, DjonikSessionHandle } from "./djonikClient.js";
+import type Anthropic from "@anthropic-ai/sdk";
+import { connectToDjonik, type DjonikDocumentInput, type DjonikImageInput, type DjonikSessionHandle } from "./djonikClient.js";
 import type { DjonikSessionManager } from "./telegramAdapter.js";
 import { MessageGroupBuffer } from "./messageGrouping.js";
 import { createGroupDispatchHandlers } from "./telegramDispatch.js";
@@ -172,4 +173,97 @@ test("integration: a failed grouped attachment never calls session.send (structu
   assert.equal(calls.length, 0, "session.send must never be called for a failed grouped intake");
   assert.equal(sentMessages.length, 1, "the user still gets exactly one visible failure message");
   assert.match(sentMessages[0].text, /file too large/);
+});
+
+// --- #25 live-validation blocker regression: two independent groups whose
+// debounce timers happen to fire only a few ms apart must not race two
+// concurrent turns on the same underlying Managed Session. This reproduces
+// the exact live-validation incident (Scenario A: `groupingWaitMs` 1209 and
+// 1215 — two singleton groups settling ~6ms apart) end-to-end, against a
+// REAL `connectToDjonik` session (not the always-resolves-immediately fake
+// used by the tests above), to prove the fix lives at the
+// `DjonikSessionHandle` boundary, not merely in `MessageGroupBuffer`.
+
+function createControllableAnthropicClient(): { client: Anthropic; sendCalls: unknown[]; push: (event: unknown) => void } {
+  const sendCalls: unknown[] = [];
+  const queue: unknown[] = [];
+  const waiters: Array<(event: unknown) => void> = [];
+
+  function push(event: unknown): void {
+    const waiter = waiters.shift();
+    if (waiter) waiter(event);
+    else queue.push(event);
+  }
+
+  const stream = {
+    controller: { abort: () => {} },
+    [Symbol.asyncIterator]() {
+      return {
+        next: (): Promise<{ value: unknown; done: boolean }> => {
+          if (queue.length > 0) return Promise.resolve({ value: queue.shift(), done: false });
+          return new Promise((resolve) => {
+            waiters.push((event) => resolve({ value: event, done: false }));
+          });
+        },
+      };
+    },
+  };
+
+  const client = {
+    beta: {
+      sessions: {
+        create: async () => ({ id: "session_test123" }),
+        events: {
+          stream: async () => stream,
+          send: async (_sessionId: string, params: unknown) => {
+            sendCalls.push(params);
+          },
+        },
+      },
+    },
+  } as unknown as Anthropic;
+
+  return { client, sendCalls, push };
+}
+
+test("integration (#25 live-validation blocker): two independent groups settling ~6ms apart still serialize into two separate, correctly-attributed Managed Session turns", async () => {
+  const { client, sendCalls, push } = createControllableAnthropicClient();
+  const realSession = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+  const djonikSession = createFakeSessionManager(realSession);
+  const sentMessages: Array<{ chatId: number; text: string }> = [];
+  const { onDispatch, onFailure } = createGroupDispatchHandlers({
+    djonikSession,
+    sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); },
+    logError: () => {},
+  });
+  const buffer = new MessageGroupBuffer({ adjacentWindowMs: 5, albumSettleWindowMs: 5, onDispatch, onFailure });
+
+  // Group 1: a genuine standalone fragment, left alone long enough to settle on its own.
+  buffer.addFragment({ chatId: 1, userId: 100, messageId: 1, text: "Тест A, фрагмент 1" });
+  await sleep(20);
+  // Group 2: a second, independent standalone fragment (outside group 1's window,
+  // exactly like the live incident) whose own timer will fire only a few ms after
+  // group 1's dispatch callback started running.
+  buffer.addFragment({ chatId: 1, userId: 100, messageId: 2, text: "Тест A, фрагмент 2" });
+
+  await sleep(8); // both dispatch callbacks have now fired; neither provider turn has finished yet
+
+  assert.equal(sendCalls.length, 1, "only group 1's turn should have reached the provider so far");
+
+  push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 1" }] });
+  push({ type: "session.status_idle" });
+  await sleep(10);
+
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].text, "Відповідь 1");
+  assert.equal(sendCalls.length, 2, "group 2's turn starts its own provider send only after group 1 fully finished");
+
+  push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 2" }] });
+  push({ type: "session.status_idle" });
+  await sleep(10);
+
+  assert.equal(sentMessages.length, 2);
+  assert.equal(sentMessages[1].text, "Відповідь 2", "group 2's reply is its own, not overwritten/mixed with group 1's");
+
+  realSession.close();
 });

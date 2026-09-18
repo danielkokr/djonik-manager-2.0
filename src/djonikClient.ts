@@ -777,7 +777,7 @@ export async function connectToDjonik(
    * that boundary lives in the Managed Agent's own configuration, not in this
    * transport code.
    */
-  async function send(
+  async function sendSerial(
     text: string,
     image?: DjonikImageInput | DjonikImageInput[],
     document?: DjonikDocumentInput | DjonikDocumentInput[],
@@ -857,6 +857,44 @@ export async function connectToDjonik(
       onTurnTelemetry?.(completedTelemetry);
       turnTelemetry = null;
     }
+  }
+
+  /**
+   * FIFO serialization boundary (#25 live-validation blocker fix). Grouped
+   * Telegram dispatches settle on independent timers and can therefore call
+   * `send()` concurrently on the same handle; `sendSerial` above and its
+   * private closure state (`turnTelemetry`, `pendingWriteTool`,
+   * `pendingWriteObjectId`, `pendingWriteDue`, `dueOutcomeForTurn`,
+   * `unverifiedTrelloWrite`, `mcpToolCallsById`) and the single event-stream
+   * `iterator` are only safe for one in-flight turn at a time. `send` is a
+   * thin queue in front of the unchanged `sendSerial` logic: each call waits
+   * for every previously queued call to fully settle (resolve or reject)
+   * before its own `sendSerial` starts, so at most one turn ever touches the
+   * shared state or reads from `iterator` concurrently. `queueTail` is
+   * derived with a swallowing `.then(ok, ok)` specifically so a failed turn
+   * (an ordinary turn-level error, or even `DjonikSessionDeadError`) never
+   * poisons the chain — the next queued call still runs (and, for a dead
+   * session, will independently discover and report that same dead state;
+   * this handle does not reconnect itself, matching `DjonikSessionManager`
+   * owning that responsibility).
+   */
+  let queueTail: Promise<void> = Promise.resolve();
+
+  function send(
+    text: string,
+    image?: DjonikImageInput | DjonikImageInput[],
+    document?: DjonikDocumentInput | DjonikDocumentInput[],
+  ): Promise<string> {
+    const previous = queueTail;
+    const result = previous.then(
+      () => sendSerial(text, image, document),
+      () => sendSerial(text, image, document),
+    );
+    queueTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
   function close(): void {

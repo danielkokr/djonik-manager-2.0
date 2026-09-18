@@ -8,6 +8,8 @@ import {
   extractVerifiedDueFromTrelloReadContent,
   buildVerifiedDueConfirmation,
   finalizeDueDateReply,
+  DjonikSessionDeadError,
+  type DjonikTurnTelemetry,
 } from "./djonikClient.js";
 
 /**
@@ -51,6 +53,74 @@ function createFakeClient(events: unknown[]): { client: Anthropic; createCalls: 
   } as unknown as Anthropic;
 
   return { client, createCalls, sendCalls };
+}
+
+/**
+ * A fake client whose event stream is driven entirely by the test (`push`),
+ * instead of a fixed pre-scripted array consumed immediately. This is the
+ * seam needed to prove FIFO serialization of concurrent `send()` calls
+ * (#25 live-validation blocker): `createFakeClient` above always resolves
+ * `iterator.next()` right away, so two overlapping `send()` calls could race
+ * through it without ever revealing a serialization bug. Here, `next()`
+ * genuinely suspends until the test calls `push(event)`, so a test can
+ * assert exactly how many provider `events.send` calls have happened at any
+ * point while a turn is deliberately held open — the same shape as two real
+ * Managed Agent turns racing on the wire.
+ */
+function createStreamedFakeClient(): { client: Anthropic; createCalls: unknown[]; sendCalls: unknown[]; push: (event: unknown) => void } {
+  const createCalls: unknown[] = [];
+  const sendCalls: unknown[] = [];
+  const queue: unknown[] = [];
+  const waiters: Array<(event: unknown) => void> = [];
+
+  function push(event: unknown): void {
+    const waiter = waiters.shift();
+    if (waiter) {
+      waiter(event);
+    } else {
+      queue.push(event);
+    }
+  }
+
+  const stream = {
+    controller: { abort: () => {} },
+    [Symbol.asyncIterator]() {
+      return {
+        next: (): Promise<{ value: unknown; done: boolean }> => {
+          if (queue.length > 0) return Promise.resolve({ value: queue.shift(), done: false });
+          return new Promise((resolve) => {
+            waiters.push((event) => resolve({ value: event, done: false }));
+          });
+        },
+      };
+    },
+  };
+
+  const client = {
+    beta: {
+      sessions: {
+        create: async (params: unknown) => {
+          createCalls.push(params);
+          return { id: "session_test123" };
+        },
+        events: {
+          stream: async () => stream,
+          send: async (_sessionId: string, params: unknown) => {
+            sendCalls.push(params);
+          },
+        },
+      },
+    },
+  } as unknown as Anthropic;
+
+  return { client, createCalls, sendCalls, push };
+}
+
+/** Lets any currently-resolved microtasks (promise `.then` chains already
+ *  scheduled) run to completion before an assertion, without depending on a
+ *  specific hop count — safer than a fixed number of `await Promise.resolve()`. */
+function flushMicrotasks(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 const MEMORY_INSTRUCTIONS =
@@ -984,5 +1054,199 @@ test("text-only and image turns with no Trello activity are unaffected by the du
   const reply = await session.send("Привіт!");
 
   assert.equal(reply, "Готово.");
+  session.close();
+});
+
+// --- #25 live-validation blocker: DjonikSessionHandle.send() must FIFO-serialize
+// concurrent calls on one handle. Live acceptance testing (Scenario A) found two
+// grouped-Telegram dispatches settling only ~6ms apart, both calling `send()`
+// concurrently on the same session. `send()`'s per-turn closure state
+// (turnTelemetry, pendingWriteTool/ObjectId/Due, dueOutcomeForTurn,
+// unverifiedTrelloWrite, mcpToolCallsById) and the single event-stream
+// `iterator` are only safe for one in-flight turn — see
+// `docs/12_ISSUE_25_IMPLEMENTATION_REPORT.md` for the full incident writeup.
+
+test("Scenario A: two concurrent send() calls are FIFO-serialized — turn 2's provider send never starts before turn 1 fully finishes", async () => {
+  const { client, sendCalls, push } = createStreamedFakeClient();
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const p1 = session.send("перший turn");
+  const p2 = session.send("другий turn");
+
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 1, "turn 2 must not reach the provider before turn 1 has even started resolving");
+
+  push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 1" }] });
+  push({ type: "session.status_idle" });
+  const reply1 = await p1;
+  assert.equal(reply1, "Відповідь 1", "reply must stay attributed to the caller that sent turn 1");
+
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 2, "turn 2 starts its own provider send only once turn 1 has fully settled");
+
+  push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 2" }] });
+  push({ type: "session.status_idle" });
+  const reply2 = await p2;
+  assert.equal(reply2, "Відповідь 2", "reply must stay attributed to the caller that sent turn 2, not swapped with turn 1");
+
+  session.close();
+});
+
+test("Scenario B: a failed first queued turn does not poison the queue — the second queued turn still runs", async () => {
+  const { client, sendCalls, push } = createStreamedFakeClient();
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const p1 = session.send("перший turn");
+  const p2 = session.send("другий turn");
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 1);
+
+  // Ordinary (non-terminal) turn failure: session ends idle with no assistant text.
+  push({ type: "session.status_idle" });
+  await assert.rejects(() => p1, /no text reply/);
+
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 2, "the second queued turn must still start after the first one failed");
+
+  push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 2" }] });
+  push({ type: "session.status_idle" });
+  assert.equal(await p2, "Відповідь 2");
+
+  session.close();
+});
+
+test("Scenario C: a DjonikSessionDeadError from the first queued turn stays correctly typed, and the already-queued next turn still runs on the same (now-dead) handle without any auto-reconnect", async () => {
+  const { client, sendCalls, push } = createStreamedFakeClient();
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const p1 = session.send("перший turn");
+  const p2 = session.send("другий turn");
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 1);
+
+  push({ type: "session.status_terminated" });
+  await assert.rejects(() => p1, DjonikSessionDeadError);
+
+  // Documented current behavior: the queue does not skip or reconnect — it
+  // still starts the next queued turn on the same handle, which independently
+  // hits the same dead stream. `DjonikSessionManager` (the Telegram adapter's
+  // one-session-per-process cache), not `DjonikSessionHandle` itself, owns
+  // reconnection via `DjonikSessionDeadError`.
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 2, "the queue still attempts the next turn rather than skipping it");
+  push({ type: "session.status_terminated" });
+  await assert.rejects(() => p2, DjonikSessionDeadError);
+
+  session.close();
+});
+
+test("Scenario D: two concurrently requested turns produce two independent telemetry records — no mixed tool counts, no swapped media flags", async () => {
+  const { client, push } = createStreamedFakeClient();
+  const telemetry: DjonikTurnTelemetry[] = [];
+  const session = await connectToDjonik(
+    client, "agent_x", "env_x", "memstore_x", "vlt_x", undefined, (t) => telemetry.push(t),
+  );
+
+  const p1 = session.send("перший", { data: "QQ==", mediaType: "image/jpeg", byteSize: 111 });
+  const p2 = session.send("другий", undefined, { data: "cGRm", mediaType: "application/pdf", byteSize: 222 });
+
+  await flushMicrotasks();
+  push(mcpToolUse("call_1", "trelloSearch"));
+  push(mcpToolResult("call_1"));
+  push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 1" }] });
+  push({ type: "session.status_idle" });
+  await p1;
+
+  push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 2" }] });
+  push({ type: "session.status_idle" });
+  await p2;
+
+  assert.equal(telemetry.length, 2);
+  assert.equal(telemetry[0].hasImage, true, "turn 1's own image flag must not be lost");
+  assert.equal(telemetry[0].hasFile, false, "turn 1 must not inherit turn 2's document");
+  assert.deepEqual(telemetry[0].toolNames, ["trelloSearch"], "turn 1's tool call must not leak into turn 2's count");
+  assert.equal(telemetry[1].hasImage, false, "turn 2 must not inherit turn 1's image");
+  assert.equal(telemetry[1].hasFile, true, "turn 2's own document flag must not be lost");
+  assert.deepEqual(telemetry[1].toolNames, [], "turn 2 had no tool calls of its own");
+
+  session.close();
+});
+
+test("Scenario E: a concurrently queued read-only turn cannot reset an earlier queued turn's pending Trello write-verification state", async () => {
+  const { client, sendCalls, push } = createStreamedFakeClient();
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const p1 = session.send("Онови картку A"); // will write + same-card verify
+  const p2 = session.send("Яка сьогодні погода?"); // ordinary turn, no Trello activity at all
+
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 1, "turn 2 cannot run concurrently and therefore cannot touch turn 1's pending-write state");
+
+  push(mcpToolUse("call_1", "trelloWriteCard", { cardId: "card_A" }));
+  push(mcpToolResult("call_1"));
+  push(mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }));
+  push(mcpToolResult("call_2"));
+  push({ type: "agent.message", content: [{ type: "text", text: "Готово (turn 1)." }] });
+  push({ type: "session.status_idle" });
+
+  assert.equal(await p1, "Готово (turn 1).", "turn 1 succeeds purely from its own verification");
+
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 2, "turn 2 only starts once turn 1's own verification has fully settled");
+  push({ type: "agent.message", content: [{ type: "text", text: "Сонячно." }] });
+  push({ type: "session.status_idle" });
+  assert.equal(await p2, "Сонячно.", "turn 2's reply remains its own, unaffected by turn 1's write");
+
+  session.close();
+});
+
+test("Scenario E (inverse order): a queued write+verify turn still verifies correctly when an earlier read-only turn is queued ahead of it", async () => {
+  const { client, push } = createStreamedFakeClient();
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const p1 = session.send("Привіт");
+  const p2 = session.send("Онови картку A");
+
+  await flushMicrotasks();
+  push({ type: "agent.message", content: [{ type: "text", text: "Привіт!" }] });
+  push({ type: "session.status_idle" });
+  assert.equal(await p1, "Привіт!");
+
+  push(mcpToolUse("call_1", "trelloWriteCard", { cardId: "card_A" }));
+  push(mcpToolResult("call_1"));
+  push(mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }));
+  push(mcpToolResult("call_2"));
+  push({ type: "agent.message", content: [{ type: "text", text: "Готово (turn 2)." }] });
+  push({ type: "session.status_idle" });
+  assert.equal(await p2, "Готово (turn 2).", "turn 2's own write is still verified correctly after an unrelated turn 1");
+
+  session.close();
+});
+
+test("Scenario F (#23 regression): deterministic Kyiv due-date finalization is unaffected by concurrent request pressure from another queued turn", async () => {
+  const { client, push } = createStreamedFakeClient();
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const p1 = session.send("Онови дедлайн картки A на 22 вересня 00:30 за Києвом");
+  const p2 = session.send("Привіт"); // unrelated concurrently-requested turn
+
+  await flushMicrotasks();
+  push(mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A", due: "2026-09-21T21:30:00.000Z" }));
+  push(mcpToolResult("call_1"));
+  push(mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }));
+  push(mcpToolResult("call_2", false, trelloCardReadContent("2026-09-21T21:30:00.000Z")));
+  push({ type: "agent.message", content: [{ type: "text", text: "Понеділок, 22 вересня 2026, 00:30" }] });
+  push({ type: "session.status_idle" });
+
+  assert.equal(
+    await p1,
+    "Готово. Trello підтвердив дедлайн: вівторок, 22 вересня 2026, 00:30 за Києвом.",
+    "the #23 deterministic Kyiv weekday/date backstop must be unaffected by a second turn queued behind it",
+  );
+
+  push({ type: "agent.message", content: [{ type: "text", text: "Привіт!" }] });
+  push({ type: "session.status_idle" });
+  assert.equal(await p2, "Привіт!");
+
   session.close();
 });

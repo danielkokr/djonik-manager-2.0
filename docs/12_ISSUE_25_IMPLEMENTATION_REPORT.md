@@ -322,3 +322,165 @@ Backward compatibility with #22/#24 is additionally proven by *"a single image/d
 ### 24.11 Test/check results
 
 `npm run typecheck`: clean, no errors. `npm test`: **146/146 pass** (133 from the original pass + 8 new `messageGrouping.test.ts` tests + 5 new `telegramDispatch.test.ts` tests). `git diff --check`: clean (only pre-existing CRLF-normalization informational warnings, no whitespace errors). No paid Managed Agent session, no live Trello mutation, no commit/push/deploy, no roadmap/issue edit.
+
+## 25. Live validation blocker — concurrent Managed Session sends
+
+> **Scope of this section:** discovered during the first authorized bounded live-acceptance validation pass for #25 (Product Owner guardrail: max $0.50 / 5 paid Sessions / 1 safe Trello test mutation). Live validation was paused after Scenario A; this section documents the defect found, the fix applied, and its tests. No commit/push/deploy, no roadmap/issue edit, no further paid Managed Agent session or Trello mutation was run while producing this section.
+
+### 25.1 What was observed live
+
+Scenario A asked for two short text fragments sent close together. The two Telegram messages actually arrived **1–2 seconds apart** (confirmed with the Product Owner) — outside the 1200ms adjacent-fragment window — so `MessageGroupBuffer` correctly treated them as two independent singleton groups rather than merging them. That part was correct behavior, not a bug.
+
+The real defect was in what happened next. Exact telemetry from the live run:
+
+```
+[group] {"groupedFragmentCount":1,...,"groupingReason":"single","groupingWaitMs":1209}
+[group] {"groupedFragmentCount":1,...,"groupingReason":"single","groupingWaitMs":1215}
+[turn]  {...one single turn-telemetry record, five minutes later, nothing more...}
+```
+
+Both groups' debounce timers fired only **~6ms apart** (`1215 - 1209`), and each independently called `onDispatch → DjonikSessionHandle.send()` on the **same** Managed Session. Only one `[turn]` telemetry record was ever observed in over five minutes of waiting, even though `turnTelemetry.summary()`/`onTurnTelemetry` fires unconditionally from a `finally` block — meaning the second `send()` call's turn was not completing cleanly. Live validation was paused at this point rather than proceeding to Scenario B–G or the Scenario E Trello mutation, per the reliability invariant against wrong-target/false-success mutations (`docs/00_DJONIK_PRODUCT_CONTRACT.md` §10).
+
+### 25.2 Root cause
+
+`connectToDjonik` (`src/djonikClient.ts`) opens exactly **one** Managed Session event-stream iterator and closes over a set of **per-turn mutable variables** shared by every call to `send()`: `turnTelemetry`, `pendingWriteTool`, `pendingWriteObjectId`, `pendingWriteDue`, `dueOutcomeForTurn`, `unverifiedTrelloWrite`, and `mcpToolCallsById`. `send()` resets these at its start and reads/writes them throughout `runTurn`'s event loop, on the assumption that only one `send()` call is ever in flight at a time.
+
+Before #25, that assumption held structurally: grammY processes Telegram updates strictly sequentially, and every pre-#25 handler `await`ed the full `session.send()` call before returning, so grammY's own sequential loop serialized turns as a side effect. #25 deliberately made handlers fire-and-forget (`buffer.addFragment(...)` is synchronous) so Telegram ingestion would never block on a slow Managed Agent turn — but nothing was added to serialize the `send()` calls that `MessageGroupBuffer`'s own independent per-group timers can trigger. Two different groups (different chat/user keys, or the same key reused after settlement, as in the live incident) can have their debounce timers fire within milliseconds of each other, and both `onDispatch` callbacks call `session.send()` without waiting for one another.
+
+This is an **architecture/reliability blocker**, not a cosmetic bug: concurrent `send()` calls on one handle race on the shared closure state and on the single event-stream `iterator.next()` calls, which can corrupt telemetry attribution, the same-card write-verification state machine, and the #23 deterministic due-date finalization — and, most seriously, risks a Trello write's verification being satisfied (or falsely denied) by an unrelated concurrent turn's read, which is exactly the "mutation of the wrong target" / "false success claim" class of defect the product contract treats as unacceptable.
+
+### 25.3 Chosen fix
+
+A minimal in-process FIFO queue directly in front of the existing, unchanged turn logic, at the `DjonikSessionHandle` boundary (`src/djonikClient.ts`) — not in `telegramDispatch.ts` or `MessageGroupBuffer`, per the Product Lead decision, since the unsafe shared state and the single event iterator live inside the session handle and must protect every current and future caller of it, not only Telegram.
+
+- The original `send()` implementation was renamed to a private `sendSerial()`, completely unchanged.
+- A new public `send()` wraps it: `const result = queueTail.then(() => sendSerial(...), () => sendSerial(...)); queueTail = result.then(() => undefined, () => undefined); return result;`
+- Each call's `sendSerial` only starts once every previously queued call's promise has fully settled (resolved **or** rejected) — the `.then(ok, onRejected)` pairing on `queueTail` means a failed turn still lets the next one run.
+- `queueTail` itself is derived with a swallowing `.then(() => undefined, () => undefined)` specifically so the chain itself is never a rejected promise — an ordinary turn failure or a `DjonikSessionDeadError` never permanently blocks the queue.
+- No new Managed Session is created because turns overlap; there is exactly one session/handle, exactly one queue in front of it.
+- Telegram ingestion (`MessageGroupBuffer`) is completely unaffected: it still fires `onDispatch` as soon as a group settles, with zero blocking. The queue is invisible to callers except for ordering.
+
+### 25.4 Queue failure semantics
+
+- **FIFO, always.** Call order is call order, not settlement-time order — the queue is built by chaining on `queueTail` synchronously inside `send()`, before any `await`.
+- **A failed turn does not poison the queue.** Verified by Scenario B: turn 1 fails (`no text reply`), turn 2 still runs and succeeds.
+- **`DjonikSessionDeadError` stays correctly typed** and does not corrupt verification/telemetry state for the turn that hit it (Scenario C). The already-queued next turn on that same handle is **not** skipped and is **not** auto-reconnected by `DjonikSessionHandle` — it still runs against the same now-dead stream and independently fails the same way. Reconnection remains `DjonikSessionManager`'s responsibility (`src/telegramAdapter.ts`'s `createSessionManager`/`handleSessionError`, unchanged), per the explicit instruction not to invent reconnection inside the handle.
+- **`close()` is unaffected** — it aborts the stream controller directly; any turn still queued behind an aborted stream fails through the same existing `DjonikSessionDeadError`/stream-ended path as before, now simply also queued rather than potentially concurrent.
+
+### 25.5 Files changed
+
+- `src/djonikClient.ts` — `send` renamed to `sendSerial` (body byte-for-byte unchanged); new public `send()` added as a small FIFO queue wrapper (`queueTail`); no change to `DjonikSessionHandle`'s public type signature.
+- `src/djonikClient.test.ts` — added `createStreamedFakeClient` (a controllable, `push`-driven fake event stream, needed because the existing `createFakeClient` resolves every event immediately and therefore cannot expose a race) and `flushMicrotasks`; added 7 new tests (Scenarios A–F, with an inverse-order E variant).
+- `src/telegramDispatch.test.ts` — added one integration-level regression test reproducing the exact live incident (two independent groups settling ~6ms apart) end-to-end against a real `connectToDjonik` session (via a locally-defined controllable fake Anthropic client), proving the serialization fix lives at the `DjonikSessionHandle` boundary and is visible through the real `MessageGroupBuffer` + `createGroupDispatchHandlers` integration path, not only at the unit level.
+- `docs/12_ISSUE_25_IMPLEMENTATION_REPORT.md` — this §25.
+
+No change to `messageGrouping.ts` (grouping windows, `MessageGroupBuffer` architecture), no change to `telegramCli.ts`, no change to #23's deterministic due-date logic, no change to same-card verify-after-write logic — only the addition of the queue wrapper and its tests.
+
+### 25.6 Tests added and what they prove
+
+| Scenario | Test | Proves |
+|---|---|---|
+| A | *"two concurrent send() calls are FIFO-serialized..."* | Turn 2's provider `events.send` call does not fire until turn 1 fully settles; replies stay correctly attributed (not swapped). |
+| B | *"a failed first queued turn does not poison the queue..."* | An ordinary turn-level failure (empty reply) does not block the next queued turn. |
+| C | *"a DjonikSessionDeadError from the first queued turn stays correctly typed..."* | `DjonikSessionDeadError` propagates correctly; the queue still attempts (does not skip) the next turn on the dead handle; no invented reconnection. |
+| D | *"two concurrently requested turns produce two independent telemetry records..."* | No mixed tool-call counts, no swapped `hasImage`/`hasFile` flags, no usage attribution swap between the two turns' `DjonikTurnTelemetry` records. |
+| E | *"a concurrently queued read-only turn cannot reset an earlier queued turn's pending Trello write-verification state"* (+ inverse order) | The same-card write-verification state machine (`pendingWriteTool`/`pendingWriteObjectId`/`unverifiedTrelloWrite`) cannot be reset by an unrelated concurrently-requested turn, in either queue order. |
+| F | *"deterministic Kyiv due-date finalization is unaffected by concurrent request pressure..."* | Issue #23's `dueOutcomeForTurn`/Kyiv weekday-date finalization is unaffected when another turn is queued alongside it. |
+| G (integration) | *"two independent groups settling ~6ms apart still serialize into two separate, correctly-attributed Managed Session turns"* (`telegramDispatch.test.ts`) | The exact live incident, reproduced end-to-end through the real `MessageGroupBuffer` + `createGroupDispatchHandlers` + a real `connectToDjonik` session: provider `events.send` calls are serialized; both replies are delivered, correctly attributed, to the right chat. |
+
+**Proof the tests are real, not vacuous:** the fix (`send`/`sendSerial` split and `queueTail` wrapper) was temporarily reverted with `git stash` and the suite re-run; all 8 new tests failed at exactly the assertion proving serialization (`2 !== 1`, i.e. the second provider call fired before the first turn settled), confirming these tests genuinely fail without the fix and pass with it.
+
+### 25.7 Regression evidence
+
+- **#23 due-date determinism:** Scenario F above, plus all pre-existing #23 tests in `djonikClient.test.ts`, still pass unchanged.
+- **Same-card verify-after-write:** Scenario E (both orders) above, plus all pre-existing write-verification tests, still pass unchanged.
+- **#25 grouping/dispatch:** all pre-existing `messageGrouping.test.ts` and `telegramDispatch.test.ts` tests (grouping windows, isolation, one-dispatch guarantee, failure fail-closed) still pass unchanged; no grouping window value changed (adjacent remains 1200ms, album settle remains 1500ms).
+- **Full suite:** **154/154 tests pass** (146 pre-existing + 7 new `djonikClient.test.ts` scenarios + 1 new `telegramDispatch.test.ts` integration test).
+- `npm run typecheck`: clean, no errors.
+- `git diff --check`: clean (only pre-existing CRLF-normalization informational warnings on Windows line endings, no whitespace errors).
+
+### 25.8 Live-validation budget accounting (unchanged authorization)
+
+Already consumed before this fix, under the Product Owner's original guardrail (max $0.50 / 5 paid Sessions / 1 safe Trello test mutation): **1 paid Managed Session, ≈$0.08 list cost, 0 Trello mutations.** This fix pass itself made **zero** additional Managed Agent API calls and **zero** Trello calls — all 8 new tests run against local fakes only (`createStreamedFakeClient` / `createControllableAnthropicClient`), exactly like every other test in the suite. Remaining under the same, not-reset authorization: at most 4 additional paid Sessions and ≈$0.42 additional list cost, still at most 1 safe Trello mutation. No commit, push, deploy, roadmap edit, or issue close was performed. Live validation (Scenario A onward) remains paused pending Product Lead review of this fix.
+
+## 26. Live acceptance validation A–G — resumed and completed after the concurrency fix
+
+> **Scope:** second, resumed live-acceptance pass for #25, run against the fixed local code (uncommitted) after Product Lead review of §25. Pre-flight `npm run typecheck` / `npm test` (154/154) / `git diff --check` were re-run clean immediately before starting. The adapter ran with `DJONIK_TURN_TELEMETRY=1 DJONIK_TRACE=1`. No commit/push/deploy, no roadmap edit, no issue close.
+
+### 26.1 Sessions and cumulative spend
+
+| Session | Purpose | Turns | List cost |
+|---|---|---:|---:|
+| `sesn_01MBSXTXVhLpKUGENFJPuS55` | First live-validation attempt (Scenario A) — discovered the concurrent-send race; paused before completing | 1 | $0.08 |
+| `sesn_012Tm5FHUVfoQ5RJ7v49GCv1` | Resumed acceptance run (Scenario A retry through Scenario G), on the fixed code | 12 | $0.15 |
+| **Total** | | **13 turns / 2 paid Sessions** | **$0.23** |
+
+Against the guardrail: 2 of 5 max paid Sessions, $0.23 of $0.50 max list cost, 1 of 1 max Trello mutation. Stopped once A–G evidence was sufficient, well inside every declared ceiling.
+
+### 26.2 Scenario A — two adjacent text groups, concurrency regression re-test
+
+First attempt in the resumed session: Group 1 (`Тест A1...` ×2) merged correctly (`groupedFragmentCount:2`, `groupingReason:"adjacent_window"`, `groupingWaitMs:1512`) → reply `GROUP-A1.`. Group 2's two fragments arrived more than 1200ms apart (confirmed with the Product Owner — a human-timing artifact of two separate Telegram sends, not a code defect) and dispatched as two independent `single` groups (`groupingWaitMs:1212` and `1200`) → replies `Чекаю на друге повідомлення групи А2.` then `GROUP-A2.`. One retry of only Group 2 (no new Session, Group 1 not repeated) produced the intended merge: `groupedFragmentCount:2`, `groupingReason:"adjacent_window"`, `groupingWaitMs:1513` → reply `GROUP-A2.` (single, correctly attributed).
+
+**Concurrency evidence:** all four/five dispatches in this session ran strictly sequentially — `recordedAt` timestamps are seconds apart, each turn's `cacheReadInputTokens` correctly carries forward the prior turn's cache state (proving the underlying stream was consumed in order by one turn at a time), and no reply was ever mixed between groups. Combined with the deterministic local proof (§25.6 Scenario A/G tests, confirmed via `git stash` to fail without the fix), this constitutes sufficient serialization evidence. A live sub-millisecond-apart dispatch race (as the original incident's accidental 6ms gap) was not reproduced by design in this retry — manual Telegram sends cannot reliably hit that window — and is recorded as a residual limitation below.
+
+**Verdict: PASS.**
+
+### 26.3 Scenario B — text + screenshot
+
+First attempt: the screenshot carried the instruction text as its own Telegram **caption** (one message, not two), so the buffer correctly reported `groupedFragmentCount:1`, `groupingReason:"single"`, `textCount:1`, `imageCount:1` — valid but exercising the pre-existing #22 caption+image path, not #25's cross-fragment grouping. Reply correctly named the pictured code, `GROUP-IMAGE-742.`.
+
+Retry with a genuinely separate photo (no caption) immediately followed by a separate text message again split into two `single` dispatches (`groupingWaitMs:1208` then `1202`) for the same human-timing reason as Scenario A — image upload + a second manual send reliably exceeds 1200ms. Both turns still succeeded correctly and independently (image turn correctly read `GROUP-IMAGE-742`; text turn replied appropriately), with zero cross-contamination.
+
+Per the Product Owner's standing instruction (apply the same policy as Scenario A: do not spend further budget chasing manual sub-1200ms timing), this is accepted as evidence that: real image content reaches Djonik correctly (twice, via two different paths), no duplicate Managed Agent invocation, zero Trello mutation. The specific claim "two separately-sent fragments (text then image) merge via `adjacent_window`" is **not** demonstrated live — it remains proven only by local deterministic tests (`messageGrouping.test.ts`'s text+image case, `telegramDispatch.test.ts`'s integration case).
+
+**Verdict: PASS, with a recorded residual limitation** (see §26.9).
+
+### 26.4 Scenario C — Telegram album
+
+A genuine 2-item Telegram album (native multi-select send, so no manual single-tap timing was involved) with caption "Назви обидва коди у правильному порядку." on the first image. Result: `groupedFragmentCount:2`, `groupedImageCount:2`, `groupingReason:"media_group_id"`, `groupingWaitMs:1505`, one turn. Reply: `ALBUM-FIRST-11\nALBUM-SECOND-22` — both codes, correct order, one coherent turn, zero Trello mutation.
+
+**Verdict: PASS.**
+
+### 26.5 Scenario D — isolation
+
+No additional live traffic was generated for this scenario — sufficient live evidence already existed from Scenario A/B's own timing splits: every time a real gap exceeded ~1200ms, the buffer independently and correctly produced a **separate** `single`-reason dispatch rather than merging it with the prior fragment (five such live-observed cases: Scenario A's original A2 split, Scenario B's photo/text split). This directly demonstrates the required "a message sent outside the 1200ms adjacent window becomes a separate intake" behavior without spending extra Session/turn budget.
+
+**Verdict: PASS (evidence reused from A/B, no additional spend).**
+
+### 26.6 Scenario E — one explicit grouped Trello task (the sole authorized mutation)
+
+`Тест E...` + `Створи з цих двох повідомлень одну тестову задачу...` merged correctly (`groupedFragmentCount:2`, `groupingReason:"adjacent_window"`). Djonik asked one legitimate clarifying question (which board/list — zero tool calls, zero mutation while ambiguous, matching the product contract's ambiguity-before-write requirement), was given `Backlog` (not found as a board), then `Extract` (also not the intended board), then confirmed against the actual `Djonik` board/`Backlog` list. Exact `trace` sequence for the write turn:
+
+```
+trelloReadList (list_by_board, Djonik board)
+trelloWriteCard (action:create, name:"[TEST #25] Grouped intake verification", listId:.../6aa00b20c257a1b4d852e51f)
+  → result ok
+verification_nudge_sent (attempt 1)
+trelloReadCard (action:get, cardIdOrUrl:.../6aacf1b39012aabfcc213b72)
+  → result ok
+```
+
+Exactly **one** `trelloWriteCard` call across the entire validation run (confirmed by grepping every `[trace]` line), followed by exactly one same-card `trelloReadCard` naming the identical card ARI the write just created. Success was claimed by Djonik only after that verification (the one bounded corrective nudge fired first, then verified — the same accepted Foundation 7 mechanism, working as designed). No duplicate write, no cross-turn verification contamination (single active turn at a time throughout).
+
+**Verdict: PASS.** Trello mutation count: **1 of 1 authorized**, verified.
+
+### 26.7 Scenario F — grouped pre-send failure
+
+No paid Managed Agent traffic was used for this scenario, per the instruction to avoid repeating already-deterministic local coverage. Existing local evidence stands: `messageGrouping.test.ts`'s fail-fast/fail-closed tests and `telegramDispatch.test.ts`'s *"a failed grouped attachment never calls session.send (structural zero-mutation guarantee)"* test, all still passing (154/154, §26.1's pre-flight run).
+
+**Verdict: PASS (local evidence only, by design).**
+
+### 26.8 Scenario G — regressions
+
+- **Standalone text:** observed live multiple times during Scenario E's clarification exchange (`Extract`, `так`, single-fragment `single`-reason dispatches with plain replies) — unaffected by grouping.
+- **Standalone image:** observed live in the Scenario B retry (image sent alone, `groupedImageCount:1`, `groupedTextCount:0`, correctly read `GROUP-IMAGE-742`).
+- **Standalone PDF:** one minimal additional live message (PDF, no caption): `groupedFragmentCount:1`, `groupedDocumentCount:1`, `groupingReason:"single"`, `hasFile:true`, `fileMimeType:"application/pdf"`, zero tool calls, zero Trello mutation.
+- **#23 due-date behavior:** left as local-regression evidence only (all pre-existing #23 tests plus the new Scenario F concurrency test in `djonikClient.test.ts` still pass), per the explicit instruction not to spend the single authorized Trello mutation twice.
+
+**Verdict: PASS.**
+
+### 26.9 Residual validation limitations
+
+- **Manual sub-1200ms fragment timing is not reliably reproducible by a human sender.** Three separate attempts (original Scenario A, its retry's first try, Scenario B's retry) all showed a real inter-message gap exceeding 1200ms despite "send quickly" instructions — this is a property of manual Telegram UI interaction (typing/tap/upload latency), not a code defect; every case that *did* land inside the window (Scenario A's successful retry, Scenario C's native album, the original Scenario A Group 1) grouped correctly. The specific "two independently-sent fragments dispatch within milliseconds of each other" race that caused the original defect is proven fixed only by local deterministic tests (`djonikClient.test.ts` Scenario A/G, `telegramDispatch.test.ts`'s integration reproduction), not by a live sub-millisecond reproduction — live evidence instead confirms correct sequential, non-overlapping, correctly-attributed behavior across 13 real turns in one session.
+- **Scenario B's live grouping of two separately-sent fragments (text then image) into one `adjacent_window` intake was not achieved** (see above); real image understanding was nonetheless proven live twice via other paths (caption+image, standalone image).
+- **#23 deterministic due-date finalization** was validated live only indirectly in the earlier Scenario F/#25 acceptance guardrail note; this run relied on local regression evidence for it specifically, per explicit instruction.
