@@ -1455,3 +1455,146 @@ Production `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: canonical JSON **byte-identical** t
 - **Exactly 1 Session, exactly 1 user turn** (the only `user.message`). No second Session, no second turn, no budget increase, no interrupt.
 - **0 Trello mutations, 0 Calendar calls**; no production Agent, specialist, validation coordinator, Skill, Memory or claude-lock change.
 - No commit, push, deploy, branch, roadmap or issue change.
+
+---
+
+## 35. Wave C1 relay hardening — validation coordinator v2
+
+> **Scope:** one live update of the temporary validation coordinator `agent_01GFCLFYq6uLRHG8vMCrAgeK`, **version 1 → 2**, whose only substantive change is its Project Health delegation/relay addendum. **0 Sessions, 0 `user.message` events, $0 inference, 0 Trello calls, 0 Calendar calls.** Production Djonik, the specialist, the roster, Skills, tools, MCP and `claude-lock.json` are unchanged. The Scenario A retest is **not run**.
+
+### 35.1 The measured §34 relay failure being addressed
+
+In Scenario A the Haiku coordinator did not relay the specialist's evidence-backed report, it rewrote it (§34.12): the recorded due `2026-09-25T15:00:00.000Z` became «через 6 днів» / «6 днів до дедлайну», `2026-09-19T23:59:59.000Z` became «сьогодні (19.09)», Backlog and This-week cards appeared under «Активне», the hedged risk became a «червоний прапор», and a third next step was added. It also paraphrased Daniel's request into an expanded task (adding "comments, активність, залежності") and sent a user-visible preamble before delegating. The specialist itself was correct (§34.10). This slice therefore changes only the coordinator's relay contract: from "summarize the specialist" to "pass the report through unchanged", with the request delegated verbatim and no preamble.
+
+### 35.2 Official Agent update semantics verified (fetched 2026-09-19)
+
+From `platform.claude.com/docs/en/managed-agents/agent-setup` ("Update an agent" and "Update semantics") and the installed SDK 0.125.0 (`AgentUpdateParams`): **no contradiction with the expected semantics.**
+
+- Omitted fields are preserved; only the fields sent change.
+- `system` is a scalar replaced with the new value, independently of other fields. `tools`, `mcp_servers` and `skills` are replaced only if sent; `multiagent` is replaced as a whole only if sent. None was sent, so nothing needed to be resent to preserve it.
+- `version` is optional; when supplied and not equal to the current version the request returns **409**, even if the fields already match. Supplying it is the recommended default, so `version: 1` was sent.
+- A changed update creates a new version (the number increments by one); an update with no change creates none.
+- "Coordinator rosters are not updated" refers to a referenced agent changing; the coordinator's own roster pin (specialist version 1) is stored in its configuration and is untouched by a `system`-only update.
+- The SDK's `update(agentID, {version?, system?, …})` matches.
+
+### 35.3 Pre-flight identities and versions (read-only; 17/17 PASS before mutation)
+
+Working tree clean at `a69c8bf`.
+
+- **Production** `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: version 17, `updated_at` 2026-09-18T13:08:46.751798Z, Haiku, `multiagent: null`, canonical JSON equal to the §33/§34 snapshot (sha256 prefix `9033962c176e59db`), referencing neither temporary agent.
+- **Validation coordinator** `agent_01GFCLFYq6uLRHG8vMCrAgeK`: version exactly **1**, not archived, Haiku, canonical JSON equal to the §33 stored snapshot (`5ec6d9b1e923322a`); system = the production prompt (2,256 characters) + the exact §33 addendum (3,484 characters in total); `project-health` absent; roster exactly the specialist v1 with no Advisor or self entry; tools, MCP servers and the four Skills equal production apart from the intended Skill removal.
+- **Specialist** `agent_01KNiQDzzPjaMU6LLF4mU6uM`: version 1, `updated_at` 2026-09-19T07:59:48.705453Z, Sonnet, `multiagent: null`, Skill pinned `skver_01JLTtMvUgfEqdcBBGj4WGVm`, four Trello reads only, no writes, no Calendar; canonical JSON equal to the snapshot (`42cf1fd9e714845a`).
+- Only the §34 Session exists for the coordinator (`sesn_01MKrPvydQQpU6D7BFRLaEZq`); none for the specialist.
+
+### 35.4 Old addendum (v1, replaced)
+
+```text
+Project Health delegation:
+
+For a current Project Health or nuanced project-condition assessment (for example the condition, risks, blockers, waiting work, or health of a named project), delegate the review to the "Djonik Project Health Specialist" agent instead of assessing it yourself. Send it a self-contained task: the project Daniel named and what he asked, in his own words. The specialist reads fresh Trello evidence and owns the PM interpretation for that review. For each new Project Health question, delegate again; do not answer it from an earlier specialist reply.
+
+When the specialist responds, relay its factual interpretation faithfully and concisely, in Ukrainian. Do not recompute or reinterpret anything it states: Trello dates and any weekday, local-time, or countdown wording; Waiting versus Blocked; what lastActivityAt shows; risk; or people, entities, dependencies, and commitments. Do not add new factual project claims of your own. If it asks a clarification question, relay that question. If it says fresh evidence was unavailable, relay that limitation.
+
+All other work, including planning, creating or changing tasks, and other project questions, stays with you and your existing Skills and tools.
+```
+
+### 35.5 Exact new pass-through addendum (v2)
+
+```text
+Project Health delegation:
+
+For a current Project Health or nuanced project-condition assessment, delegate the user's request to the "Djonik Project Health Specialist".
+
+Send the specialist the user's Project Health request verbatim, including the project name and requested questions. Do not expand it with additional analysis dimensions, inferred requirements, or factual hints.
+
+Do not send a user-facing progress or preamble message before the specialist finishes.
+
+The specialist owns all factual Project Health interpretation for this turn.
+
+When the specialist report arrives, your final user-facing response MUST be exactly the specialist report content, unchanged.
+
+Copy the specialist report verbatim.
+
+Do not summarize it.
+Do not rewrite it.
+Do not shorten it.
+Do not translate it.
+Do not reformat it.
+Do not add a title, preface, conclusion, warning, recommendation, explanation, emoji, or additional sentence before or after it.
+
+Do not independently calculate, reinterpret, or add any project fact, including:
+- dates;
+- weekdays;
+- relative time or countdowns;
+- Waiting / Blocked / Backlog semantics;
+- lastActivityAt;
+- risk severity;
+- people or entities;
+- dependencies;
+- commitments;
+- progress;
+- next PM steps.
+
+If the specialist returns one clarification question, output exactly that question unchanged.
+
+If the specialist says fresh evidence was unavailable, output exactly that message unchanged.
+
+All non-Project-Health work remains owned by the primary Djonik coordinator and its existing Skills and tools.
+```
+
+It is the Product Owner's contract text with the paragraphs re-flowed (the source was hard-wrapped) and **one wording edit**: "Do not send a user-facing progress message before the specialist finishes" became "Do not send a user-facing progress **or preamble** message …", so that the no-preamble requirement is explicit. Nothing was weakened; the core invariant is unchanged: **final user response == specialist report content**. It replaces the old addendum, so exactly one Project Health delegation section exists, with no competing second addendum. The production Djonik prompt prefix is byte-for-byte unchanged. Addendum length 1,535 characters (old 1,226).
+
+### 35.6 Exact update request
+
+`client.beta.agents.update("agent_01GFCLFYq6uLRHG8vMCrAgeK", request)` with a request containing **only these two fields**:
+
+- `version`: **1** (optimistic concurrency);
+- `system`: the retrieved production prompt (2,256 characters, unchanged) + `"\n\n"` + the new addendum above (3793 characters in total).
+
+Not sent: `model`, `tools`, `skills`, `mcp_servers`, `multiagent`, `name`, `description`, `metadata`. The script aborted on any pre-flight failure, refused to run twice, and would have stopped without a retry on a 409 (none occurred).
+
+### 35.7 Result: version 1 → 2
+
+`agent_01GFCLFYq6uLRHG8vMCrAgeK` is now **version 2**, `updated_at` 2026-09-19T08:45:59.462300Z (v1: 2026-09-19T08:11:45.095674Z), not archived. The version history holds exactly v1 and v2, and the stored v1 record still carries the old system (history is immutable). The §34 Session was created on v1 and stays pinned to v1 (still idle, list cost 27¢, unaffected).
+
+### 35.8 Read-back structural diff (fresh `agents.retrieve` of v2 vs the retrieved v1 snapshot; 34/34 checks PASS)
+
+| Field | v1 → v2 |
+|---|---|
+| `version` | **changed:** 1 → 2 |
+| `updated_at` | **changed:** 2026-09-19T08:11:45Z → 2026-09-19T08:45:59Z |
+| `system` | **changed:** production prefix byte-for-byte unchanged; the old addendum replaced by the new one (3,484 → 3,793 characters) |
+| `id`, `type`, `created_at`, `archived_at` | unchanged |
+| `name`, `description`, `metadata` | unchanged |
+| `model` | unchanged (Haiku, no `inference_geo`, no `effort`) |
+| `tools` | unchanged (deep-equal; equal to production; Calendar toolset still disabled and identical to production) |
+| `mcp_servers` | unchanged (Trello and Calendar, equal to production) |
+| `skills` | unchanged (four non-project-health Skills, equal to production) |
+| `multiagent` | unchanged (see §35.9) |
+
+A generic comparison over the union of all top-level keys found that the **only** fields that differ between v1 and v2 are `system`, `updated_at` and `version`. The old addendum and its distinctive phrases (for example "faithfully and concisely", "Send it a self-contained task", "in his own words", "delegate again") no longer appear anywhere in the system prompt.
+
+### 35.9 Roster still pins specialist v1
+
+Stored `multiagent` is exactly `{"type":"coordinator","agents":[{"type":"agent","id":"agent_01KNiQDzzPjaMU6LLF4mU6uM","version":1}]}`: one entry of type `agent`, version the number 1, no Advisor, no self entry, no other agent. The specialist itself is still version 1.
+
+### 35.10 `project-health` remains absent from the coordinator
+
+The coordinator's four Skills (`skill_01WS6JtY…`, `skill_01G9DtQE…`, `skill_01PTmbvL…`, `skill_015c8dtD…`, all `custom`/`latest`) equal production's minus `project-health`; the string `skill_01Treson5zdU1TgxXDaREwnY` appears nowhere in them.
+
+### 35.11 Production and specialist unchanged (retrieved after the update)
+
+- **Production** `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: canonical JSON **byte-identical** to the pre-flight snapshot; version 17, `updated_at` 2026-09-18T13:08:46.751798Z, Haiku, same system, Skills, MCP servers and tools, `multiagent: null`; it references neither the specialist nor the validation coordinator.
+- **Specialist** `agent_01KNiQDzzPjaMU6LLF4mU6uM`: canonical JSON **byte-identical**, version 1, `updated_at` unchanged.
+- No new Session exists for the coordinator (still only `sesn_01MKrPvydQQpU6D7BFRLaEZq`) and none for the specialist.
+
+### 35.12 Confirmations
+
+- **0 Sessions created; 0 `user.message` events; $0 inference; 0 Trello calls; 0 Calendar calls.**
+- **Live change: exactly one Agent update** (validation coordinator v1 → v2, `system` only). No production update, no specialist update or new version, no Skill mutation, no roster change, no archive.
+- Other API calls were read-only (`agents.retrieve`, `agents.versions.list`, `sessions.list`, `sessions.retrieve`).
+- No commit, push, deploy, branch, roadmap or issue change.
+
+### 35.13 Deferred: Scenario A retest remains unrun
+
+**The Scenario A retest is not run** and needs a **new Product Owner-approved spend/Session guardrail** declared before any inference. Whether the new contract makes Haiku copy the report verbatim is **unproven**: it is prompt-only, and nothing in the platform enforces a pass-through. For the retest, pin the Session to `{type: agent_with_overrides, id, version: 2}` (a plain agent id string resolves to the latest version, which is now v2) and keep the same write-safety tools override and read-only Memory attachment used in §34. Budget reference from §34: about $0.27 per turn (specialist about $0.23 with a cold cache). Still open: specialist verbosity and effort `high`, thread-event handling in the thin adapter, and #18 (a platform limitation). Archiving the validation coordinator remains a separate Product Owner-authorized action after #28 validation.
