@@ -1259,3 +1259,199 @@ Production was re-retrieved after the create and compared with the pre-flight sn
 - **Repo diff: only `docs/15_ISSUE_28_IMPLEMENTATION_REPORT.md`** (this section). No config file was created for the temporary agent; `claude-lock.json`, `managed-agents/*`, Skills, `docs/01`, `docs/02`, and `src/` are unchanged. Scratch artifacts (request/created/stored JSON, canonical snapshots, scripts) live in the session scratchpad only.
 - `npm run typecheck`: passed, exit 0. `npm test`: **265 tests, 265 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo.** `git diff --check`: exit 0.
 - **Deferred to the next slice:** a Product Owner-approved spend/Session guardrail (`docs/04` §27) declared before any delegated inference; delegated live validation of faithful relay on the validation coordinator (including the three named failure cases: a specialist due of `2026-09-25T15:00:00Z` rendered as «у пʼятницю через 6 днів», «no supported Waiting evidence» turned into «чекає на клієнта», and «`lastActivityAt` does not prove progress» turned into «активно рухається»); runner support for a multiagent Session (the existing `connectToDjonik` and the adapter have no thread-event handling, §31.11); coordinator/specialist usage reporting. Still unproven without a Session: that delegation works at all, that the specialist can load its Skill with only `read`, the Trello tool names against the live server, and specialist quality. Effort `high` on the specialist and #18 remain open as before.
+
+---
+
+## 34. Wave C1 delegated live validation — Scenario A
+
+> **Verdict: FAIL** — native delegation and the specialist both worked; **faithful relay failed** (acceptance-critical). Reason in §34.16. Exactly one Session, exactly one user turn, **$0.27** total list cost (cap $0.32, ceiling $0.45), zero Trello mutations, zero Calendar calls, no production change. Scenarios B/C/D were not run.
+
+### 34.1 Authorization and guardrail (Product Owner, this slice only)
+
+Exactly 1 fresh Session and exactly 1 user Scenario A turn on the validation coordinator `agent_01GFCLFYq6uLRHG8vMCrAgeK` v1 (roster: specialist `agent_01KNiQDzzPjaMU6LLF4mU6uM` v1). Platform budget $0.32 (`amount: "32"`), absolute ceiling $0.45, 0 Trello mutations, 0 Calendar calls, no production change, stop after Scenario A whatever the outcome, no budget increase, no B/C/D. A scratch-only runner was used; no runtime code was added to the repository.
+
+### 34.2 Official API verification before inference (fetched 2026-09-19)
+
+No material contradiction with the accepted architecture was found; the slice proceeded. Verified: a child thread's own events (`agent.tool_use`, `agent.mcp_tool_use`, `agent.message`) live only on that thread's stream (thread events list), while the primary thread carries `session.thread_created`, `agent.thread_message_sent` (to the child) and `agent.thread_message_received` (from the child); session and thread idle are signalled by `session.status_idle` / `session.thread_status_idle` with a `stop_reason`; sessions accept `{type: agent_with_overrides, id, version, tools}` and the roster is not affected by it; a session budget is one cap across all threads; `sessions.threads.list/retrieve` return each thread's own `agent`, `status` and `usage` (with `list_cost`); vault credentials are session-scoped so they reach every thread; a memory store is a directory mounted in the shared sandbox (`/mnt/memory/<name>`) and the docs say nothing child-thread-specific.
+
+### 34.3 Pre-flight (zero inference; 19/19 PASS)
+
+Working tree clean at `ea18f12`. Production `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: v17, Haiku, `multiagent: null`, `updated_at` 2026-09-18T13:08:46Z, canonical JSON equal to the slice-3 snapshot. Validation coordinator: v1, Haiku, `project-health` absent, system = production prompt + the approved addendum, roster exactly the specialist v1, no Advisor/self, Skills/tools/MCP equal to production apart from the intended Skill removal. Specialist: v1, Sonnet, `multiagent: null`, Skill pinned `skver_01JLTtMvUgfEqdcBBGj4WGVm`, four Trello reads only, no writes, no Calendar. The Environment (`env_01LVWPmvP5F3fLy28EaycVU2` "Djonik Default"), Memory Store (`memstore_01WViYK3WQvGEgojB2GiaDFq` "Djonik Memory") and vault (`vlt_011Cf5Ju4bN6RhVP7DnA1ZA4` "Djonik Personal") exist and are not archived; no Session existed for the validation coordinator.
+
+### 34.4 Session
+
+**`sesn_01MKrPvydQQpU6D7BFRLaEZq`**, created 2026-09-19T08:30:20.049674Z. Created once (two earlier script runs failed locally before any API call, a CRLF regex and then a syntax slip from my own edit; no Session existed at that point, and the script refuses to run if a Session record exists). Same Environment and vault as a normal Djonik Session, and the production memory instructions text verbatim from `src/djonikClient.ts` (992 characters). **One deliberate deviation:** the Memory Store was attached `read_only` instead of the production `read_write`, so the validation could not write into the production Memory store (the brief forbids production changes and any other external mutation); the memory instructions are unchanged. No Memory write occurred (§34.14).
+
+### 34.5 Resolved Session coordinator configuration (inspected before any message; $0)
+
+The Session was created with `agent_with_overrides` whose only override was `tools`, copied from the retrieved coordinator with every `trelloWrite*` config set to `enabled: false` (`trelloWriteCard` was the only one enabled). The resolved Session agent PASSED every gate: id/version = validation coordinator v1; Haiku; `multiagent` **preserved** (one entry: specialist `agent_01KNiQDzzPjaMU6LLF4mU6uM` v1, no Advisor/self, and the resolved roster embeds the specialist's pinned snapshot: Sonnet, Skill `skver_01JLTtMv…`, four Trello reads); `project-health` absent from the coordinator's Skills and the other four unchanged; system = production prompt + addendum; all six `trelloWrite*` disabled; Calendar toolset disabled and identical to production; built-in toolset and MCP servers unchanged; budget 32¢ USD; usage 0; vault attached; memory store mounted read-only at `/mnt/memory/djonik-memory`; status idle, no events, one (primary) thread. One check in my script reported FAIL: "roster has no advisor/self", a checker flaw, since it matched the word "self" inside the embedded specialist prompt ("self-contained"). Re-checked by roster entry type: one entry, type `agent`, none of type `self`/`advisor`.
+
+### 34.6 Scenario A turn (the only user message, verbatim, sent 2026-09-19T08:31:10Z)
+
+```text
+Що зараз по Extract? Дай короткий health check: що активне, що чекає, чи є реальні ризики і що мені варто зробити далі.
+```
+
+No suffix, no agent hint, no model mention. The Session went idle after ~98 s with `stop_reason: end_turn`. No interrupt, no clarification question, no `requires_action`.
+
+### 34.7 Delegation evidence (server-side events) — **delegation PASS**
+
+- Primary (coordinator) thread: `sthr_01M1fc5NQegCnnbn5hfat1Mc` (agent `Djonik Project Health Validation Coordinator`, `agent_01GFCLFYq6uLRHG8vMCrAgeK` v1, Haiku).
+- Child thread: `sthr_012BC2k2g8QiyZYYumTdaF1n`, `parent_thread_id` = the primary thread; agent **`Djonik Project Health Specialist`, `agent_01KNiQDzzPjaMU6LLF4mU6uM`, version 1**, model `claude-sonnet-5` (effort high). Created by `session.thread_created` at 08:31:13Z.
+- Coordinator → specialist: `agent.thread_message_sent` (`to_session_thread_id` = the child, `to_agent_name` "Djonik Project Health Specialist"). Exact delegated task (349 characters, identical to what the child received; the single trailing space after "Extract": is stripped here only for `git diff --check`):
+
+```text
+Дай короткий health check на проєкт "Extract":
+- Що зараз активне (in progress cards)?
+- Що чекає на когось або на щось (waiting/blocked)?
+- Чи є реальні ризики або критичні проблеми?
+- Що варто зробити далі?
+
+Проаналізуй Trello: посмотри cards, їх статус, due dates, comments, активність, залежності. Дай конкретні факти з доказами, не припущення.
+```
+
+- Specialist → coordinator: `agent.thread_message_received` (`from_agent_name` "Djonik Project Health Specialist") at 08:32:38Z, 2,303 characters, **identical** to the report the child sent.
+- The coordinator made **0 tool calls** of its own, so every project fact in its answer came from the specialist's report. Before delegating it emitted one short user-visible message (`agent.message`): "Відправляю спеціаліста на повну діагностику Extract. Результати прийдуть за момент."
+
+The delegated task is the coordinator's own paraphrase, not "his own words": it adds hints ("comments, активність, залежності") and contains one Russian word. This did not affect delegation.
+
+### 34.8 Specialist runtime acceptance — **PASS**
+
+- **A. Skill loading:** the child's first tool call was the built-in `read` of `/workspace/skills/project-health/SKILL.md`; the result is not an error, is 10,580 characters, and contains the Skill title and its `Dates and deadlines` section. So a pinned attached Skill loads in a child thread with only `read` enabled (resolves the §31/§32 open question).
+- **B. Trello MCP:** authenticated with the Session vault; all **11** MCP results returned without error.
+- **C. Trello read sequence (all in the child thread):** `trelloSearch(search_boards "Extract")` → `trelloReadBoard(list)` → `trelloSearch(search_boards, partial)` → `trelloReadBoard(list_by_workspace)` → `trelloReadBoard(list_labels)` → `trelloReadCard(list_by_board, filter: "all")` (53 cards) → five `trelloReadCard(get)` for the two In-progress cards, the two archived "Rachel" cards and Брендбук. Fresh direct reads in this turn support every current-state claim (the #18 criterion is met **for this observed turn only**; it is not evidence that the limitation is fixed).
+- **D. Project resolution:** no board "Extract" was found (search returned no cards); the specialist stated that no separate board exists and scoped the review to cards carrying the `Extract` label on the shared "Djonik" board (label `uses: 18` = 10 open + 8 archived), without asking Daniel.
+- **Zero mutation across all threads:** see §34.14.
+
+### 34.9 Specialist exact result
+
+```text
+Ось стислий health check по проєкту **Extract** (сфера: картки з лейблом «Extract» на спільній дошці «Djonik» — окремої дошки «Extract» не існує; лейбл використовується 18 разів).
+
+**Висновок:** проєкт активний і рухається, картки є в списку «In progress» та «This week», але є дві картки з явним клієнтським фідбеком, які заархівовані без позначки «виконано» — це вимагає перевірки.
+
+**Що зараз активне (In progress):**
+- «Чорні аромати» — бриф на новий дизайн флакону (100 мл), список ароматів і нот; без дедлайну, без коментарів.
+- «Коментарі по пінкам» — опис порожній, без дедлайну, без коментарів.
+
+Також у списку «This week» відкриті (не заархівовані) картки без дедлайну: «Флакони 1.5 ML» (детальний бриф — чорна і біла лінійки флаконів) та «Міні-парфуми адаптація». У «Backlog» відкриті: «Рендер Відео білих ароматів», «Флакони 7.5 ML» (без дедлайну), «Брендбук» — з дедлайном `2026-09-25T15:00:00.000Z`.
+
+**Waiting/Blocked:** жодна картка з лейблом «Extract» зараз не перебуває у списку «Waiting», і в жодній із перевірених карток немає тексту про очікування когось/чогось або опису конкретної перешкоди. Тобто наразі немає підтвердженого Waiting чи Blocked стану для Extract.
+
+**Ризик (підтверджений доказами):** дві картки з явним клієнтським фідбеком (опис починається «Rachel's feedback» / «Rachel's request») заархівовані (`closed:true`), але позначені як **не завершені** (`complete:false`):
+- «Add hover state to gallery thumbnails (scale + caption fade-in)» — опис прямо каже «Make it look finished before Friday's demo», дедлайн у картці `2026-09-19T23:59:59.000Z`, `dueComplete:false`.
+- «Update footer copyright year and fix mobile social icon alignment» — дедлайну немає, теж `complete:false`.
+
+Обидві картки заархівовані без підтвердження виконання — незрозуміло, чи фідбек клієнтки Rachel фактично закрито, чи картки просто прибрали з дошки.
+
+**Наступний PM-крок:** уточнити в команди/у Rachel, чи ці дві правки (hover-стан галереї та футер) реально впроваджені, перш ніж вважати їх закритими; якщо ні — повернути картки в роботу і довести до `complete`.
+
+**Чого не можу визначити:** відповідальних за картки (поле members порожнє в усіх перевірених) і фактичний прогрес/давність роботи — `lastActivityAt` не є доказом активності чи застою, тож на його основі висновків не роблю.
+```
+
+### 34.10 Specialist quality assessment (before judging the relay) — **PASS on correctness; two soft caveats**
+
+Every factual claim was checked against the raw tool results the specialist received:
+
+| Criterion | Result |
+|---|---|
+| Scoped to Extract only; fresh evidence | PASS: label-scoped; 11 fresh reads |
+| Backlog not Waiting; Waiting only with evidence; Waiting ≠ Blocked | PASS: "no card is in the Waiting list and none has waiting/blocker text" (verified: 0 Extract cards in Waiting, 0 with such text); nothing invented |
+| Due timestamps as recorded; no weekday, local time, or countdown | PASS: `2026-09-25T15:00:00.000Z` and `2026-09-19T23:59:59.000Z` quoted as recorded, matching the payload. The word "Friday" appears only inside a quoted card description ("before Friday's demo"), not derived |
+| `lastActivityAt` not evidence of progress/staleness | PASS: explicitly disclaimed |
+| Internal due ≠ client commitment | PASS: no client commitment asserted from a due alone |
+| Risk only with supported evidence | PASS: two archived cards, `closed: true`, `complete: false`, `dueComplete: false` (one with a due on 2026-09-19), confirmed in the payload; framed as "unclear whether closed", not as fact |
+| No invented people/entities/dependencies/commitments | PASS: "Rachel" appears in both card descriptions; members are empty, as stated |
+| One useful next step; zero mutation | PASS |
+| Concise, no card inventory | **PARTIAL:** ~2.3k characters, names about nine cards grouped by list (the residual Sonnet verbosity seen in §29–§30) |
+| Wording | **Soft caveat:** "проєкт активний і рухається" is a mild progress claim beyond list membership; the cited basis is the lists themselves |
+
+No specialist-level factual failure. Counts and states quoted (18 label uses, 10 open + 8 archived, list membership, empty comments/members) were verified against the payload. The Rachel risk rests on archived test-like cards; it is evidence-supported but interpretive, and the specialist did not mention the other archived unfinished Extract card ("Google Slides"), so its selection of archived cards is not exhaustive.
+
+### 34.11 Coordinator's final user-facing answer (verbatim)
+
+```text
+**Extract: коротка діагностика**
+
+Проєкт рухається, але є **червоний прапор**.
+
+**Активне:**
+- 2 картки в In progress: "Чорні аромати" (новий флакон 100 мл) та "Коментарі по пінкам"
+- На цьому тижні: "Флакони 1.5 ML", "Міні-парфуми адаптація"
+- Backlog: "Рендер Відео", флакони 7.5 ML, "Брендбук" (дедлайн 25.09 — через 6 днів)
+
+**Waiting/Blocked:** немає.
+
+**⚠️ Реальний ризик:**
+Дві картки від Rachel з клієнтським фідбеком **заархівовані, але не позначені як завершені:**
+1. "Add hover state to gallery thumbnails" — дедлайн **сьогодні (19.09)**, непорозу­мілий стан
+2. "Update footer copyright year..." — просто лежить архівована без clear стану
+
+Незрозуміло: чи ці правки фактично закончені і задеплоєні, чи картки просто прибрали з дошки.
+
+**Що далі:**
+1. **ПЕРШИМ** уточнити у Rachel/команди: ці дві правки справді готові, чи потребують повернення в роботу?
+2. Якщо недоробки — повернути картки в In progress і довести до факту
+3. Брендбук має 6 днів до дедлайну — переглянути, чи все йде за планом
+
+Без відповідей на перший пункт не можешь бути впевнений у реальному health Extract.
+```
+
+### 34.12 Faithful-relay comparison — **relay FAIL**
+
+The coordinator's answer was compared with the exact report it received (§34.9). It kept several things faithfully (Waiting/Blocked "немає"; the same two In-progress cards; the same two archived cards from Rachel and the same clarification step; no invented people) but it also **recomputed and reinterpreted** in ways the brief names as failures:
+
+| # | Specialist said | Coordinator said | Failure |
+|---|---|---|---|
+| 1 | Брендбук due `2026-09-25T15:00:00.000Z` (recorded value) | "Брендбук (дедлайн 25.09 — **через 6 днів**)" and "Брендбук має **6 днів до дедлайну**" | **Countdown arithmetic**, and the recorded instant is dropped. This is the brief's own example («через 6 днів»). |
+| 2 | due `2026-09-19T23:59:59.000Z` on the hover-state card | "дедлайн **сьогодні (19.09)**" | **Relative-day wording** derived from a timestamp; the recorded value is dropped. |
+| 3 | Active = the two In-progress cards; "This week" and "Backlog" cards listed as open cards | Under the heading "**Активне:**" it lists "На цьому тижні: …" and "**Backlog**: Рендер Відео, флакони 7.5 ML, Брендбук" | **Backlog semantics:** queued work presented as active. |
+| 4 | Two archived cards, risk "confirmed by evidence", explicitly "unclear whether closed" | "**червоний прапор**", "⚠️ Реальний ризик", "непорозумілий стан" (garbled), "не можешь бути впевнений у реальному health Extract" | **Risk severity amplified** beyond the specialist's hedged wording. |
+| 5 | Two next steps: verify the two cards; return them to work if unfinished | Adds a third: "Брендбук має 6 днів до дедлайну — переглянути, чи все йде за планом" | **New PM interpretation** not in the report, built on the countdown of item 1. |
+| 6 | "Чого не можу визначити": owners (members empty) and progress (`lastActivityAt` is not evidence) | Both limitations omitted | Uncertainty dropped. |
+
+Items 1–3 are direct violations of the named acceptance failure classes (dates/countdown, Backlog semantics); items 4–5 are added factual/PM interpretation. The answer also has language errors ("не можешь", "закончені"/"непорозу­мілий" style slips) that are a Haiku output-quality matter, not a relay-classification item. The "Waiting vs Blocked", people/entity and `lastActivityAt` failure examples from the brief did **not** occur.
+
+**Cause (observed, not proven):** the addendum told Haiku to relay "faithfully and concisely" and not to recompute, but the coordinator still **rewrote** the report as its own summary instead of passing it through, and rewriting is where the model-derived dates, headings and severity came from.
+
+### 34.13 Classification
+
+- **Delegation: PASS** — a real child thread for the pinned specialist v1, task sent, report received, all in server-side events.
+- **Specialist runtime (Skill, Trello MCP, zero mutation, project resolution): PASS.**
+- **Specialist quality: PASS** on correctness, with the two soft caveats above; no factual failure.
+- **Faithful relay: FAIL** — §34.12 items 1–5.
+- **Overall Scenario A: FAIL** — a stop rule ("coordinator fails faithful relay") applies; this is not INCONCLUSIVE because the violations are direct, observed and unambiguous.
+
+### 34.14 Zero mutation, zero Calendar (server-side, all threads)
+
+Tool calls across **all** threads: coordinator thread **0**; specialist thread 12 (`read` ×1, `trelloSearch` ×2, `trelloReadBoard` ×3, `trelloReadCard` ×6). **`trelloWrite*` calls: 0. Calendar calls: 0. `bash`/`write`/`edit`: 0. Tool inputs touching `/mnt/memory`: 0.** No `session.error` events and no error results. The coordinator's `trelloWrite*` were additionally disabled by the Session override, and the Memory store was mounted read-only; the Memory store's newest version (2026-09-17T08:22:39Z) predates the Session, so nothing was written.
+
+### 34.15 Usage and cost (authoritative Session and per-thread, from the API)
+
+| | Model | List cost | Model requests | Input / cache write / cache read / output tokens | Active seconds |
+|---|---|---|---|---|---|
+| Coordinator thread | Haiku 4.5 | **$0.03** | 3 | 25 / 19221 / 34904 / 1289 | 14.369 |
+| Specialist thread | Sonnet 5 (effort high) | **$0.23** | 7 | 14 / 57061 / 130272 / 6189 | 83.239 |
+| **Session (authoritative)** | | **$0.27** | 10 | 39 / 76282 / 165176 / 7478 | 98.861 |
+
+Per-thread rounded costs (3¢ + 23¢ = 26¢) do not add to the Session's 27¢, as documented (independent rounding; the Session figure also includes running time). Platform cap $0.32: **not reached** (`budget_reached` did not occur; final `stop_reason` `end_turn`); **no in-flight request finished above $0.32**. Final list cost $0.27 is below the absolute $0.45 authorization, so no overrun. The budget was not raised. The specialist accounts for about 85% of the cost (Sonnet at high effort on one ~54k-character board read); this was a cold-cache turn.
+
+### 34.16 Verdict and exact reason — **FAIL**
+
+Native delegation from the Haiku validation coordinator to the pinned Sonnet specialist works end to end, the specialist loads its Skill with only `read`, reads Trello with the Session vault, produces a factually correct, evidence-backed result and mutates nothing. **The acceptance-critical criterion fails:** Haiku did not relay the report, it rewrote it, adding «через 6 днів» / «6 днів до дедлайну» and «сьогодні (19.09)», presenting Backlog cards under "Активне", escalating the hedged risk to a "червоний прапор" and adding a new next step. These are the failure classes this architecture exists to prevent.
+
+### 34.17 Production and resource safety proof (read-only, after the turn; 10/10 PASS)
+
+Production `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: canonical JSON **byte-identical** to the pre-flight snapshot; v17, `updated_at` 2026-09-18T13:08:46.751798Z, Haiku, same system/Skills/MCP/tools, `multiagent: null`, no reference to the specialist or the validation coordinator, no production-agent Session created since. Specialist v1: byte-identical, `updated_at` unchanged. Validation coordinator v1: byte-identical, not archived. Exactly one Session exists for the validation coordinator (`sesn_01MKrPvydQQpU6D7BFRLaEZq`), none for the specialist alone. The validation coordinator has **not** been archived; that is a separate Product Owner-authorized action.
+
+### 34.18 Deferred / not run
+
+- **Scenarios B, C, D were not run** and there is no second turn or Session, as authorized.
+- Any change to make the relay faithful (for example a stricter pass-through instruction on the validation coordinator, or another topology) and its re-validation need a new decision and a new declared guardrail. Nothing was changed or improvised. Options for the Product Owner, in the order I would try them: (1) a new validation-coordinator instruction that requires the specialist's report to be output verbatim with no additions (smallest change; the failure is rewriting); (2) if Haiku still rewrites, a model-level decision for the coordinator turn, which the roadmap currently keeps on Haiku; (3) anything deterministic is not proposed here because the roadmap excludes routers, middleware and a custom loop. A retry costs roughly the same $0.27 per turn because the specialist dominates.
+- Also open: specialist verbosity and effort `high` cost; the user-visible preamble message the coordinator emits before delegating (how the Telegram adapter treats several `agent.message` events was not inspected); thread-event handling in `src/djonikClient.ts`; #18 remains a platform limitation. The validation coordinator remains to be archived after #28 validation.
+
+### 34.19 Confirmations
+
+- **Exactly 1 Session, exactly 1 user turn** (the only `user.message`). No second Session, no second turn, no budget increase, no interrupt.
+- **0 Trello mutations, 0 Calendar calls**; no production Agent, specialist, validation coordinator, Skill, Memory or claude-lock change.
+- No commit, push, deploy, branch, roadmap or issue change.
