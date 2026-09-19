@@ -1159,3 +1159,103 @@ Unchanged: `managed-agents/project-health-specialist.md`, the `project-health` S
 - **Live changes: exactly one Agent created** (`agent_01KNiQDzzPjaMU6LLF4mU6uM`, v1). No Agent update or archive, no production coordinator change, no roster, no Advisor, no Skill create/update.
 - Read-only API/CLI calls only otherwise: `agents.retrieve`, `agents.list`, `skills.retrieve`, `skills.versions.retrieve`, `sessions.list`, and two `--dry-run` applies.
 - No commit, push, deploy, branch, roadmap edit, or issue change.
+
+---
+
+## 33. Wave C1 architecture slice 3 — isolated validation coordinator
+
+> **Scope:** create exactly one **temporary, validation-only** coordinator Agent so native delegation to the specialist can be validated in the next slice without touching production. One live change: one Agent created. **0 Sessions, 0 `user.message` events, $0 inference, 0 Trello calls, 0 Calendar calls.** Production Djonik, the specialist, `claude-lock.json`, Skills, `docs/01`, `docs/02` and issue #28 are untouched; no commit, push or deploy.
+
+### 33.1 Current official API discovery (fetched 2026-09-19)
+
+Sources: `platform.claude.com/docs/en/managed-agents/` pages `sessions`, `multiagent-orchestration`, `agent-setup`. The installed SDK 0.125.0 was checked as well. **No discrepancy with `docs/01`, `docs/02` or the expected finding was found; the slice proceeded.**
+
+- **Session overrides cannot carry a roster.** The `agent_with_overrides` form accepts `model`, `system`, `tools`, `mcp_servers` and `skills` only ("include any of `model`, `system`, `tools`, `mcp_servers`, or `skills`"), and the SDK type `BetaManagedAgentsAgentWithOverridesParams` has exactly those fields plus `id`, `type` and `version`. There is no `multiagent`, `name` or `description` override. Overrides never merge (a `tools` override must list every tool), and a `model` override drops the agent's `effort`.
+- **Overrides do not reach roster agents.** They apply to the coordinator and its `self` copies; "roster entries referenced by ID are unaffected".
+- **Roster semantics unchanged from §31.1:** `multiagent: {type: coordinator, agents: [...]}`; an entry `{type: agent, id, version}` pins that version, and an omitted version pins the latest at create/update time; the roster is a snapshot of the coordinator's creation or update, so later specialist updates are not picked up. Delegation is one level deep; a referenced agent with its own roster fails validation. The coordinator's and every roster member's `inference_geo` must all match or all be unset (all unset here).
+- **Threads and budget:** one shared session budget across all threads, each thread priced at its own model; threads are persistent; a child's report reaches the primary thread as `agent.thread_message_received`.
+
+### 33.2 Why a temporary coordinator instead of a session override
+
+The delegated topology (Haiku coordinator → pinned Sonnet specialist) needs `multiagent` on the coordinator, and a session override cannot supply it (§33.1). The only ways to run it are to update production Djonik's roster, which the canonical decision forbids until delegated acceptance, or to run the topology on a separate agent. This slice therefore creates one standalone validation coordinator that reproduces production v17 apart from the intentional differences. It exists only for #28 validation, is not tracked in `claude-lock.json`, and has no repo-side config file.
+
+### 33.3 Production pre-flight (read-only)
+
+Working tree clean at `cd3ff89`. Production `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: **version 17**, `updated_at` `2026-09-18T13:08:46.751798Z`, `claude-haiku-4-5-20251001` / standard (no `effort`, no `inference_geo`), `multiagent: null`, system prompt 2,256 characters ending "…actually available in the current environment.", five custom Skills all `latest` (`task-management`, `daily-planning`, `weekly-planning`, `studio-intake`, `project-health` = `skill_01Treson5zdU1TgxXDaREwnY`), MCP servers `trello` (`https://mcp.trello.com/v1`) and `google-calendar-calendarmcp` (`https://calendarmcp.googleapis.com/mcp/v1`), `agent_toolset_20260401` fully enabled with `always_allow`, Trello toolset default enabled with only `trelloWriteCard` enabled among the writes, Calendar toolset default `enabled:false`. The canonical (key-sorted) snapshot was saved to scratch (sha256 prefix `9033962c176e59db`) and deep-equals the slice-2 baseline.
+
+### 33.4 Specialist pre-flight (read-only)
+
+`agent_01KNiQDzzPjaMU6LLF4mU6uM`: **version 1**, `updated_at` `2026-09-19T07:59:48.705453Z`, not archived; `claude-sonnet-5` / standard, effort resolved `high`; `multiagent: null`; exactly one Skill, pinned `skill_01Treson5zdU1TgxXDaREwnY@skver_01JLTtMvUgfEqdcBBGj4WGVm`; MCP `trello` only; built-in toolset default-disabled with only `read`; Trello default-disabled with exactly `trelloSearch`, `trelloReadBoard`, `trelloReadList`, `trelloReadCard`; no `trelloWrite*`; no Calendar in the declared config; version matches `claude-lock.json`. 21 of 21 substantive pre-flight checks passed. Canonical snapshot sha256 prefix `42cf1fd9e714845a`.
+
+### 33.5 Exact system addendum (appended after the untouched production prompt, separated by `\n\n`)
+
+```text
+Project Health delegation:
+
+For a current Project Health or nuanced project-condition assessment (for example the condition, risks, blockers, waiting work, or health of a named project), delegate the review to the "Djonik Project Health Specialist" agent instead of assessing it yourself. Send it a self-contained task: the project Daniel named and what he asked, in his own words. The specialist reads fresh Trello evidence and owns the PM interpretation for that review. For each new Project Health question, delegate again; do not answer it from an earlier specialist reply.
+
+When the specialist responds, relay its factual interpretation faithfully and concisely, in Ukrainian. Do not recompute or reinterpret anything it states: Trello dates and any weekday, local-time, or countdown wording; Waiting versus Blocked; what lastActivityAt shows; risk; or people, entities, dependencies, and commitments. Do not add new factual project claims of your own. If it asks a clarification question, relay that question. If it says fresh evidence was unavailable, relay that limitation.
+
+All other work, including planning, creating or changing tasks, and other project questions, stays with you and your existing Skills and tools.
+```
+
+Scope audit: 1,228 characters, native coordinator reasoning only (no phrase list, no router). "Delegate again for each new question" is a deliberate freshness measure because specialist threads are persistent; it does not add an enforcement mechanism, so #18 is unaffected. It states no behaviour beyond delegation, faithful relay, and ownership of everything else.
+
+### 33.6 Exact validation-coordinator config diff (request built from the retrieved production v17)
+
+Created through the official SDK (`client.beta.agents.create`), not `ant apply`. Compared field by field with production before sending:
+
+| Field | Request vs production v17 |
+|---|---|
+| `name` | **different:** `Djonik Project Health Validation Coordinator` |
+| `description` | **different:** `Temporary Issue #28 validation coordinator for native Project Health delegation. Not production.` |
+| `model` | identical: `{"id":"claude-haiku-4-5-20251001","speed":"standard"}` |
+| `system` | **different:** production text byte-for-byte as prefix + `\n\n` + addendum (2,256 → 3,484 characters, +1,228) |
+| `tools` | identical (retrieved array passed through unchanged) |
+| `mcp_servers` | identical (Trello and Calendar) |
+| `skills` | **different:** `project-health` (`skill_01Treson5zdU1TgxXDaREwnY`) removed; the other four unchanged, all `latest` |
+| `multiagent` | **different:** `{"type":"coordinator","agents":[{"type":"agent","id":"agent_01KNiQDzzPjaMU6LLF4mU6uM","version":1}]}` |
+| `metadata` | identical (`{}`) |
+
+A guard aborted if an agent with the same name already existed. No other live mutation was needed.
+
+### 33.7 Created validation coordinator
+
+**`agent_01GFCLFYq6uLRHG8vMCrAgeK`, version 1**, created 2026-09-19T08:11:45.095674Z, not archived. It is **temporary**: it must be archived after the #28 delegated validation is complete (§33.13).
+
+### 33.8 Complete read-back comparison (fresh `agents.retrieve` of the new agent vs production v17)
+
+33 checks (the coordinator comparison plus the production, specialist and Session checks), **33 PASS, 0 FAIL.**
+
+- **Unchanged from production:** model deep-equals production (Haiku, no `inference_geo`, no `effort`); `tools` deep-equal; `mcp_servers` deep-equal; the Calendar server and its toolset (`default_config.enabled:false`) equal production exactly; Trello write toggles as production (`trelloWriteCard` the only enabled write); `metadata` equal; the production system text is a byte-for-byte prefix and the remainder is exactly `"\n\n" + addendum`; the non-`project-health` Skills equal production in order and fields.
+- **Intentional differences only:** name and description as specified; `project-health` absent; one appended addendum; one pinned roster entry.
+- **No unexpected top-level keys.**
+
+### 33.9 Roster pins specialist v1; no other agents
+
+Stored `multiagent` is exactly `{"type":"coordinator","agents":[{"type":"agent","id":"agent_01KNiQDzzPjaMU6LLF4mU6uM","version":1}]}`. The resolved `version` is the number 1 (strictly), the roster has one entry, and it contains no `self`, no Advisor, and no other agent.
+
+### 33.10 `project-health` Skill absent from the validation coordinator
+
+Stored `skills` are the four production Skills (`skill_01WS6JtY…`, `skill_01G9DtQE…`, `skill_01PTmbvL…`, `skill_015c8dtD…`), all `custom` and `latest`. The string `skill_01Treson5zdU1TgxXDaREwnY` appears nowhere in the coordinator's `skills`. In the target topology the Skill lives only on the specialist, pinned.
+
+### 33.11 Other Skills, tools and MCP preserved
+
+Deep equality with production for `tools` (built-in toolset, Trello toolset with its six write toggles, Calendar toolset) and `mcp_servers`, and equality of the four remaining Skills, confirm nothing else drifted.
+
+### 33.12 Production and specialist before/after
+
+Production was re-retrieved after the create and compared with the pre-flight snapshot: the canonical JSON is **byte-identical** (sha256 prefix `9033962c176e59db` before and after). Same id, **version 17**, `updated_at` `2026-09-18T13:08:46.751798Z`, Haiku, system, five Skills (including `project-health` still attached), MCP servers, tools, and `multiagent: null`. It references neither the specialist id nor the validation coordinator id. The specialist is likewise byte-identical (v1, `42cf1fd9e714845a` before and after). The workspace now holds exactly three agents (production, specialist, validation coordinator), all unarchived. `sessions.list` filtered by the validation coordinator's id and by the specialist's id both return nothing, and the newest Session in the workspace (`sesn_01RUA5XN…`, 06:40Z) predates both agents.
+
+### 33.13 Confirmations, and the temporary status
+
+- **0 Sessions created; 0 `user.message` events; $0 inference; 0 Trello calls; 0 Calendar calls.** No delegation was tested.
+- **Live change: exactly one Agent created** (`agent_01GFCLFYq6uLRHG8vMCrAgeK`, v1). No production update or roster change, no specialist update, no Skill change, no Advisor.
+- Other API calls were read-only: `agents.retrieve`, `agents.list`, `sessions.list`.
+- **The validation coordinator is temporary.** It duplicates production's configuration by design and would drift as production evolves. It must be **archived** once #28 delegated validation is complete, and must not be used for real traffic. Archiving is a separate live action needing Product Owner authorization.
+
+### 33.14 Files changed, verification and deferred work
+
+- **Repo diff: only `docs/15_ISSUE_28_IMPLEMENTATION_REPORT.md`** (this section). No config file was created for the temporary agent; `claude-lock.json`, `managed-agents/*`, Skills, `docs/01`, `docs/02`, and `src/` are unchanged. Scratch artifacts (request/created/stored JSON, canonical snapshots, scripts) live in the session scratchpad only.
+- `npm run typecheck`: passed, exit 0. `npm test`: **265 tests, 265 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo.** `git diff --check`: exit 0.
+- **Deferred to the next slice:** a Product Owner-approved spend/Session guardrail (`docs/04` §27) declared before any delegated inference; delegated live validation of faithful relay on the validation coordinator (including the three named failure cases: a specialist due of `2026-09-25T15:00:00Z` rendered as «у пʼятницю через 6 днів», «no supported Waiting evidence» turned into «чекає на клієнта», and «`lastActivityAt` does not prove progress» turned into «активно рухається»); runner support for a multiagent Session (the existing `connectToDjonik` and the adapter have no thread-event handling, §31.11); coordinator/specialist usage reporting. Still unproven without a Session: that delegation works at all, that the specialist can load its Skill with only `read`, the Trello tool names against the live server, and specialist quality. Effort `high` on the specialist and #18 remain open as before.
