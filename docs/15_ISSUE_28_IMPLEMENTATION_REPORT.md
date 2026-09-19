@@ -1598,3 +1598,217 @@ The coordinator's four Skills (`skill_01WS6JtY…`, `skill_01G9DtQE…`, `skill_
 ### 35.13 Deferred: Scenario A retest remains unrun
 
 **The Scenario A retest is not run** and needs a **new Product Owner-approved spend/Session guardrail** declared before any inference. Whether the new contract makes Haiku copy the report verbatim is **unproven**: it is prompt-only, and nothing in the platform enforces a pass-through. For the retest, pin the Session to `{type: agent_with_overrides, id, version: 2}` (a plain agent id string resolves to the latest version, which is now v2) and keep the same write-safety tools override and read-only Memory attachment used in §34. Budget reference from §34: about $0.27 per turn (specialist about $0.23 with a cold cache). Still open: specialist verbosity and effort `high`, thread-event handling in the thin adapter, and #18 (a platform limitation). Archiving the validation coordinator remains a separate Product Owner-authorized action after #28 validation.
+
+---
+
+## 36. Wave C1 delegated relay retest — Scenario A on coordinator v2
+
+> **Verdict: FAIL.** Native delegation works, the final coordinator message is a **byte-exact** copy of the specialist's report, but the coordinator **did not delegate the request verbatim** and **emitted two user-facing progress messages** before the report, so the required "one message = the specialist report" behavior is not achieved. The specialist's report is factually correct but contains two Skill-forbidden wording deviations. Exactly one Session, one user turn, **$0.19** list cost (cap $0.32, ceiling $0.45), 0 Trello mutations, 0 Calendar calls, no production change. Nothing else was tried (as instructed).
+
+### 36.1 Authorization and guardrail (Product Owner, this slice only)
+
+Exactly 1 fresh Session and exactly 1 user Scenario A turn on the validation coordinator `agent_01GFCLFYq6uLRHG8vMCrAgeK` **version 2** (roster: specialist `agent_01KNiQDzzPjaMU6LLF4mU6uM` v1). Platform budget $0.32 (`amount: "32"`), absolute ceiling $0.45, 0 Trello mutations, 0 Calendar calls, no production or Agent/Skill change, no budget increase, stop after Scenario A, no B/C/D. Scratch-only runner; no repository code was added.
+
+### 36.2 Official API verification before inference (fetched 2026-09-19)
+
+No material contradiction with the accepted architecture: a Session can pin an agent id + version and use `agent_with_overrides` (which applies to the coordinator and does not touch the roster); child events live on the child thread, while the primary thread carries `session.thread_created`, `agent.thread_message_sent` and `agent.thread_message_received`; a Session budget is one shared cap priced per thread's model, enforced between requests (an in-flight request can finish above it) and reported in whole cents; thread retrieval returns per-thread `usage` with `list_cost`.
+
+### 36.3 Pre-flight (zero inference; 15/15 PASS)
+
+Working tree clean at `9153816`. Production `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: v17, Haiku, `multiagent: null`, byte-identical to the accepted snapshot, referencing neither temporary agent. Validation coordinator: version exactly **2**, not archived, canonical JSON equal to the §35 update response; system = production prefix + exactly the v2 pass-through addendum; the v1 "faithfully and concisely" addendum absent; `project-health` absent; roster exactly the specialist v1 (entry type `agent`, no Advisor or self entry); tools, MCP servers and the four ordinary Skills equal production. Specialist: v1, Sonnet, no roster, Skill pinned `skver_01JLTtMvUgfEqdcBBGj4WGVm`, four Trello reads only, no writes, no Calendar. Only the §34 Session existed for the coordinator; Environment, Memory Store and vault present and not archived.
+
+### 36.4 Session and resolved Session Agent (inspected before any message; $0; 17/17 PASS)
+
+**`sesn_01B8YkhyBdxD5oLokrYGEHgP`**, created 2026-09-19T08:58:40.249570Z. Same Environment (`env_01LVWPmvP5F3fLy28EaycVU2`) and vault (`vlt_011Cf5Ju4bN6RhVP7DnA1ZA4`) as §34, the production memory instructions verbatim from `src/djonikClient.ts`, Memory Store attached **`read_only`** as in §34, budget 32¢. `agent_with_overrides` with only a `tools` override (all `trelloWrite*` disabled). The resolved Session agent had: id = validation coordinator, **version 2**, Haiku, system = production prefix + the v2 addendum only, **roster preserved** (one entry: the specialist v1), `project-health` absent and the four ordinary Skills unchanged, all six `trelloWrite*` disabled, Calendar toolset disabled and identical to production, built-in toolset and MCP servers unchanged, vault attached, memory mounted read-only, usage 0, no events, only the primary thread. (The §34 roster-word check flaw was fixed: the roster is now checked by entry type.)
+
+### 36.5 Scenario A user prompt (the only `user.message`, verbatim)
+
+```text
+Що зараз по Extract? Дай короткий health check: що активне, що чекає, чи є реальні ризики і що мені варто зробити далі.
+```
+
+The Session went idle after ~55 s with `stop_reason: end_turn`. No interrupt, no clarification question, no `requires_action`.
+
+### 36.6 Delegated task and verbatim-delegation comparison — **FAIL**
+
+Coordinator → specialist (`agent.thread_message_sent`, the only one, 186 characters; the user's prompt is 119):
+
+```text
+Project Health review for Extract.
+
+User's questions:
+- What is active?
+- What is waiting?
+- Are there real risks?
+- What should be done next?
+
+Provide a concise health check assessment.
+```
+
+Exact string comparison with the user's prompt: **not equal.** The coordinator translated the request into English, restructured it into a bulleted "User's questions" list and added its own instruction ("Provide a concise health check assessment"). The user's exact Ukrainian wording ("Що зараз по Extract? Дай короткий health check: …") was not delegated. It did not add the §34 extra dimensions (comments, activity, dependencies), but it is not a verbatim delegation, which the contract required.
+
+### 36.7 User-facing coordinator messages and no-preamble check — **FAIL**
+
+The coordinator emitted **3** user-facing `agent.message` events; **2** were sent before the specialist's report arrived:
+
+| # | Time | Text | When |
+|---|---|---|---|
+| 1 | 08:58:56Z | "Чекаю на аналіз Extract. Результат прийде наступним повідомленням." | right after delegating, before any specialist message |
+| 2 | 08:59:03Z | "Чекаю на детальний аналіз..." | after the specialist's interim status message, before its report |
+| 3 | 08:59:47Z | the specialist report (§36.10), 1,678 characters | final |
+
+Message 1 is the same kind of preamble as §34 despite the explicit "do not send a progress or preamble message" instruction. Message 2 was triggered by an interim message the **specialist** sent (§36.8). The turn therefore produced three Telegram-visible messages instead of one.
+
+### 36.8 Delegation evidence (server-side) — **native delegation PASS**
+
+- Primary thread `sthr_01XoJ1zn7vfdxrKSyN44vEh8`: agent `Djonik Project Health Validation Coordinator`, `agent_01GFCLFYq6uLRHG8vMCrAgeK` **v2**, Haiku.
+- Child thread `sthr_01Ja62PwHWLwGdGkXk6QiMUj` (`parent_thread_id` = the primary thread): agent **`Djonik Project Health Specialist`, `agent_01KNiQDzzPjaMU6LLF4mU6uM`, version 1**, Sonnet 5 (effort high).
+- `session.thread_created` → `agent.thread_message_sent` (task above, received identically by the child) → **two** `agent.thread_message_received` events on the primary thread:
+  1. 08:59:02Z, 83 characters, an interim status message from the specialist: "Working on it — reading fresh Trello evidence for Extract now, will report shortly."
+  2. 08:59:41Z, 1,678 characters, the final report (§36.10).
+- The specialist sent both with `agent.thread_message_sent` from its thread (83 and 1,678 characters) and then ended with its own `agent.message` "Готово — звіт по Extract передано координатору.", which stayed on the child thread and did not reach the primary thread.
+- The specialist's system contract asks for one self-contained result and does not mention interim messages; in §34 it sent none.
+- The coordinator made **0 tool calls** of its own.
+
+### 36.9 Specialist runtime evidence — **runtime PASS**
+
+- **Skill:** the child's first tool call was `read /workspace/skills/project-health/SKILL.md`: no error, 10,580 characters, contains `Dates and deadlines`.
+- **Trello reads (this turn, all read-only; 5 MCP calls, none errored):** `trelloSearch(search_boards "Extract")` → `trelloSearch(search_cards "Extract")` → `trelloReadBoard(list)` → `trelloReadBoard(list_labels)` → `trelloReadCard(list_by_board)` (default filter: 34 open cards, 10 with the `Extract` label). No per-card `get` this time. Fresh direct reads support the current-state claims (the #18 criterion is met **for this observed turn only**).
+- **Project resolution:** no board "Extract"; scoped to the `Extract` label on the Djonik board without asking Daniel.
+
+### 36.10 Exact specialist report (final `agent.thread_message_received`, 1,678 characters)
+
+```text
+Health check: Extract (мітка на дошці Djonik — окремої дошки з такою назвою немає, тому оцінка по картках з міткою "Extract").
+
+Висновок: проєкт живий і рухається — є активна робота в In Progress, найближча черга в This week, і нещодавно закриті картки. Явного Waiting чи Blocked по Extract зараз немає, але є один конкретний ризик: дедлайн стоїть на картці, яка ще не розпочата.
+
+Що активне:
+- In progress: "Чорні аромати" (новий дизайн флакону 100мл, жіночі/чоловічі аромати) та "Коментарі по пінкам".
+- This week (в черзі на найближчий час): "Флакони 1.5 ML" (велика специфікація — 12+12 позицій, чорна+біла лінійка) та "Міні-парфуми адаптація".
+
+Waiting:
+- Жодної картки з міткою Extract не знайдено у списку "Waiting" на дошці. По Extract зараз немає задач, які явно очікують на щось зовнішнє.
+
+Ризики:
+- Картка "Брендбук" має due: 2026-09-25T15:00:00.000Z, але лежить у списку Backlog (тобто ще не розпочата). Це конкретний ризик: підтверджений дедлайн є, а робота ще не стартувала.
+- Blocked-статусу не виявлено — жодна картка Extract не містить тексту про конкретну залежність, що зупиняє роботу.
+
+Що ще в бекенді (не проблема сама по собі): "Рендер Відео білих ароматів" та "Флакони 7.5 ML" — в Backlog без дедлайну, це нормальна черга, не waiting і не ризик.
+
+Наступний PM-крок: перевірити з виконавцем, чи "Брендбук" встигає до 2026-09-25T15:00:00.000Z, і за потреби перенести її з Backlog у This week/In progress, щоб робота стартувала завчасно.
+
+Що не визначено: точний стан "хто над чим працює" (members не читались, бо в жодній картці не було виставлено виконавця у відповіді), і чи є усна/чатова домовленість поза Trello щодо Брендбуку — цього дані не показують.
+```
+
+### 36.11 Specialist quality assessment — **facts PASS, quality FAIL (soft wording)**
+
+Checked against the raw `list_by_board` payload the specialist received:
+
+| Criterion | Result |
+|---|---|
+| Scoped to Extract; fresh reads | PASS |
+| Facts | PASS: In progress "Чорні аромати" and "Коментарі по пінкам"; This week "Флакони 1.5 ML" (12 black + 12 white items, verified in the description) and "Міні-парфуми адаптація"; Backlog "Рендер Відео білих ароматів", "Флакони 7.5 ML" (no due) and "Брендбук" (due `2026-09-25T15:00:00.000Z`); no Extract card in Waiting; label `Extract` on 10 open cards |
+| Backlog ≠ Waiting; no unsupported Waiting/Blocked | PASS (explicitly "не waiting і не ризик") |
+| Due timestamps as recorded; no weekday, local time, countdown | PASS: `2026-09-25T15:00:00.000Z` quoted twice, no derived weekday, local time or countdown |
+| No invented people/entities/dependencies/commitments | PASS |
+| Zero mutation | PASS |
+| `lastActivityAt` / relative-time wording | **FAIL (soft):** «нещодавно закриті картки» is approximate relative-time wording the Skill forbids ("never … relative-age or countdown wording"). The only recency basis in the payload is the Done cards' due/activity timestamps |
+| Progress/liveness claims | **FAIL (soft):** «проєкт живий і рухається» claims liveness and progress; list membership supports "active work in In progress", not "moving" |
+| Risk evidence-backed and hedged | **PARTIAL:** Брендбук (Backlog + verified due) is stated as «конкретний ризик: підтверджений дедлайн є» with no hedge that an internal Trello due is not automatically a commitment |
+| Concise, one next step | PASS (about 1.7k characters, about nine cards named across sections, one next step) |
+| Language / clarity | Minor: «Що ще в бекенді» (for backlog); "members не читались, бо … не було виставлено виконавця" is muddled: the payload did contain `members` (all empty) |
+| Self-contained single result | **FAIL:** it first sent an interim "Working on it" message, which caused a coordinator progress message (§36.7) |
+
+No factual claim was wrong and nothing was mutated. The soft failures are Skill-rule wording violations ("нещодавно", «живий і рухається»), the residual Sonnet behavior class already seen in §29/§30, not the relay problem.
+
+### 36.12 Exact final coordinator response (`agent.message` #3)
+
+```text
+Health check: Extract (мітка на дошці Djonik — окремої дошки з такою назвою немає, тому оцінка по картках з міткою "Extract").
+
+Висновок: проєкт живий і рухається — є активна робота в In Progress, найближча черга в This week, і нещодавно закриті картки. Явного Waiting чи Blocked по Extract зараз немає, але є один конкретний ризик: дедлайн стоїть на картці, яка ще не розпочата.
+
+Що активне:
+- In progress: "Чорні аромати" (новий дизайн флакону 100мл, жіночі/чоловічі аромати) та "Коментарі по пінкам".
+- This week (в черзі на найближчий час): "Флакони 1.5 ML" (велика специфікація — 12+12 позицій, чорна+біла лінійка) та "Міні-парфуми адаптація".
+
+Waiting:
+- Жодної картки з міткою Extract не знайдено у списку "Waiting" на дошці. По Extract зараз немає задач, які явно очікують на щось зовнішнє.
+
+Ризики:
+- Картка "Брендбук" має due: 2026-09-25T15:00:00.000Z, але лежить у списку Backlog (тобто ще не розпочата). Це конкретний ризик: підтверджений дедлайн є, а робота ще не стартувала.
+- Blocked-статусу не виявлено — жодна картка Extract не містить тексту про конкретну залежність, що зупиняє роботу.
+
+Що ще в бекенді (не проблема сама по собі): "Рендер Відео білих ароматів" та "Флакони 7.5 ML" — в Backlog без дедлайну, це нормальна черга, не waiting і не ризик.
+
+Наступний PM-крок: перевірити з виконавцем, чи "Брендбук" встигає до 2026-09-25T15:00:00.000Z, і за потреби перенести її з Backlog у This week/In progress, щоб робота стартувала завчасно.
+
+Що не визначено: точний стан "хто над чим працює" (members не читались, бо в жодній картці не було виставлено виконавця у відповіді), і чи є усна/чатова домовленість поза Trello щодо Брендбуку — цього дані не показують.
+```
+
+### 36.13 Strict string-equality relay comparison — **byte-exact copy PASS; one-message requirement FAIL**
+
+The raw text of the coordinator's final `agent.message` and of the specialist's final `agent.thread_message_received` were extracted from the event `content` fields and compared with `===` (no trimming, no normalization): **equal** (1,678 characters each; also different from the interim message). So when the report arrived Haiku did copy it verbatim, with no title, preface, conclusion, emoji, rewrite or added sentence, the behavior the v2 contract targets for the final message. The separate requirement that the coordinator emit **exactly one** user-facing message is **not met** (3 messages, §36.7).
+
+### 36.14 §34 regression checks (scan of the final coordinator message)
+
+| §34 failure | Present now? |
+|---|---|
+| New «через N днів» / countdown | No |
+| «сьогодні / вчора / завтра» | No |
+| New weekday | No |
+| Backlog moved under "Активне" | No (Backlog is listed separately as a normal queue) |
+| Risk severity amplified by the coordinator | No (the text is the specialist's own, byte for byte) |
+| Extra PM next step added by the coordinator | No |
+| Specialist uncertainty omitted | No |
+| Extra title / preface / conclusion | No |
+| Emoji | No |
+
+By construction none can be introduced by the coordinator once the text is byte-identical. The specialist's own soft deviations («нещодавно», «живий і рухається») are relayed unchanged and are recorded under §36.11.
+
+### 36.15 Zero mutation, zero Calendar, no Memory write (server-side, all threads)
+
+Tool calls: coordinator thread **0**; specialist thread 6 (`read` ×1, `trelloSearch` ×2, `trelloReadBoard` ×2, `trelloReadCard` ×1). **`trelloWrite*`: 0. Calendar: 0. `bash`/`write`/`edit`: 0. Inputs touching `/mnt/memory`: 0.** No `session.error` and no error results. The Memory store's newest version (2026-09-17T08:22:39Z) predates the Session, so no Memory write occurred (the store was also attached read-only).
+
+### 36.16 Usage and cost (authoritative Session and per-thread, from the API)
+
+| | Model | List cost | Model requests | Input / cache write / cache read / output tokens | Active s |
+|---|---|---|---|---|---|
+| Coordinator thread | Haiku 4.5 | **$0.04** | 4 | 35 / 19040 / 52928 / 1284 | 10.2 |
+| Specialist thread | Sonnet 5 (effort high) | **$0.16** | 6 | 12 / 41382 / 98608 / 3205 | 46.4 |
+| **Session (authoritative)** | | **$0.19** | 10 | 47 / 60422 / 151536 / 4489 | 56.8 |
+
+Per-thread rounded costs (4¢ + 16¢ = 20¢) do not add exactly to the Session's 19¢, as documented (independent rounding; the Session figure is the enforced one). Platform cap $0.32: **not reached**, `budget_reached` did not occur, final `stop_reason` `end_turn`; no in-flight request finished above the cap. Final cost $0.19 is below the absolute $0.45 authorization, so there is no overrun. The budget was not raised. It cost less than §34 ($0.27) because the specialist made 5 reads on a default (open-cards) payload of about 36k characters instead of 11 reads on a 54k-character payload.
+
+### 36.17 Production and resource safety proof (read-only, after the turn; 12/12 PASS)
+
+Production `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: canonical JSON **byte-identical** to pre-flight; v17, `updated_at` 2026-09-18T13:08:46.751798Z, Haiku, same system/Skills/MCP/tools, `multiagent: null`, references neither temporary agent; no production-agent Session created since. Specialist: **byte-identical**, v1, `updated_at` unchanged. Validation coordinator: still **version 2** (`updated_at` 2026-09-19T08:45:59.462300Z), canonical JSON equal to the §35 update response, not archived, version history still exactly v1 and v2. Exactly two Sessions have ever existed for the coordinator (the §34 Session on v1 and this one on v2); none for the specialist alone. No Agent or Skill was created, updated or archived.
+
+### 36.18 Classification
+
+| # | Criterion | Result |
+|---|---|---|
+| 1 | Delegated request fidelity | **FAIL** — English paraphrase, not verbatim (§36.6) |
+| 2 | No-preamble behavior | **FAIL** — 2 user-facing messages before the report (§36.7) |
+| 3 | Native delegation | **PASS** — specialist v1 child thread, task sent, report received (§36.8) |
+| 4 | Specialist runtime / quality | **Runtime PASS; quality FAIL (soft)** — Skill/Trello/zero-mutation PASS and facts correct, but «нещодавно», «живий і рухається», unhedged risk, and an interim status message (§36.11) |
+| 5 | Exact pass-through | **Final message === report: PASS.** The one-message sub-requirement failed (recorded under 2) |
+| 6 | **Overall Scenario A** | **FAIL** — overall PASS needed all five to PASS; 1, 2 and 4 failed |
+
+### 36.19 Findings and what this means (observed, not proven; nothing changed)
+
+- Haiku **obeyed the copy-verbatim instruction for the final message**, the core failure of §34, but **ignored two other explicit v2 instructions** (delegate the request verbatim; send no progress/preamble message). Instructions about *what to do at the end* were followed; instructions about *what not to do while waiting* and *how to phrase the delegation* were not.
+- The second extra message was caused by a **specialist behavior** (an interim status message), which is not addressed by any contract line today. Even with a perfect coordinator, an interim specialist message would wake the coordinator and risk another visible message.
+- The specialist still uses forbidden approximate recency/liveness wording («нещодавно», «живий і рухається»), and now relays them unchanged.
+- Per the brief, the run stopped here: no other prompt or configuration was tried. Options for the Product Owner (each needs its own decision and guardrail): (1) a specialist v2 whose contract forbids interim messages and recency/liveness wording, with a coordinator update pinning it; (2) accept that the coordinator may speak several times and let the thin adapter forward only the final `agent.message` of a turn (a delivery-policy decision, not intent routing; not implemented, and it would leave the verbatim-delegation failure open); (3) decide whether Haiku is adequate for the coordinator role in this topology. I would not add a third instruction round to the coordinator prompt alone: two of its three failures are outside what the prompt currently controls.
+
+### 36.20 Deferred
+
+Scenarios B, C and D were not run. There was no second Session, no second turn and no budget increase. The validation coordinator has **not** been archived (a separate Product Owner-authorized action after #28 validation). Also open: adapter handling of multiple `agent.message` events and thread events in `src/djonikClient.ts` (not inspected beyond reading it), specialist effort `high`, and #18 (a platform limitation).
+
+### 36.21 Confirmations
+
+- **Exactly 1 Session and exactly 1 user turn** (the only `user.message`); no second Session or turn; no interrupt; no budget increase.
+- **0 Trello mutations, 0 Calendar calls**, no Memory write; no production Agent, specialist, validation coordinator, Skill, Memory or `claude-lock.json` change.
+- No commit, push, deploy, branch, roadmap or issue change; no archive.
