@@ -13,7 +13,7 @@ Claude Console / Managed Agents
        ├── built-in tools
        ├── Skills
        ├── custom tools / MCP
-       ├── optional subagents later
+       ├── measured specialist subagents when justified
        └── Sessions
             └── attached Memory Store(s)
 
@@ -68,7 +68,7 @@ The Managed Agent configuration owns:
 - built-in tool permissions;
 - attached Skills;
 - custom tools / MCP servers;
-- optional subagents/advisors later.
+- bounded subagents/advisors only after measured need and explicit acceptance.
 
 The repository remains the reviewed product/architecture source and may contain source copies of Skills, tool adapters and configuration notes. It must not create a competing local Djonik identity.
 
@@ -162,15 +162,28 @@ Rules:
 
 ## 9. Subagents / multi-agent
 
-Do not start with a multi-agent architecture.
+Djonik remains one persistent primary collaborator. Multi-agent is **not** the default architecture and must not become a generic routing layer.
 
-The main Djonik Managed Agent should handle ordinary PM conversation and tool use itself.
+Issue #28 produced the first measured case where a specialist is justified. Repeated live Project Health validation on the Haiku production baseline showed recurring PM-judgement errors despite progressively simplified Skill guidance: unsupported Waiting interpretations, model-derived relative/weekday date wording, misuse of `lastActivityAt` as progress evidence, and overstated risk. A bounded Sonnet diagnostic using the same `project-health` Skill and live Trello data did not reproduce those dominant correctness failures in the observed A/B scenarios, although it still showed residual verbosity and one invented entity. The diagnostic also confirmed that missing same-turn fresh reads are **not** solved by a stronger model: the accepted #18 platform limitation appeared on both Haiku and Sonnet.
 
-Introduce a specialist only when isolated context or parallel work clearly improves quality/cost/latency. Candidate later roles:
+**Approved architecture direction for the next Wave C1 slice:** keep the primary Djonik coordinator on the intentional Haiku baseline and evaluate one dedicated **Sonnet Project Health specialist subagent** through Claude Managed Agents native multi-agent orchestration. This is an implementation direction, not yet an accepted production configuration.
 
-- research/context retrieval;
-- studio intake analysis;
-- weekly review / historical analysis.
+Rules for that specialist:
+
+- Djonik/Haiku remains the primary user-facing coordinator unless a separate Product Owner decision changes the baseline.
+- The Project Health specialist is a separately versioned Managed Agent with its own Sonnet model, focused system prompt, `project-health` Skill, and only the Trello read capabilities it actually needs.
+- The specialist must have **no Trello mutation capability** and no Calendar capability for Project Health.
+- Skills, MCP servers, tools, and context are not assumed to be shared automatically between coordinator and specialist; required capabilities must be configured explicitly on the specialist.
+- Delegation must use the native Managed Agents multi-agent roster. Do not add an application-level phrase/intent router.
+- For delegated Project Health turns, the coordinator must preserve the specialist's evidence-backed factual interpretation and must not recompute dates, waiting/blocked status, risk, or activity semantics on its own.
+- Ownership of `project-health` moves from the coordinator to the specialist only after the delegated path passes acceptance. Until then, production remains unchanged.
+- Do **not** add an Advisor for this C1 slice. Advisor is reserved for future consultative cases where the primary agent should remain the executor and only needs strategic guidance.
+- Referenced specialist agents are versioned/pinned by the coordinator roster; updating the specialist requires an explicit coordinator roster update and review.
+- Keep delegation one level deep. Do not create specialist-of-specialist chains.
+- Treat Sonnet cost as a bounded escalation cost, not the default cost of ordinary Djonik turns. Validation and production telemetry must distinguish coordinator and specialist usage.
+- The #18 same-turn fresh-read limitation remains a separate platform constraint. Do not represent subagent delegation as fixing it.
+
+Future specialists may still be justified for research/context retrieval, studio intake analysis, or historical/weekly review, but each requires its own measured benefit before introduction.
 
 ## 10. Proactive work
 
