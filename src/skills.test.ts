@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function readSkill(name: string): string {
-  return readFileSync(join(repoRoot, ".claude", "skills", name, "SKILL.md"), "utf8");
+  return readFileSync(join(repoRoot, ".claude", "skills", name, "SKILL.md"), "utf8").replace(/\r\n?/g, "\n");
 }
 
 function projectHealthSection(content: string, heading: string): string {

@@ -806,3 +806,197 @@ Not verdict A: D did not run, so the staleness boundary and the fresh-read requi
 - Trello mutations: **0**. Calendar calls: **0**.
 - Production change: **none.** Agent v17 unchanged; no Skill created or versioned; repo Skill text unchanged. Only this diagnostic Session's own budget cap was raised (20¢ → 32¢).
 - No commit, push, deploy, roadmap edit, or issue update.
+
+---
+
+## 31. Wave C1 architecture slice 1 — repo-side Project Health specialist definition
+
+> **Scope:** discovery plus one reviewable, declarative Managed Agent definition, a narrow safety test, and this section. **Configuration source only.** No live Agent was created, and the production Haiku coordinator and its roster are untouched. No inference, no Session, no Trello or Calendar call, no commit/push/deploy, no roadmap edit, no issue update. This supersedes the "specialist subagent is out of scope" line in the original #28 body, per the Product Owner comment and current `docs/01` §9 / `docs/02`.
+
+### 31.1 Official Managed Agents multiagent API findings (fetched 2026-09-19)
+
+Sources: `platform.claude.com/docs/en/managed-agents/` pages `multiagent-orchestration`, `agent-setup`, `tools`, `mcp-connector`, `skills`, `budgets`; the Skills guide for the version-id format. Beta header `managed-agents-2026-04-01`.
+
+**No material contradiction with `docs/01` §9 or `docs/02` was found; the pass proceeded.**
+
+| # | Question | Current official answer |
+|---|---|---|
+| 1 | Coordinator config shape | On the coordinator agent: `multiagent: {"type": "coordinator", "agents": [ … ]}`. 1–20 entries. Replaced as a whole on update; `null` clears it. |
+| 2 | Referenced-agent roster | Entry forms: `{"type":"agent","id":…}`, `{"type":"agent","id":…,"version":<int>}`, `{"type":"self"}`, `{"type":"advisor","model":…}`. Entries must be distinct, non-archived agents. |
+| 3 | Version pinning | With `version`, the reference is pinned. Without it, the reference is pinned to the referenced agent's latest version **at the time the coordinator is created or updated**. Either way the roster is a snapshot: a later specialist update is **not** picked up until the coordinator is updated. Matches `docs/01`. |
+| 4 | Does delegation require `agent_toolset_20260401` on the coordinator? | **Not stated as a requirement.** Every coordinator example includes it, but the advisor example has `multiagent` and no `tools`. Delegation appears to use platform-provided thread tools (`list_agents`, `send_to_agent`). Production already has the toolset; nothing to change. |
+| 5 | Child isolation | "Each agent uses its own configuration: model, system prompt, tools, MCP servers, and skills … Tools, MCP servers, and context are not shared." Each thread has its own conversation history. |
+| 6 | MCP/vault across threads | MCP servers are agent-scoped; vault credentials are session-scoped (`vault_ids` apply to every thread). "To limit an agent's access, declare only the servers it needs." Credentials match by normalized URL. |
+| 7 | One-level restriction | Referencing an agent that itself has a `multiagent` roster fails create/update with a validation error. |
+| 8 | Skill syntax | `skills: [{"type":"custom","skill_id":"skill_…","version":"latest"\|<pin>}]`. Custom versions are `skver_…` ids (Skills guide). |
+| 9 | MCP allow/disable | `mcp_toolset` with `default_config: {enabled: false}` and `configs: [{name, enabled, permission_policy}]`; `name` is the bare server tool name. Docs recommend this pattern so tools the operator adds later stay off. |
+| 10 | Budget | One shared cap across all threads; each thread priced at its own model; threads pause independently; attachable only at session creation; a request in flight when the cap is crossed still finishes. |
+| 11 | Delegation result | The child's report reaches the primary thread as `agent.thread_message_received` (`from_agent_name`, `content`); the coordinator's task is `agent.thread_message_sent`. Full child activity is only on the child's own thread stream. Threads are **persistent**: a follow-up to the same child keeps its earlier context. |
+
+Additional findings that shape the design:
+
+- **MCP permission default.** The docs say an `mcp_toolset` defaults to `always_ask`; production shows explicit `always_allow`. A child thread waiting on confirmation is cross-posted to the primary thread as `requires_action` and would stall the turn. The specialist therefore sets `always_allow` explicitly on each enabled read.
+- **Inference geo.** Coordinator and roster members must all pin the same `inference_geo` or all leave it unset. Production Haiku has none; the specialist sets none.
+- **Session overrides do not reach roster agents.** Overrides apply to the coordinator and its `self` copies only, so the earlier session-level model-override diagnostic pattern does not apply to a specialist.
+- **Persistent threads and freshness.** A reused specialist thread retains prior Trello payloads. That is a stale-evidence hazard for a fresh-evidence capability, so the system contract tells the specialist that earlier turns are not evidence.
+
+### 31.2 Installed SDK compatibility
+
+`@anthropic-ai/sdk` **0.125.0** already exposes everything needed; **no upgrade is required.** `AgentCreateParams` accepts `multiagent`, `skills`, `mcp_servers`, `tools`; roster entries are typed (`BetaManagedAgentsAgentParams` has `id`, `type`, optional numeric `version`); `BetaManagedAgentsCustomSkillParams` has `skill_id`, `type`, optional `version: string`; `BetaManagedAgentsMCPToolsetParams` has `default_config` and `configs`; `beta.sessions.threads` exists.
+
+Verification: a scratch (not committed) file declared the specialist's exact shape `satisfies Anthropic.Beta.Agents.AgentCreateParams` and a future roster entry `satisfies BetaManagedAgentsMultiagentRosterEntryParams`; `tsc` passed. A negative control (an added unknown key) failed with `TS2353`, so the check does reject bad shapes. The scratch file copies the shape by hand; the committed test in §31.8 is what guards the repo file.
+
+### 31.3 Read-only live discovery (GET only)
+
+Calls: `beta.agents.retrieve`, `beta.skills.list`, `beta.skills.retrieve`, `beta.skills.versions.list`. Nothing else.
+
+- Production Agent `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: **v17**, `claude-haiku-4-5-20251001` / standard, `multiagent: null`, five custom Skills all `version: "latest"`, no `inference_geo`.
+- MCP servers: `trello` → `https://mcp.trello.com/v1`; `google-calendar-calendarmcp` → `https://calendarmcp.googleapis.com/mcp/v1` (toolset default `enabled:false`).
+- Trello toolset: default `enabled:true` / `always_allow`; `trelloWriteCard` enabled; `trelloWriteBoard`, `trelloWriteChecklist`, `trelloWriteInbox`, `trelloWriteList`, `trelloWritePlanner` disabled.
+- `project-health`: Skill `skill_01Treson5zdU1TgxXDaREwnY`, latest `skver_01JLTtMvUgfEqdcBBGj4WGVm` (2026-09-19T06:28:52Z); earlier versions `skver_012ckoEp…`, `skver_015toifw…`. The repo `SKILL.md` (LF-normalized sha256 prefix `c64318f46da417db`) matches the §28.2 sync, so the pinned version is the reviewed text.
+- **Not done:** enumerating the Trello MCP server's live tool list. That needs the vault credential and a Session, which this pass may not create. Tool names come from the repo's recorded evidence (below); `default_config.enabled:false` means any name not listed, including future ones, stays off.
+
+### 31.4 Isolation semantics that the specialist config relies on
+
+| Aspect | Semantics | Consequence in the definition |
+|---|---|---|
+| Model | Per agent | Specialist `claude-sonnet-5`; coordinator stays Haiku. |
+| System prompt | Per agent | The specialist has its own short contract. Nothing from the Djonik system prompt is inherited. |
+| Tools | Per agent, not shared | Declared explicitly; not copied from the coordinator. |
+| MCP servers | Per agent | Only `trello` is declared. Calendar is unreachable even though the session vault may hold a Calendar credential. |
+| Skills | Per agent (session cap 500, deduplicated) | One Skill, attached explicitly and pinned. |
+| Context | Separate thread history; persistent per thread | The specialist cannot see the Telegram conversation; the coordinator must delegate a self-contained task. Old thread context must not count as evidence. |
+| Vault credentials | Session-scoped, matched by URL | The existing Trello credential works for the specialist's identical URL; no new credential. |
+| Budget | One shared session cap | Specialist spend counts against the same session budget at Sonnet rates. |
+
+### 31.5 Specialist configuration architecture
+
+New file: **`managed-agents/project-health-specialist.md`**, in the official declarative `ant apply` format (YAML frontmatter = agent configuration; body = `system`). This is the smallest explicit convention; no existing Managed Agent config-source convention existed in the repo (only Skills under `.claude/skills/`). `managed-agents/README.md` documents it: reviewed source only, not read by runtime code, applying it is a live change needing PO authorization. It is deliberately not under `.claude/agents/`, which is Claude Code's own subagent location.
+
+```yaml
+name: Djonik Project Health Specialist
+model: claude-sonnet-5
+skills:  [ custom project-health, pinned skver_01JLTtMvUgfEqdcBBGj4WGVm ]
+mcp_servers: [ trello https://mcp.trello.com/v1 ]
+tools:
+  - agent_toolset_20260401   # default disabled; only `read` enabled
+  - mcp_toolset trello       # default disabled; four reads enabled, always_allow
+# no multiagent, no calendar, no custom tools
+```
+
+**Built-in `read` only.** Attached Skills are loaded by the agent reading `/workspace/skills/<name>/SKILL.md`; the recorded production sessions (§24, §28) show that as the first tool call. The docs describe this `read` dependency for repository Skills; that it also applies to an attached Skill inside a child thread is **inferred, not verified**, and is a named live-acceptance check (§31.13). `bash`, `write`, `edit`, `glob`, `grep`, `web_fetch`, `web_search` stay disabled.
+
+**Effort is left unset.** The Sonnet diagnostic (§29–§30) ran at the provider default effort (the requested `low` was not applied through the session-level override), so the specialist matches what was actually measured. Setting agent-level `effort` is a cost decision for later.
+
+### 31.6 Trello reads exposed, and why
+
+Names come from the repo's recorded evidence (`docs/04` tool inventory and the §24/§28/§29 event logs), not a live tool listing.
+
+| Tool | Why required | Live evidence |
+|---|---|---|
+| `trelloSearch` | Skill: discover a candidate board/list/card (discovery only). | Called in the recorded health sessions (§24, §26, §28, §29). |
+| `trelloReadBoard` | Board and label resolution (`list`, `get`, `list_labels`). | Called in §26 and §28. |
+| `trelloReadCard` | Authoritative card fields: list/status, description, `due`, labels, `lastActivityAt` (`list_by_board`, `get`). | Called in the recorded health sessions (§24, §26, §28, §29). |
+| `trelloReadList` | The Skill names it as an authoritative direct read for list state. | **Never observed live.** Kept because the Skill requires it by name; a candidate to drop if acceptance shows it is unused. |
+
+**Excluded on purpose:** `trelloReadMember` and `trelloReadChecklist` (the Skill allows them only conditionally, when a fresh result actually exposes assignment or progress; nothing recorded demonstrates they are needed), and `trelloReadInbox`, `trelloReadPlanner`, `trelloReadWorkspace` (the Skill states it does not need them). **Known mismatch:** the Skill text still mentions member/checklist reads as optional, and the specialist cannot call them. If live acceptance shows checklist or assignment evidence matters, adding them is a one-entry change to this file.
+
+### 31.7 Proof that all Trello writes and Calendar are excluded
+
+- **Writes.** The Trello toolset is `default_config: {enabled: false}` and lists no `trelloWrite*` name; the string `trelloWrite` appears nowhere in the file. Every enabled name matches `^trello(Search|Read)`. A new write tool the provider adds later is also off by default.
+- **Calendar.** No Calendar server or toolset is declared anywhere in the frontmatter, and MCP servers are agent-scoped, so the specialist has no path to Calendar even though the session vault may contain a Calendar credential.
+- **Enforced by test and checked by mutation** (§31.8): adding a write tool, enabling the Trello default, adding a Calendar server, un-pinning the Skill, enabling `bash`, adding a `multiagent` roster, and dropping an `always_allow` each fail the tests (7/7 mutations caught; file restored byte-identical).
+- **Not yet proven:** the API's resolved read-back of the created agent. That is a required check when the agent is actually created (§31.13).
+
+### 31.8 Test added
+
+`src/managedAgentConfig.test.ts` — 8 narrow tests on one file, no framework: Sonnet model and no roster; exactly one pinned custom Skill; Trello-only with exactly the four reads; explicit `always_allow` on each; zero Trello mutation; no Calendar in the declared config; built-in toolset default-off with only `read`; and the system-contract boundary phrases plus a length bound. The tests use line-based patterns over the regular YAML, matching the repo's existing Skill-test style, because no YAML parser is installed and none was added.
+
+### 31.9 Skill ID / version strategy
+
+- Attach only `project-health`: `skill_01Treson5zdU1TgxXDaREwnY`, pinned to `skver_01JLTtMvUgfEqdcBBGj4WGVm`, the repo-identical reviewed text. The Skill contents are not copied into the system prompt.
+- **The pin format is documented but not yet proven for Managed Agents.** The Skills guide documents `skver_…` version ids for pinning, and the SDK types `version` as a string. The Managed Agents Skills page says only "pin to a specific version". The first agent create will confirm it.
+- **Asymmetry to decide later.** The production coordinator references this Skill as `latest`. A new `project-health` version would change the coordinator silently while the specialist stays pinned. The Skill text is unchanged in this pass; the coordinator/Skill ownership move is deferred to the acceptance-gated slice.
+
+### 31.10 Specialist system-contract rationale
+
+The body is about 1.9k characters and refers to the Skill instead of duplicating it. Requirement → contract line:
+
+| Requirement | Contract line |
+|---|---|
+| Receives delegated work; result is relayed | Opening paragraph: reply is relayed by the coordinator "as-is"; Ukrainian by default. |
+| Grounded in fresh evidence; project health is interpretation | "Ground every current-state claim in Trello data you read during this task … read again"; "interpretation of evidence, not stored truth". Explicitly demotes earlier thread turns, the coordinator's message and Memory (the persistent-thread hazard). |
+| Waiting ≠ Blocked; Backlog ≠ Waiting | Stated verbatim as binding. |
+| `lastActivityAt`; no derived weekday/local/countdown | Two short lines; timestamps quoted as recorded ISO only. |
+| No invented people, entities, dependencies, commitments, risk | Explicit rule, aimed at the "Анна" failure seen on Sonnet (§29.4). |
+| Concise, no inventory | Explicit rule, aimed at the residual card enumeration seen on Sonnet (§29–§30). |
+| Self-contained result | Return shape: scope used, conclusion, evidence, supported risk, one next step, unknowns; a clarification question if the project is ambiguous; no tool/Skill talk. |
+| Zero mutation | "You are read-only … outside your role and hand it back". |
+
+This does **not** address #18. Nothing forces the specialist to read fresh data on every delegated turn; the contract only requires that it read or say it could not. The same-turn fresh-read limitation remains a platform limitation.
+
+### 31.11 Handoff boundary deferred to the next slice (not implemented)
+
+1. **Roster attachment by explicit id and version.** Update the production Agent so `multiagent` is `{"type":"coordinator","agents":[{"type":"agent","id":"<specialist agent id>","version":<specialist version>}]}`. Both values come from the specialist's create response. `agents.update` replaces `tools`, `skills` and `multiagent` as whole values, so the update must resend the full existing arrays; supply `version: 17` for optimistic concurrency. Updating the specialist later requires a reviewed coordinator roster update.
+2. **Faithful relay.** For delegated Project Health, Haiku must relay the specialist's factual interpretation and must **not** independently recompute or reinterpret: dates; weekday or countdown wording; Waiting vs Blocked; `lastActivityAt`; risk; people or entities. It should also relay a clarification question or a "could not read fresh data" statement as given, and add no project claims of its own.
+
+   Must **not** happen:
+   ```text
+   Specialist:   due = 2026-09-25T15:00:00Z
+   Coordinator:  «дедлайн у пʼятницю через 6 днів»
+   ```
+3. **Ownership move.** `project-health` moves from the coordinator to the specialist only after delegated acceptance (`docs/01` §9); until then production is unchanged, and the coordinator keeps its current Skill.
+4. **Adapter and telemetry, not inspected here.** `src/djonikClient.ts` has no handling of thread events (`session_thread_id`, `agent.thread_message_*`, `requires_action`). The next slice must confirm unknown events cannot break a turn and that telemetry separates coordinator and specialist usage (`docs/01` §9; per-thread `usage` is exposed on thread retrieval). Existing verify-after-write and the #23 finalizer do not apply, since the specialist is read-only.
+5. **Budget.** Guardrail sizing for any live acceptance must account for Sonnet rates, the coordinator's own Haiku turns in the same shared session budget, and the cache-cold cost measured in §30.5.
+
+### 31.12 Files changed
+
+- `managed-agents/project-health-specialist.md` — new; the reviewed specialist definition.
+- `managed-agents/README.md` — new; the config-source convention.
+- `src/managedAgentConfig.test.ts` — new; 8 narrow safety-invariant tests.
+- `docs/15_ISSUE_28_IMPLEMENTATION_REPORT.md` — this section appended.
+
+Unchanged: `docs/02_DEVELOPMENT_ROADMAP.md`, `docs/01_CLAUDE_NATIVE_ARCHITECTURE.md`, all Skills, `src/` runtime code, `package.json`, issue #28.
+
+### 31.13 Explicitly deferred work
+
+- Creating the specialist Agent resource, and reading it back to confirm the resolved tool configs (no write tool enabled, Calendar absent), the `skver_` pin, the Sonnet model and the default effort.
+- Verifying that a child thread can load an attached Skill with only `read` enabled, and how session memory instructions reach a child thread.
+- Coordinator roster attachment, coordinator prompt/Skill changes, and the relay-fidelity rules (§31.11).
+- Delegated live validation and cost A/B, under a declared spend guardrail (`docs/04` §27), with coordinator and specialist usage reported separately.
+- Deciding on `trelloReadMember` / `trelloReadChecklist`, keeping or dropping `trelloReadList`, and agent-level `effort`.
+- Any change to the `project-health` Skill text, including the residual specialist-level verbosity and invented-entity risks measured on Sonnet.
+- Thread-event handling in the thin Telegram adapter; #18 remains a platform limitation.
+
+### 31.14 Explicit confirmation
+
+- **No inference**, and **no paid Managed Session**. Inference spend: **$0.00**.
+- **No Agent create/update/archive.** Only `agents.retrieve` was called.
+- **No Skill create/update.** Only `skills.list`, `skills.retrieve`, `skills.versions.list` were called.
+- **No Trello call or mutation.** **No Calendar call.**
+- **No commit, push, deploy, branch, roadmap edit, or issue update.**
+- Checks: see the final verification below.
+
+### 31.15 Final verification (after the test-portability fix)
+
+The first run of this slice was red: `npm test` reported 264 pass / 1 fail. The failing test was `project-health Skill exists with valid frontmatter` in `src/skills.test.ts`. This was a test portability problem, not a Skill-content problem: on this Windows checkout `core.autocrlf=true` writes `.claude/skills/project-health/SKILL.md` as CRLF (the index holds LF), while the `readSkill()` helper read raw UTF-8 and the Skill tests assume LF.
+
+**Fix (test-only, one line):** `readSkill()` in `src/skills.test.ts` now normalizes CRLF/CR to LF (`.replace(/\r\n?/g, "\n")`) so every Skill test sees canonical newline text. No assertion was weakened or removed, no second helper was added, and `.claude/skills/project-health/SKILL.md`, Git config, runtime code and the Managed Agent definition were not changed.
+
+Final results:
+
+- `npm run typecheck`: passed, exit 0.
+- `npm test`: **265 tests, 265 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo.** The 8 managed-agent configuration tests in `src/managedAgentConfig.test.ts` still pass (8/8).
+- `git diff --check`: exit 0.
+- `git status --short`:
+
+```text
+ M docs/15_ISSUE_28_IMPLEMENTATION_REPORT.md
+ M src/skills.test.ts
+?? docs/16_ISSUE_28_SPECIALIST_SLICE1_REPORT.md
+?? docs/17_ISSUE_28_TEST_EOL_FIX_REPORT.md
+?? managed-agents/
+?? src/managedAgentConfig.test.ts
+```
+
+No inference, no Session, no Agent or Skill create/update, no Trello or Calendar call, no commit/push/deploy, no roadmap or issue change.
