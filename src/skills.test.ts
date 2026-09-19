@@ -10,6 +10,348 @@ function readSkill(name: string): string {
   return readFileSync(join(repoRoot, ".claude", "skills", name, "SKILL.md"), "utf8");
 }
 
+function projectHealthSection(content: string, heading: string): string {
+  const start = content.indexOf(`## ${heading}`);
+  assert.ok(start >= 0, `expected a '${heading}' section in project-health`);
+  const nextHeading = content.indexOf("\n## ", start + 1);
+  return nextHeading >= 0 ? content.slice(start, nextHeading) : content.slice(start);
+}
+
+// Issue #28: evidence-based, read-only project-health interpretation.
+
+test("project-health Skill exists with valid frontmatter", () => {
+  const content = readSkill("project-health");
+  assert.match(content, /^---\nname: project-health\ndescription: .+\n---\n/);
+});
+
+test("project-health frontmatter covers natural health questions without claiming planning or mutation", () => {
+  const frontmatter = readSkill("project-health").split("---")[1] ?? "";
+  for (const phrase of ["Що зараз по Extract", "Чи є ризики", "Дай health check", "Що тут зависло або заблоковано"]) {
+    assert.match(frontmatter, new RegExp(phrase, "i"));
+  }
+  assert.doesNotMatch(frontmatter, /Що робити сьогодні|Що робити цього тижня|create, update, move, or complete/i);
+});
+
+test("project-health explicitly hands daily, weekly, and mutation follow-ups to their owning Skills", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Scope and handoffs");
+  assert.match(section, /daily-planning/i);
+  assert.match(section, /weekly-planning/i);
+  assert.match(section, /task-management/i);
+});
+
+test("project-health requires fresh Trello evidence for current claims", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Gather fresh evidence first");
+  assert.match(section, /in this turn/i);
+  assert.match(section, /fresh/i);
+});
+
+test("project-health does not trust search alone for exact due or status", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Gather fresh evidence first");
+  assert.match(section, /trelloSearch.*discover/i);
+  assert.match(section, /direct read/i);
+  assert.match(section, /due/i);
+  assert.match(section, /list\/status/i);
+});
+
+test("project-health keeps waiting distinct from blocked", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Form the interpretation");
+  assert.match(section, /Waiting may need monitoring, but is not automatically blocked/i);
+});
+
+test("project-health requires concrete evidence for blocked", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Form the interpretation");
+  assert.match(section, /concrete dependency or problem/i);
+  assert.match(section, /Do not call an item blocked simply because/i);
+});
+
+test("project-health does not treat a Waiting list as automatic blocker evidence", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Form the interpretation");
+  assert.match(section, /list named .Waiting.*evidence of waiting/i);
+  assert.match(section, /not automatically of blocked work/i);
+});
+
+test("project-health requires stated evidence for risk and distinguishes internal due from commitment", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Form the interpretation");
+  assert.match(section, /explain the specific evidence/i);
+  assert.match(section, /internal Trello due date is not automatically a client commitment/i);
+});
+
+test("project-health does not treat many cards alone as risk", () => {
+  assert.match(readSkill("project-health"), /many cards alone are not risk/i);
+});
+
+test("project-health has no universal risk-age or card-count threshold", () => {
+  assert.match(readSkill("project-health"), /no universal age or card-count threshold for risk/i);
+});
+
+test("project-health does not treat undated work as stale", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Activity signal and staleness");
+  assert.match(section, /undated/i);
+  assert.match(section, /Do not label.*stale/i);
+});
+
+// Issue #28 correctness follow-ups after the first and second live FAILs:
+// due-date wording, no model date/time arithmetic, Backlog != Waiting, simplified
+// lastActivityAt/staleness, summary-not-card-dump, and label-based project resolution.
+
+const dateSection = () => projectHealthSection(readSkill("project-health"), "Dates and deadlines");
+const activitySection = () => projectHealthSection(readSkill("project-health"), "Activity signal and staleness");
+const resolveSection = () => projectHealthSection(readSkill("project-health"), "Resolve the named project");
+
+test("project-health does not derive a weekday from any Trello timestamp", () => {
+  const section = dateSection();
+  assert.match(section, /never derive or state: a weekday name/i);
+  assert.match(section, /From a Trello timestamp/i);
+  assert.match(section, /preserved accurately as read/i);
+  assert.match(section, /2026-09-25T15:00:00Z/);
+});
+
+test("project-health does not convert a Trello timestamp to local or Kyiv time", () => {
+  const section = dateSection();
+  assert.match(section, /a local or Kyiv clock time or any timezone conversion/i);
+  assert.match(section, /not a date formatter/i);
+});
+
+test("project-health forbids today/yesterday wording derived from a timestamp", () => {
+  const section = dateSection();
+  assert.match(section, /«сьогодні», «вчора», «завтра»/);
+});
+
+test("project-health forbids N-days-ago and N-days-from-now wording", () => {
+  const section = dateSection();
+  assert.match(section, /«N днів тому», «через N днів» or «N днів від тепер»/);
+});
+
+test("project-health forbids countdown and relative-age wording with no qualitative exception", () => {
+  const section = dateSection();
+  assert.match(section, /«менше тижня»/);
+  assert.match(section, /any other exact or approximate relative-age or countdown wording/i);
+  assert.match(section, /no qualitative exception/i);
+  // The earlier allowance for a hedged "looks close" remark is gone.
+  assert.doesNotMatch(section, /hedged/i);
+  assert.doesNotMatch(section, /fine only when today's date/i);
+});
+
+test("project-health applies the date rules to both due and lastActivityAt and gives good/bad examples", () => {
+  const section = dateSection();
+  assert.match(section, /`due` or `lastActivityAt`/);
+  assert.match(section, /quote only the authoritative recorded ISO value/i);
+  assert.match(section, /Good: «У Trello дедлайн: 2026-09-25T15:00:00Z\.»/);
+  assert.match(section, /Bad: «Дедлайн у пʼятницю через 6 днів\.»/);
+});
+
+test("project-health keeps exact due facts behind fresh direct evidence and leaves the due finalizer alone", () => {
+  const dates = projectHealthSection(readSkill("project-health"), "Dates and deadlines");
+  assert.match(dates, /Exact due facts still require a fresh direct Trello read/i);
+  assert.match(dates, /task-management due handling is separate and unchanged/i);
+  const gather = projectHealthSection(readSkill("project-health"), "Gather fresh evidence first");
+  assert.match(gather, /only from a card's own .due./i);
+});
+
+test("project-health does not treat Backlog as Waiting", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Form the interpretation");
+  assert.match(section, /Backlog is a queue, not a problem: it is not Waiting, not Blocked/i);
+  assert.match(section, /Being in Backlog.*is never evidence of waiting/i);
+});
+
+test("project-health does not treat undated or not-started work as Waiting", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Form the interpretation");
+  assert.match(section, /no due date, being undated, or not having been started is never evidence of waiting/i);
+});
+
+test("project-health requires explicit external-dependency evidence for Waiting", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Form the interpretation");
+  assert.match(section, /only when there is explicit evidence that the work is waiting for someone or something external/i);
+  assert.match(section, /list named .Waiting./i);
+  assert.match(section, /чекаємо відповідь клієнта/);
+});
+
+test("project-health worked examples: Backlog card is not waiting, Waiting list is not automatically blocked", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Form the interpretation");
+  assert.match(section, /Backlog with no due date and no description.*not Waiting/is);
+  assert.match(section, /list named .Waiting. with no explanatory text.*not automatically Blocked/is);
+});
+
+test("project-health worked examples: waiting text is legitimate waiting evidence but not blocked", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Form the interpretation");
+  assert.match(section, /«чекаємо відповідь клієнта».*legitimate waiting evidence/is);
+  assert.match(section, /still not Blocked unless something also prevents progress/i);
+});
+
+test("project-health worked examples: a concrete dependency may justify Blocked", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Form the interpretation");
+  assert.match(section, /work cannot continue because a concrete dependency is missing.*Blocked may be justified/is);
+  assert.match(section, /name the dependency/i);
+});
+
+test("project-health describes lastActivityAt honestly: undocumented, bumped by moves, only some activity", () => {
+  const section = activitySection();
+  assert.match(section, /per-card .lastActivityAt./i);
+  assert.match(section, /provider does not document this field/i);
+  assert.match(section, /moving or reordering cards bumps it without any work/i);
+  assert.match(section, /only shows that some Trello activity was recorded/i);
+});
+
+test("project-health does not let lastActivityAt prove active or live work", () => {
+  const section = activitySection();
+  assert.match(section, /not sufficient to say work is active, live, or progressing/i);
+  assert.match(section, /do not describe work as active or live because it is recent/i);
+  // Active/current status comes from list/status evidence instead.
+  const interpretation = projectHealthSection(readSkill("project-health"), "Form the interpretation");
+  assert.match(interpretation, /Base this on list\/status evidence, never on .lastActivityAt./i);
+});
+
+test("project-health does not produce a stale verdict from lastActivityAt", () => {
+  const section = activitySection();
+  assert.match(section, /not sufficient to classify a card or project as stale/i);
+  assert.match(section, /Do not produce a stale verdict from it/i);
+});
+
+test("project-health does not calculate lastActivityAt age", () => {
+  assert.match(activitySection(), /do not calculate its age/i);
+});
+
+test("project-health allows lastActivityAt only as raw recorded activity evidence", () => {
+  const section = activitySection();
+  assert.match(section, /quote it only as «Trello recorded activity at <ISO>»/);
+  assert.match(section, /no weekday, local time, or relative wording/i);
+});
+
+test("project-health states the staleness/progress limitation explicitly and defers contextual staleness", () => {
+  const section = activitySection();
+  assert.match(section, /Reliable staleness and progress judgement is unavailable from the current evidence/i);
+  assert.match(section, /Judging staleness contextually from activity is deferred/i);
+  assert.match(section, /do not invent an event log, cache, history store/i);
+});
+
+test("project-health no longer contains the contextual potentially-stale rules", () => {
+  const content = readSkill("project-health");
+  assert.doesNotMatch(content, /potentially stale/i);
+  assert.doesNotMatch(content, /expected near-term outcome/i);
+  assert.doesNotMatch(content, /qualify the uncertainty/i);
+  assert.doesNotMatch(content, /soft freshness hint/i);
+});
+
+test("project-health has no universal staleness age threshold", () => {
+  const content = readSkill("project-health");
+  const section = activitySection();
+  assert.match(section, /universal .N days. rule/i);
+  // No concrete numeric age cut-off anywhere in the Skill.
+  assert.doesNotMatch(content, /(older than|more than|over|>=?|≥)\s*\d+\s*(days?|дн|дні|днів|weeks?|тижн)/i);
+});
+
+test("project-health risk cannot rest on a self-derived date interpretation", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Form the interpretation");
+  assert.match(section, /Risk may use a verified due as evidence, but never a weekday, local time, client commitment, timezone-adjusted deadline, or relative-time or countdown wording that you calculated yourself/i);
+  assert.match(section, /unfinished required work with a verified due/i);
+  assert.match(section, /backlog or undated work alone is not risk/i);
+});
+
+test("project-health stays Skill-only with no new read-only-breaking behavior", () => {
+  const content = readSkill("project-health");
+  const handoff = projectHealthSection(content, "Read-only handoff");
+  assert.match(handoff, /zero Trello mutations/i);
+  assert.match(handoff, /Do not create, update, move, complete, or otherwise change a card/i);
+  assert.match(content, /do not invent an event log, cache, history store/i);
+  assert.match(content, /does not add middleware, a phrase router, or a custom tool loop/i);
+  assert.doesNotMatch(content, /trelloWrite[A-Z]/);
+});
+
+test("daily, weekly and task-management boundaries are unchanged by project-health activity/date rules", () => {
+  const health = readSkill("project-health");
+  assert.match(health, /hand off to the daily-planning or weekly-planning Skill/i);
+  assert.match(health, /task-management owns that mutation request/i);
+  // The health-only activity signal and date-wording rules must not leak into other Skills.
+  for (const name of ["daily-planning", "weekly-planning", "task-management", "studio-intake"]) {
+    const other = readSkill(name);
+    assert.doesNotMatch(other, /lastActivityAt/, `${name} must not adopt the health-only activity signal`);
+    assert.doesNotMatch(other, /project-health/, `${name} must not depend on project-health`);
+  }
+});
+
+test("project-health keeps Memory below fresh operational state", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Gather fresh evidence first");
+  assert.match(section, /cannot override fresh Trello operational state/i);
+});
+
+test("project-health is zero-write and hands mutations to task-management", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Read-only handoff");
+  assert.match(section, /zero Trello mutations/i);
+  assert.match(section, /task-management Skill/i);
+  assert.match(section, /verification/i);
+});
+
+test("project-health adds no persistent health score, cache, or automatic transient Memory write", () => {
+  const content = readSkill("project-health");
+  assert.match(content, /never a stored score/i);
+  assert.match(content, /Do not automatically write transient conclusions/i);
+  assert.match(content, /do not invent an event log, cache, history store/i);
+});
+
+test("project-health prefers concise evidence-backed output", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Form the interpretation");
+  assert.match(section, /one short conclusion/i);
+  assert.match(section, /only the 2–4 strongest evidence points/i);
+  assert.match(section, /smallest useful next PM step/i);
+});
+
+test("project-health forbids full-card enumeration by default", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Form the interpretation");
+  assert.match(section, /Do not enumerate every card by default/i);
+  assert.match(section, /whether grouped by list or not/i);
+  assert.match(section, /do not open with an inventory/i);
+});
+
+test("project-health lists all cards only on an explicit full-list or inventory request", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Form the interpretation");
+  assert.match(section, /List all cards only when Daniel explicitly asks for a full list or inventory/i);
+});
+
+test("project-health output shape is guidance, not a rigid heading template", () => {
+  const section = projectHealthSection(readSkill("project-health"), "Style");
+  assert.match(section, /as guidance and not a rigid template/i);
+  assert.match(section, /leading with the conclusion rather than an inventory/i);
+});
+
+test("project-health resolves a named project through a unique label on a shared board before asking", () => {
+  const section = resolveSection();
+  assert.match(section, /represented by a Trello board, or by a label on a shared board/i);
+  assert.match(section, /do not ask Daniel where the project lives yet/i);
+  assert.match(section, /inspect the accessible relevant shared board's labels and cards with a direct read/i);
+  assert.match(section, /If exactly one label matches, scope the review to the cards carrying that label/i);
+  assert.match(section, /say briefly which label you used/i);
+});
+
+test("project-health project resolution hard-codes no project or board and keeps no mapping table", () => {
+  const section = resolveSection();
+  assert.doesNotMatch(section, /Extract|Djonik|Seqthera|Limen|Cossack|A1/);
+  assert.match(section, /do not hard-code project or board names/i);
+  assert.match(section, /do not keep a project-mapping table/i);
+  assert.match(section, /not a router/i);
+});
+
+test("project-health still clarifies once when the project or label is ambiguous or absent", () => {
+  const section = resolveSection();
+  assert.match(section, /more than one label or board plausibly matches/i);
+  assert.match(section, /do not guess: ask one short clarification/i);
+  assert.match(section, /If nothing matches anywhere, say so and ask once/i);
+});
+
+test("project-health label scoping keeps other projects' cards out of the verdict", () => {
+  assert.match(resolveSection(), /Cards without that label do not drive the verdict/i);
+});
+
+test("project-health keeps its assessment isolated to the requested project", () => {
+  assert.match(readSkill("project-health"), /scoped to the named project/i);
+  assert.match(readSkill("project-health"), /another board.*verdict/i);
+});
+
+test("project-health has no Calendar dependency or new Trello write tool", () => {
+  const content = readSkill("project-health");
+  assert.match(content, /no Calendar dependency/i);
+  assert.doesNotMatch(content, /trelloWrite[A-Z]/);
+});
+
 test("studio-intake Skill exists with required frontmatter", () => {
   const content = readSkill("studio-intake");
   assert.match(content, /^---\nname: studio-intake\ndescription: .+\n---\n/);
