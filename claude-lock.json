@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "origin": {
+    "base_url": "https://api.anthropic.com",
+    "organization_id": "06870e1a-3b11-4fdc-ba26-a3ed6b0ab15c",
+    "workspace_id": "wrkspc_012dgYerRAUo4ayusy4MtteG"
+  },
+  "resources": {
+    "./managed-agents/project-health-specialist.md": {
+      "kind": "agent",
+      "id": "agent_01KNiQDzzPjaMU6LLF4mU6uM",
+      "version": "1",
+      "hash": "d7cf3e7f66452caee16e5f6cb358956a",
+      "remote_hash": "a53a95e4bc87d0ade000d4e6f8f39006"
+    }
+  }
+}

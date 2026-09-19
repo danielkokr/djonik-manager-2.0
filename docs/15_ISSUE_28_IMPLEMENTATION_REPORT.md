@@ -1000,3 +1000,162 @@ Final results:
 ```
 
 No inference, no Session, no Agent or Skill create/update, no Trello or Calendar call, no commit/push/deploy, no roadmap or issue change.
+
+---
+
+## 32. Wave C1 architecture slice 2 — real standalone Project Health specialist Agent
+
+> **Scope:** create the reviewed specialist from `managed-agents/project-health-specialist.md` as a real, versioned, standalone Managed Agent via `ant apply`, verify the stored resource, and record it. **Not attached to production Djonik.** The only live change was creating one Agent. 0 Sessions, 0 `user.message` events, $0 inference, 0 Trello calls, 0 Calendar calls; no commit, push or deploy; no roadmap or issue change.
+
+### 32.1 Official `ant apply` / API semantics verified (fetched 2026-09-19)
+
+Source: `platform.claude.com/docs/en/cli-sdks-libraries/cli/apply` and the CLI quickstart. **No discrepancy with the reviewed definition or with `docs/01` / `docs/02`; the slice proceeded.**
+
+- `ant apply` requires CLI **≥ 1.30.0**. The frontmatter is the agent's create-request fields and the Markdown body is `system`.
+- Kind inference, first match wins: (1) a top-level `type` field, (2) the directory (`agents/`, `environments/`, `memory_stores/`, `deployments/`), (3) a file name starting with the kind. "A **named** Markdown file that matches none is treated as an agent." The reviewed file has no top-level `type`, sits in `managed-agents/`, and is named `project-health-specialist.md`, so it matches none and is an agent only because it is named on the command line. That is why `ant apply .` must not be used: a directory walk would skip it. The path did not need to change.
+- `claude-lock.json` is written in the directory `ant apply` runs from. It records the resource id, version, the organization/workspace, and two hashes (`hash` of what was sent, `remote_hash` of what the API returned).
+- Without a terminal, `--yes` is required to apply. `--dry-run` prints the detailed plan and changes nothing. `--force` (not used) overwrites out-of-band edits.
+- `ant apply` cannot adopt an existing resource: only lockfile entries are managed, and applying a file that describes an existing agent creates a second one. **Consequence for the next slice:** production Djonik was not created by `ant apply`, so its roster update must be a direct `agents.update` (or `ant beta:agents update`) with an explicit specialist id and version, not an `ant apply` of a coordinator file.
+- Skill reference: an object such as `{type: custom, skill_id, version}` is "sent to the API as written", so the `skver_` pin passes through unchanged.
+- `ant apply` refuses credentials that resolve to a different organization/workspace than the lockfile, so later applies are bound to this workspace.
+
+### 32.2 Pre-flight (no mutation)
+
+- Working tree clean at `ddf75fc`; no `claude-lock.json` existed.
+- **`ant` was not installed** (no Go, no Homebrew). With explicit Product Owner approval I downloaded the official release `ant_1.34.0_windows_amd64.zip` (9,754,437 bytes) from `github.com/anthropics/anthropic-cli` (release v1.34.0, Latest), verified its SHA-256 (`6f0d96db9e16e129120b0d9d284f0123ecaff2b5755022a45cff04fbd792d222`) against the release's `ant_1.34.0_checksums.txt`, and extracted it into the session scratchpad only: no global install, no PATH/registry change, nothing inside the repository. **`ant version 1.34.0`** satisfies ≥ 1.30.0.
+- Authentication: `ANTHROPIC_API_KEY` from the repository's existing `.env`, passed as a process environment variable. It was never printed or written anywhere; the lockfile holds no secrets.
+- Production Agent (retrieved with `ant beta:agents retrieve`): `agent_01WGRHDBjQa3eMhoGJMmQ1dh`, **version 17**, `claude-haiku-4-5-20251001` / standard, `multiagent: null`, five custom Skills all `latest`, MCP servers `trello` and `google-calendar-calendarmcp` (Calendar toolset default `enabled:false`), `trelloWriteCard` enabled and the other five Trello write tools disabled. The full JSON was saved as a byte-exact baseline (5,362 bytes, sha256 prefix `a7339692ff19`).
+- Workspace inventory: exactly one agent existed (production), so there was no name collision and nothing to adopt.
+- Skill pin: `skver_01JLTtMvUgfEqdcBBGj4WGVm` exists (`name: project-health`, created 2026-09-19T06:28:52Z) and is still the Skill's `latest_version_id`.
+- Target: organization `06870e1a-3b11-4fdc-ba26-a3ed6b0ab15c`, workspace `wrkspc_012dgYerRAUo4ayusy4MtteG`, host `api.anthropic.com`. That workspace is the one holding the production Agent, since the same key retrieved it.
+
+### 32.3 Dry run (`ant apply --dry-run --verbose managed-agents/project-health-specialist.md`)
+
+Exit 0. The complete plan was:
+
+```text
+First apply  ./claude-lock.json does not exist yet and will be created
+Resources will be created with
+  credentials   API key (--api-key / ANTHROPIC_API_KEY)
+  host          api.anthropic.com
+  organization  06870e1a-3b11-4fdc-ba26-a3ed6b0ab15c
+  workspace     wrkspc_012dgYerRAUo4ayusy4MtteG
+Preview  ./claude-lock.json (new)
++ ./managed-agents/project-health-specialist.md  create
+    description, mcp_servers, model, name, skills, system, tools  (= the reviewed file)
+Resources  + 1 to create
+```
+
+**PASS:** exactly one `create`, no update, archive, delete or adopt of any existing resource. The shown fields equal the reviewed file: `model: claude-sonnet-5`; `skills: [{custom, skill_01Treson5zdU1TgxXDaREwnY, skver_01JLTtMvUgfEqdcBBGj4WGVm}]`; `mcp_servers: [trello]`; built-in toolset default-disabled with only `read`; Trello toolset default-disabled with the four reads. The dry run wrote no lockfile.
+
+### 32.4 Apply
+
+`ant apply --yes managed-agents/project-health-specialist.md`, no `--force`, one file, not repo-wide. Exit 0:
+
+```text
++ ./managed-agents/project-health-specialist.md  created    agent_01KNiQDzzPjaMU6LLF4mU6uM
+Resources  + 1 created
+State written to ./claude-lock.json
+```
+
+**Specialist: `agent_01KNiQDzzPjaMU6LLF4mU6uM`, version 1**, created 2026-09-19T07:59:48.705453Z.
+
+### 32.5 Read-back against the repo definition (official SDK `agents.retrieve`)
+
+A read-only script compared the stored resource with the repo file and the lockfile: **31 checks, 30 PASS, 1 FAIL that was a checker flaw and is resolved below.**
+
+| Area | Stored value | Result |
+|---|---|---|
+| Identity | name `Djonik Project Health Specialist`; type `agent`; `archived_at: null`; version 1; description and empty metadata as reviewed | PASS |
+| Model | `{"effort":{"type":"high"},"id":"claude-sonnet-5","speed":"standard"}`; no `inference_geo`; "haiku" appears nowhere in the resource | PASS |
+| Multiagent | `multiagent: null` (no roster; it cannot delegate further) | PASS |
+| Skills | exactly `[{"type":"custom","skill_id":"skill_01Treson5zdU1TgxXDaREwnY","version":"skver_01JLTtMvUgfEqdcBBGj4WGVm"}]`: pinned, not `latest`, no other Skill | PASS |
+| MCP servers | exactly `[{trello, url, https://mcp.trello.com/v1}]` | PASS |
+| Built-in tools | default-disabled; enabled set is exactly `read`; no `bash`, `write`, `edit`, `glob`, `grep`, `web_*` | PASS |
+| Trello toolset | `mcp_server_name: trello`; `default_config.enabled: false`; enabled allowlist exactly `trelloSearch`, `trelloReadBoard`, `trelloReadList`, `trelloReadCard`, each `always_allow` | PASS |
+| Custom tools | none | PASS |
+| System | equals the repo body exactly after trimming; 1,934 characters | PASS |
+| Top-level keys | exactly the standard set; no generated extras | PASS |
+
+The one FAIL was my "no `calendar` anywhere in the stored resource" check, which scanned the whole JSON including the system prose that deliberately says "no Calendar" (the same trap as in the repo test, §31.8). Re-run against the declared configuration only (everything except `system`): **no `calendar` or `googleapis`, false**; the only Calendar mention is that sentence in the prose.
+
+**Resolved values the reviewed file did not spell out (recorded, no action):**
+
+- **Effort resolved to `high`.** The reviewed file leaves `effort` unset, so the API filled in `claude-sonnet-5`'s default. This settles the §31.5 note that the Sonnet diagnostic ran at "provider default": that default is `high`. The Sonnet cost figures in §29–§30 were therefore measured at high effort, and lowering effort is an open cost decision (deferred; see §32.11).
+- The Trello toolset's own `default_config.permission_policy` resolved to `always_ask`, but it is moot because the default is disabled; the four reads carry explicit `always_allow`.
+- The built-in `read` entry resolved with `type: read` and `always_allow`.
+
+### 32.6 Proof of zero Trello writes, zero Calendar, no roster
+
+- **Trello writes:** `default_config.enabled: false`; the enabled set is exactly the four `trelloSearch`/`trelloRead*` names; the string `trelloWrite` does not occur anywhere in the stored `tools`; no custom tools exist. Any tool the Trello server adds later stays disabled.
+- **Calendar:** no Calendar MCP server or toolset is stored. MCP servers are agent-scoped, so the specialist cannot reach Calendar even if the session vault holds a Calendar credential.
+- **Roster:** `multiagent: null`.
+- **Not proven, and not claimable without a Session:** that the Trello server's live tool names match these four names. They come from recorded evidence (§31.6); the API stores allowlist names without checking them against the server.
+
+### 32.7 `claude-lock.json`
+
+Created at the repository root by `ant apply` (not hand-edited, no secrets), exactly one resource entry:
+
+```json
+{
+  "version": 1,
+  "origin": {
+    "base_url": "https://api.anthropic.com",
+    "organization_id": "06870e1a-3b11-4fdc-ba26-a3ed6b0ab15c",
+    "workspace_id": "wrkspc_012dgYerRAUo4ayusy4MtteG"
+  },
+  "resources": {
+    "./managed-agents/project-health-specialist.md": {
+      "kind": "agent",
+      "id": "agent_01KNiQDzzPjaMU6LLF4mU6uM",
+      "version": "1",
+      "hash": "d7cf3e7f66452caee16e5f6cb358956a",
+      "remote_hash": "a53a95e4bc87d0ade000d4e6f8f39006"
+    }
+  }
+}
+```
+
+It maps the reviewed file to the new Agent id and version 1, and there is no unexpected extra entry. The lockfile holds the organization and workspace identifiers (not credentials); committing it discloses them in the repository. A second `ant apply --dry-run` of the file reported **"Everything is up to date. Resources 1 unchanged"** and left the lockfile byte-unchanged, so the lockfile and remote state agree.
+
+### 32.8 Production coordinator after creation
+
+Production was re-retrieved and its JSON is **byte-identical** to the pre-flight snapshot (5,362 bytes, sha256 prefix `a7339692ff19` both times): same id `agent_01WGRHDBjQa3eMhoGJMmQ1dh`, **version 17**, `updated_at` `2026-09-18T13:08:46.751798Z` unchanged, `claude-haiku-4-5-20251001`, same system prompt, five Skills (all `latest`), MCP servers, tools and Trello write toggles, `multiagent: null`, Calendar toolset default `enabled:false`. Production does not reference the specialist id anywhere. The workspace now has exactly two agents (production and the specialist). The specialist has no Sessions (its Session list is empty; the newest Session in the workspace, `sesn_01RUA5XN…`, was created at 06:40Z, before the specialist existed at 07:59Z). It is unreachable from production.
+
+### 32.9 Files changed
+
+- `claude-lock.json` — new; generated by `ant apply`, one entry.
+- `managed-agents/README.md` — status updated: the specialist now exists as a live standalone agent (`agent_01KNiQDzzPjaMU6LLF4mU6uM`, v1), still not attached to production; one convention added about applying a named file from the repo root.
+- `docs/15_ISSUE_28_IMPLEMENTATION_REPORT.md` — this section.
+
+Unchanged: `managed-agents/project-health-specialist.md`, the `project-health` Skill and every other Skill, `docs/01`, `docs/02`, all `src/` code, `package.json`, issue #28. Scratch artifacts (the `ant` binary and its zip, the dry-run/apply transcripts, the production before/after JSON, the stored specialist JSON, and the read-back script) live only in the session scratchpad.
+
+### 32.10 Verification
+
+- `npm run typecheck`: passed, exit 0.
+- `npm test`: **265 tests, 265 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo.**
+- `git diff --check`: exit 0. Git printed only the non-failing notice that `managed-agents/README.md` will be converted LF to CRLF on the next touch.
+- `git status --short`:
+
+```text
+ M docs/15_ISSUE_28_IMPLEMENTATION_REPORT.md
+ M managed-agents/README.md
+?? claude-lock.json
+```
+
+### 32.11 Limitations / deferred work
+
+- **Not exercised:** no Session, so nothing is proven about runtime behavior: Skill loading in a child thread with only `read`, the four Trello tool names against the live server, MCP authentication for the specialist, and delegated Project Health quality.
+- **Effort is `high`** by default; lowering it (a new specialist version) is a later cost decision with measured evidence.
+- **Coordinator roster attachment** and the faithful-relay rules remain the next reviewed slice (§31.11). The roster entry will be `{"type":"agent","id":"agent_01KNiQDzzPjaMU6LLF4mU6uM","version":1}`, applied to production with a direct `agents.update` (`version: 17`, whole `tools`/`skills`/`multiagent` arrays resent), not via `ant apply` (it cannot adopt the existing production agent, §32.1).
+- Editing the specialist file later and re-applying creates version 2, and the coordinator stays pinned to version 1 until its roster is updated.
+- The `claude-lock.json` is uncommitted, as required; committing it and this section is a manual Product Owner step.
+- Delegated live acceptance under a declared spend guardrail, coordinator/specialist usage separation, adapter thread-event handling, and #18 (a platform limitation) are unchanged.
+
+### 32.12 Explicit confirmation
+
+- **0 Sessions created; 0 `user.message` events; $0 inference.**
+- **0 Trello calls; 0 Calendar calls.**
+- **Live changes: exactly one Agent created** (`agent_01KNiQDzzPjaMU6LLF4mU6uM`, v1). No Agent update or archive, no production coordinator change, no roster, no Advisor, no Skill create/update.
+- Read-only API/CLI calls only otherwise: `agents.retrieve`, `agents.list`, `skills.retrieve`, `skills.versions.retrieve`, `sessions.list`, and two `--dry-run` applies.
+- No commit, push, deploy, branch, roadmap edit, or issue change.
