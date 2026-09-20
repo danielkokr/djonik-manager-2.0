@@ -2906,3 +2906,154 @@ This is the first live confirmation that the coordinator v5 transport contract (
 - **No Agent or Skill mutation** occurred (§42.17).
 - **No production change** occurred (§42.17).
 - **Issue #28 was not updated or closed.**
+
+## 43. Wave C1 production Project Health cutover
+
+### 43.1 Accepted §42 evidence and Product Owner authorization
+
+§42 (Scenario A) passed with overall verdict PASS: native delegation, coordinator delegation-context hygiene, coordinator silent-wait (0 pre-result messages), fresh Trello evidence/runtime, specialist factual correctness, specialist natural PM voice, specialist response shape/concision, specialist one-final-child-message discipline, coordinator final exact relay (raw equality), coordinator end-turn discipline, zero mutation/Calendar/Memory write, and cost/budget compliance ($0.20 of $0.32) all passed.
+
+This slice's Product Owner authorization covered exactly one production Managed Agent configuration update: `agent_01WGRHDBjQa3eMhoGJMmQ1dh` v17 → v18, to attach the accepted specialist v3 through the native roster, move `project-health` ownership off the primary Haiku coordinator, and install the already-live-validated coordinator v5 transport contract text onto production. No inference, Session, `user.message`, Trello call, Calendar call, Memory write, Skill mutation, specialist mutation, or validation-coordinator mutation/archive was authorized or performed. Accepted main at authorization time: `890338d` (docs: record delegated project health acceptance); `git status --short` was clean.
+
+### 43.2 Official update / Session semantics
+
+Verified directly against the installed `@anthropic-ai/sdk` (`v0.125.0`) Managed Agents type definitions before mutating anything:
+
+- `agents.update`'s `version` field is optimistic concurrency: "the request fails if it does not match the server's current version; omit to apply the update unconditionally." Passing `version: 17` guarantees the update only applies if production was still at v17 at the instant of the call, and fails closed (documented as a 409) otherwise.
+- Every field omitted from an `agents.update` body is preserved unconditionally — `model`, `tools`, `mcp_servers`, `name`, `description`, and `metadata` were all omitted from this update's request body and are therefore untouched by construction, not merely by the read-back check.
+- `system` is scalar full replacement: the entire string is replaced by whatever is sent.
+- `skills` is full-array replacement when supplied: the provided array becomes the complete Skill list.
+- `multiagent` is full-object replacement when supplied: the provided object becomes the complete multiagent configuration.
+- A Managed Agents `session.agent` is explicitly documented as a "Snapshot of the `agent` at session creation time" — a Session's resolved agent configuration is fixed at creation and does not track later Agent-resource mutations.
+- `SessionCreateParams.agent` accepts either a bare agent-ID string, which "pins the **latest** version for the session" at the moment `sessions.create` is called, or an explicit `{id, version}` reference pinning a specific version.
+
+`src/djonikClient.ts`'s `connectToDjonik()` calls `client.beta.sessions.create({ agent: agentId, ... })` — the bare-string form, with no explicit version. **Established rollout semantics:**
+
+- Any **new** Session created after this update (via the unchanged runtime code, unmodified in this slice) will resolve `agent: agentId` to the **latest** version, i.e. **v18**, at the moment that Session is created.
+- Any **already-existing** Session created before this update keeps its own `session.agent` snapshot resolved at whatever version was live at *that* Session's creation time (v17 or earlier) — it does **not** retroactively pick up v18. No existing Session was mutated, terminated, or migrated in this slice, and none exists to touch as a side effect of this change (the runtime holds Sessions in-process only, per `DjonikSessionManager`; no Session was open during this slice).
+- Official semantics do not contradict the cutover plan; no reason to stop before mutation was found.
+
+The next slice's production smoke must therefore create one **fresh** Session (not reuse anything) and confirm its resolved `session.agent.version === 18` before treating any turn through it as v18-representative.
+
+### 43.3 Pre-flight (zero-inference `agents.retrieve`, fresh snapshots at `890338d`)
+
+| Agent | Expected | Observed |
+|---|---|---|
+| Production `agent_01WGRHDBjQa3eMhoGJMmQ1dh` | v17, Haiku, `multiagent: null`, exactly 5 Skills incl. `project-health` | v17, `claude-haiku-4-5-20251001`, `multiagent: null`, 5 skills: `skill_01WS6JtY1GMu3rGZaKCVR9w1`, `skill_01G9DtQEzPYxgw78riFh8k99`, `skill_01PTmbvLHJj1HuUxvDKhpaiE`, `skill_015c8dtDnWyDfVLwS6NLS7r6`, `skill_01Treson5zdU1TgxXDaREwnY` (project-health); `system` length 2256 chars |
+| Specialist `agent_01KNiQDzzPjaMU6LLF4mU6uM` | v3, Sonnet 5, effort high, project-health pinned `skver_01JLTtMvUgfEqdcBBGj4WGVm`, 4 Trello reads only | v3, `claude-sonnet-5`, `effort: {"type":"high"}`, `multiagent: null`, skill = `{skill_01Treson5zdU1TgxXDaREwnY, skver_01JLTtMvUgfEqdcBBGj4WGVm}`, Trello tool configs = exactly `trelloSearch`/`trelloReadBoard`/`trelloReadList`/`trelloReadCard` enabled, 0 `trelloWrite*` entries, no Calendar |
+| Validation coordinator `agent_01GFCLFYq6uLRHG8vMCrAgeK` | v5, Haiku, production-v17-prefix-identical system + exactly one PH delegation section, roster = specialist v3 only | v5, `claude-haiku-4-5-20251001`, roster exactly `[{id: agent_01KNiQDzzPjaMU6LLF4mU6uM, version: 3}]`, exactly 1 occurrence of `"Project Health delegation:"` in `system` |
+
+**Byte-identity check (programmatic, not eyeballed):** the coordinator v5 `system` string, truncated at the `"Project Health delegation:"` marker and stripped of trailing whitespace, was compared with strict string equality against the production v17 `system` stripped of trailing whitespace. **Result: identical.** This is the proof required before extracting the addendum — the addendum was taken as a live substring of the already-verified coordinator v5 resource (`coordinator.system.slice(markerIndex)`, trimmed), never retyped or reconstructed by hand.
+
+No drift was found on any checked field. Pre-flight passed; mutation proceeded.
+
+### 43.4 Exact production target diff
+
+**System:** production v17 `system` (trailing whitespace stripped) + `"\n\n"` + the exact live-extracted addendum from coordinator v5 (§43.3), verbatim. Result contains exactly one `"Project Health delegation:"` section. Not one byte of the existing production prompt prefix was altered — confirmed by the §43.3 prefix-equality check performed on the same live coordinator resource this update's addendum was drawn from.
+
+**Skills:** the production Skill array minus only the `project-health` entry (`skill_01Treson5zdU1TgxXDaREwnY`), with the remaining four entries passed through unchanged and in original order:
+
+```json
+[
+  {"type":"custom","skill_id":"skill_01WS6JtY1GMu3rGZaKCVR9w1","version":"latest"},
+  {"type":"custom","skill_id":"skill_01G9DtQEzPYxgw78riFh8k99","version":"latest"},
+  {"type":"custom","skill_id":"skill_01PTmbvLHJj1HuUxvDKhpaiE","version":"latest"},
+  {"type":"custom","skill_id":"skill_015c8dtDnWyDfVLwS6NLS7r6","version":"latest"}
+]
+```
+
+**Multiagent:**
+
+```json
+{
+  "type": "coordinator",
+  "agents": [
+    { "type": "agent", "id": "agent_01KNiQDzzPjaMU6LLF4mU6uM", "version": 3 }
+  ]
+}
+```
+
+Exactly one roster entry; no Advisor; no self.
+
+### 43.5 Exact update request fields
+
+Single `agents.update` call, on `agent_01WGRHDBjQa3eMhoGJMmQ1dh`, request body containing **only**: `version: 17` (optimistic concurrency), `system` (§43.4), `skills` (§43.4), `multiagent` (§43.4). No `model`, `tools`, `mcp_servers`, `name`, `description`, or `metadata` field was present in the request body.
+
+### 43.6 Production v17 → v18 result
+
+The update succeeded on the first call, no 409: `version: 17 → 18`, `updated_at: 2026-09-18T13:08:46.751798Z → 2026-09-20T19:03:48.352354Z`. Exactly one update call was issued.
+
+### 43.7 Full production read-back diff
+
+Comparing the pre-update (§43.3) and post-update production snapshots field by field (programmatic diff over every top-level key):
+
+| Field | Result |
+|---|---|
+| `id` | identical |
+| `name` | identical |
+| `description` | identical |
+| `metadata` | identical |
+| `model` | identical (`claude-haiku-4-5-20251001`, `standard`) — Haiku baseline unchanged |
+| `tools` | identical (deep JSON-equality checked) |
+| `mcp_servers` | identical (`trello`, `google-calendar-calendarmcp`, same URLs) — Trello permissions and Calendar server/toolset configuration unchanged |
+| `version` | **17 → 18** (only expected numeric change) |
+| `updated_at` | **changed** (expected) |
+| `system` | **changed** — production v17 prefix preserved verbatim (`after.system.startsWith(before.system.trimEnd())` verified `true`), exactly one `"Project Health delegation:"` addendum appended (marker count in the new system = 1) |
+| `skills` | **changed** — `project-health` (`skill_01Treson5zdU1TgxXDaREwnY`) removed; the other four Skill entries are byte-identical, in the same order, same ids and versions |
+| `multiagent` | **changed** — `null` → `{"type":"coordinator","agents":[{"type":"agent","id":"agent_01KNiQDzzPjaMU6LLF4mU6uM","version":3}]}` (exactly one roster entry, no Advisor, no self) |
+
+No field outside this exact allowed set changed. **Production no longer has the `project-health` Skill** (`after.skills.some(s => s.skill_id === "skill_01Treson5zdU1TgxXDaREwnY")` evaluated `false`). **The specialist roster pin is exactly v3.** Haiku remains primary; all ordinary operational capabilities (Trello reads/writes for non-Project-Health work, Calendar attached-but-disabled, the four remaining Skills) are unchanged.
+
+### 43.8 Specialist safety read-back
+
+Re-retrieved `agent_01KNiQDzzPjaMU6LLF4mU6uM` after the production update: `version: 3` (unchanged — no v4), `updated_at: 2026-09-20T07:42:24.311480Z` identical to the pre-flight value, model/effort unchanged (`claude-sonnet-5`, `effort: high`), Skill unchanged, tools/MCP unchanged. No specialist mutation of any kind occurred in this slice.
+
+### 43.9 Validation coordinator unchanged proof
+
+Re-retrieved `agent_01GFCLFYq6uLRHG8vMCrAgeK` after the production update: `version: 5` (unchanged — no v6), `updated_at: 2026-09-20T17:47:22.141060Z` identical to the pre-flight value. It was **not archived** in this slice and remains available; archiving it is an explicit later action, gated on production smoke/acceptance completing.
+
+### 43.10 Existing-vs-new Session rollout semantics
+
+See §43.2. Summary: production's live Agent resource is now v18, but no existing Session (none was open) is retroactively affected — Session-resolved agent config is a creation-time snapshot per the official API. The unmodified runtime (`connectToDjonik` → `sessions.create({agent: agentId, ...})`) will resolve any **new** Session created from this point forward to v18 (the bare-ID form pins "latest" at creation time). No Session was created, no existing Session was mutated or terminated, and no deploy/restart occurred in this slice.
+
+### 43.11 Zero-impact proof
+
+- **0 Sessions** created; no `sessions.create`, `sessions.events.send`, `sessions.events.stream`, or any Session-scoped call of any kind.
+- **$0 inference** — the only billable-adjacent calls in this slice are `agents.retrieve` (pre-flight ×3, post-update ×3) and one `agents.update`; none of these invoke the model or a Session turn (Agent resources are static configuration, not inference).
+- **0 Trello calls**, **0 Calendar calls** — no MCP server of any kind was contacted.
+- **0 Memory writes** — no Memory Store call of any kind.
+
+### 43.12 Remaining gate
+
+**Production smoke is still required before Issue #28 can be considered closed.** No production Session has been created against v18 and no turn has been run through it; specialist v3's natural-PM-voice response shape has only been graded via the delegated validation-coordinator path (§42), never yet through the production coordinator itself. The validation coordinator (`agent_01GFCLFYq6uLRHG8vMCrAgeK`, v5) remains live and unarchived specifically so it stays available until that production smoke/acceptance passes. Issue #18 (same-turn fresh-read platform limitation) remains an accepted, unchanged platform limitation — not addressed or claimed fixed by this cutover.
+
+### 43.13 Strict prefix verification, canonical sync and final checks
+
+**Purpose.** §43.7's read-back diff used `trimEnd()`-based comparisons ("`after.system.startsWith(before.system.trimEnd())`"), which is insufficient to prove byte-exact equality. This follow-up performs a read-only, zero-mutation, zero-inference strict check using `agents.retrieve` (current production) and `agents.versions.list` (historical production v17), with **no trim, no normalize, no newline rewriting** anywhere in the comparison.
+
+**Method.** Retrieved current production (`agents.retrieve`, confirmed `version: 18`), the historical v17 snapshot via `agents.versions.list` (18 version records returned; the `version === 17` entry used as-is), and validation coordinator v5 (`agents.retrieve`, confirmed `version: 5`, exactly one `"Project Health delegation:"` occurrence). The addendum was taken as `coordinator.system.slice(markerIndex)` — the *raw, currently-stored* substring, with no trim/replace of any kind applied for this check. Computed `expected = v17.system + "\n\n" + acceptedAddendum` and compared `v18.system === expected` with strict `===`.
+
+**Result: strict equality is FALSE.**
+
+- `v17.system === v17.system.trimEnd()`: **true** — v17 had **no trailing whitespace** of any kind. The entire v17 prefix is carried into v18 unmodified: the first divergence between `v18.system` and `expected` occurs only at index 3664, i.e. after 100% of the v17 content and 100% of the visible addendum content have already matched character-for-character. There is no corruption, truncation, or unintended edit anywhere in the v17-derived prefix.
+- The sole difference: the live coordinator v5 `system` string currently ends with one trailing carriage-return byte (`\r`) after "`...its existing Skills and tools.`" — a pre-existing artifact of how that resource's `system` happens to be stored (also visible in the raw dump captured during §42's pre-flight). `expected` (built from the untrimmed, raw addendum) is therefore 3665 characters and ends in that `\r`; `v18.system` is 3664 characters and does **not** end in `\r`, because the update request built in §43 explicitly stripped trailing whitespace (`.replace(/^\s+|\s+$/g, "")`) from the addendum before appending it to the v17 prefix.
+- Net effect: `v18.system` is missing exactly one trailing `\r` byte relative to a fully-untrimmed, byte-literal concatenation of `v17.system + "\n\n" + coordinator-v5's-current-raw-addendum-substring`. No other byte differs. The addendum's own semantic content (the full "Project Health delegation:" section, verbatim) is present in `v18.system` in full and unmodified other than that one trailing byte.
+
+**Per the authorizing instructions, this is a STOP condition:** no production mutation was made, or will be made, in this follow-up to reconcile the trailing byte. The exact byte difference is reported above for a Product Owner decision on whether the stray trailing `\r` (an artifact of the coordinator v5 resource's own stored `system`, not of the v17 prefix) should be reproduced in production verbatim or is correctly treated as insignificant trailing whitespace. Production remains at v18 exactly as already applied in §43.6; **it was not touched again in this follow-up.**
+
+**Canonical doc sync.** The working tree was inspected before editing. `docs/01_CLAUDE_NATIVE_ARCHITECTURE.md` §9, `docs/02_DEVELOPMENT_ROADMAP.md`'s Wave C1 current-state bullets, and `managed-agents/README.md`'s specialist status paragraph already satisfied this slice's exact required content from the prior (uncommitted) production-cutover slice — Scenario A passed, production is v18, primary no longer owns `project-health`, specialist owns the pinned Skill, no Advisor/router, #18 unchanged, production smoke still pending so #28 is not yet closed, validation coordinator v5 unarchived, canonical NOW unchanged at #28, no next-issue promotion. No further edits were needed or made to those three files in this follow-up beyond what already existed in the working tree.
+
+**Zero-live-mutation proof for this follow-up.** This slice performed exactly: `agents.retrieve` on production (×1), `agents.versions.list` on production (×1, paginated read), `agents.retrieve` on the validation coordinator (×1). No `agents.update`, no `agents.create`, no `agents.archive`, no Session of any kind, no inference, no Trello/Calendar/Memory call.
+
+**Outstanding gates, unchanged:** production smoke through a fresh Session resolving v18 is still required before Issue #28 closes; the validation coordinator (v5) remains live and unarchived; Issue #18 (same-turn fresh-read platform limitation) remains an accepted, unchanged platform limitation.
+
+### 43.14 Product Owner decision on trailing CR
+
+The Product Owner reviewed §43.13's strict-equality failure and made an explicit decision.
+
+- §43.13's strict `v18.system === v17.system + "\n\n" + acceptedAddendum` check returned `false` for exactly one reason: the validation coordinator v5's `system` string, as currently live-stored, ends with one trailing carriage-return byte (`\r`) after "`...its existing Skills and tools.`"; production v18's `system` does not carry that trailing byte, because the §43 update request trimmed trailing whitespace from the addendum before appending it.
+- The v17 prefix portion is byte-identical and complete: the first (and only) divergence occurred at index 3664, after 100% of the v17 content and 100% of the addendum's visible content had already matched character-for-character. Nothing in the v17 prefix was altered, truncated, or reordered.
+- All visible/semantic Project Health transport-contract content — the full "Project Health delegation:" section, verbatim, including the delegate/silent-wait/exact-relay/end-turn instructions — is present in production v18 identically to the coordinator v5 source, other than that one trailing byte.
+- **Product Owner decision: ACCEPTED.** The one-byte trailing `\r` is non-semantic trailing whitespace (an artifact of how the coordinator v5 resource's own `system` happens to be stored), not a content or prefix defect. Production v18 must **not** be mutated to add the trailing CR back.
+- **No live resource was changed as a result of this decision.** Production v18, as already applied in §43.6 and left untouched through §43.13, is the accepted, final Wave C1 production cutover configuration.
+- Production smoke through a fresh Session that resolves v18 remains the final outstanding gate before Issue #28 can be considered closed.

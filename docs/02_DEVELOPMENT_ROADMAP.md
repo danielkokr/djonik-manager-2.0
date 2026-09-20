@@ -318,10 +318,13 @@ Measured live validation changed the implementation direction:
 - repeated Haiku runs showed persistent nuanced PM-judgement failures despite simplified Skill guidance;
 - Sonnet avoided the dominant Haiku correctness failures in the observed A/B comparison, while still having residual verbosity and one invented entity;
 - missing same-turn fresh reads occurred on both models and remains the accepted #18 platform limitation;
-- the next bounded slice is **Haiku coordinator → one Sonnet Project Health specialist subagent** using native Managed Agents multi-agent orchestration;
-- the specialist must be Trello-read-only, have no Calendar capability, own the `project-health` Skill after acceptance, and return an evidence-backed result that Haiku relays without recomputing PM facts;
-- do not add an Advisor, custom phrase router, custom Messages loop, DB, health cache, or deterministic fresh-read middleware in this slice;
-- production stays on the current Haiku single-agent configuration until the delegated path passes review and live acceptance.
+- the bounded slice is **Haiku coordinator → one Sonnet Project Health specialist subagent** using native Managed Agents multi-agent orchestration;
+- the specialist is Trello-read-only, has no Calendar capability, and owns the `project-health` Skill; it returns an evidence-backed result that the coordinator relays without recomputing PM facts;
+- no Advisor, custom phrase router, custom Messages loop, DB, health cache, or deterministic fresh-read middleware was added in this slice;
+- delegated live acceptance ("Scenario A", `docs/15_ISSUE_28_IMPLEMENTATION_REPORT.md` §42) has passed: native delegation, silent-wait, exactly one specialist child result, byte-identical coordinator relay, and specialist factual/voice/shape grading against fresh Trello evidence all passed;
+- the production Managed Agent configuration cutover has been applied (`docs/15_ISSUE_28_IMPLEMENTATION_REPORT.md` §43): production Djonik is now v18, a Haiku coordinator delegating Project Health to the pinned specialist v3 roster entry, with the `project-health` Skill removed from the coordinator's own configuration;
+- a production smoke/acceptance turn through a fresh Session that resolves v18 is the remaining gate before Issue #28 closes — no production Session/turn has been run yet;
+- the accepted #18 same-turn fresh-read platform limitation is unchanged and remains an accepted platform limitation, not something this cutover fixes.
 
 Historical reviews and proactive follow-up remain later Wave C slices.
 
