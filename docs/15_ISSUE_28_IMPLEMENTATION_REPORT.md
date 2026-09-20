@@ -2468,3 +2468,256 @@ All other §40.14 rows are unaffected by this review.
 - No Trello call, no Calendar call, no Memory write, no production mutation.
 - No commit, push, or deploy.
 - Total cost for this Session remains what it already was: the additional coordinator model request that produced the true final relay (§40.17.1) had already run and been billed as part of the original Scenario A turn before this follow-up began; re-reading it here added **zero** additional model cost. The Session's own final persisted usage snapshot (`session.usage` at 17:21:46.030993) shows **$0.08 total list cost** — the authoritative final figure, correcting §40.12's **$0.07** (captured from an earlier, not-yet-final `sessions.retrieve` read, consistent with the runner-timing issue in §40.17.2). Both figures are far under the $0.32 cap and $0.45 ceiling; `budget_reached` was never true.
+
+## 41. Wave C1 coordinator v5 — transport-contract hardening
+
+> **Scope:** system-only prompt hardening of the temporary validation coordinator, addressing the two confirmed §40/§40.17 coordinator defects. No Session, no inference, no Trello/Calendar call, no Skill/specialist/production change. **This section records a STOP before mutation** (§41.7) rather than a completed update — the official Agent-update documentation was checked as required and left one field's omission semantics unconfirmed for a field this update needed to omit. No `agents.update` call was made.
+
+### 41.1 Measured §40 / §40.17 defects being addressed
+
+Exactly two confirmed coordinator behavioral defects, carried forward unchanged from §40.7 and §40.17.5:
+
+1. **Premature user-facing message.** Immediately after delegating to the specialist and before it had done any work, the coordinator emitted `"Чекаю на аналіз. Specialist зараз виглядає на Extract і дасть вам статус."` — a progress/acknowledgement message its own system prompt already told it not to send.
+2. **Non-verbatim final relay.** After the specialist's final report arrived, the coordinator did produce a second, final `agent.message`, but it was a paraphrase that invented an alternative the specialist never offered ("ви прямо розповісте поточний стан"), instead of relaying the specialist's content unchanged.
+
+### 41.2 Corrected runner/event-order understanding carried into this slice
+
+Per §40.17: the authoritative signal for "has this turn finished" is the persisted `session.status_idle` **event** (with its `stop_reason`), not a point-in-time `sessions.retrieve().status` poll read, which can report `"idle"` transiently while the coordinator is between an early per-thread idle and a later reschedule. This slice does not create or drive a Session, so it does not exercise that distinction directly, but it is why §40.17 concluded the "missing relay" was a runner-interpretation artifact rather than proof the coordinator never replies — the actual, confirmed defect is defect 2 above (non-verbatim, not absent).
+
+### 41.3 Decision: system-only coordinator hardening
+
+Per the slice's own design rule, the fix is not another layer of prohibitions stacked onto the existing addendum. The existing "Project Health delegation" addendum in coordinator v4 is **replaced in full** by one shorter procedural transport contract with the same shape as every other Agent-update field in this slice (system-only, no tool/model/roster change). The roster, tools, MCP servers, model, and Skills are intentionally left completely untouched — this is prompt hardening, not a capability change.
+
+### 41.4 Exact conceptual v5 transport contract (drafted; not yet applied — see §41.7)
+
+The production system prefix (bytes 0–2256 of the current coordinator v4 `system`, confirmed byte-identical to the current production agent's own `system` — see §41.6) is preserved unchanged. Only the text after it (the existing "Project Health delegation:" section, v4) is replaced by:
+
+```text
+Project Health delegation:
+
+For a current Project Health or project-condition request, delegate it to
+"Djonik Project Health Specialist". Preserve the user's project and question
+faithfully. Do not add factual assumptions, an invented project description,
+or extra evidence dimensions. Do not solve Project Health yourself.
+
+After delegating, wait silently. Produce no message of any kind until the
+specialist's content arrives — no acknowledgement, no progress note, no
+"chekaju"/"analizuju"/"specialist dyvytsia" phrasing, nothing. Your next
+Project Health output happens only once the specialist has replied.
+
+Whatever the specialist sends back is already the complete, final Project
+Health answer — a finished health check, a clarification question, a
+notice that fresh evidence was unavailable, a tool/MCP refusal, or any other
+outcome. Your role here is transport, not authorship: output that content
+exactly, with nothing removed, added, reworded, translated, reformatted, or
+replaced — including when it is a refusal or a limitation. Do not diagnose
+why the specialist could not answer, propose an alternative workflow, ask
+Daniel to supply the project state yourself, or retry Project Health another
+way. Then end the turn: send nothing further about Project Health after that
+message.
+
+All non-Project-Health work remains owned by the primary Djonik coordinator
+and its existing Skills and tools.
+```
+
+This is deliberately shorter than v4's addendum and phrased mostly as positive procedure (delegate → wait silently → relay exactly → stop), keeping only the minimum negative constraints needed to close the two measured defects: no pre-result message (defect 1), and no rewriting/diagnosing/offering-alternatives on the relay, explicitly covering the refusal/limitation case that v4 lacked and that caused defect 2 (the coordinator inventing a workaround for a tooling refusal instead of relaying it).
+
+### 41.5 Why the failure/refusal path now explicitly counts as final child content
+
+§40's measured failure was not on a normal health check — it was on a **refusal** (the specialist's Trello MCP tools were unavailable this turn). The v4 addendum's instructions ("copy the specialist report verbatim… do not add any project fact") were written with a completed health check in mind, and nothing in v4 told the coordinator that a refusal/limitation/clarification message is *equally* final, complete content to relay unchanged rather than a problem to be solved. The v5 text above states this directly and lists the refusal/clarification/tool-failure cases as ordinary members of "whatever the specialist sends back," precisely so a future Trello outage (or any other specialist limitation) is relayed exactly rather than paraphrased into an invented alternative.
+
+### 41.6 Pre-flight (read-only; no mutation)
+
+Retrieved all three agents immediately before drafting the update:
+
+- **Production** `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: version **17**, Haiku, `multiagent: null`, `updated_at` unchanged from §40.2/§40.13, same 5 skills.
+- **Validation coordinator** `agent_01GFCLFYq6uLRHG8vMCrAgeK`: version **4**, Haiku, exactly one roster entry (`agent_01KNiQDzzPjaMU6LLF4mU6uM` version 3), `project-health` Skill absent (4 ordinary skills, ids matching production's first four), Trello `mcp_toolset` unchanged (`trelloWriteCard=true` at the agent level — the write-disabling override from §40 was session-scoped only and does not touch the agent's own stored config, as expected), Calendar **server attached** (`google-calendar-calendarmcp` present in `mcp_servers`) with its toolset `default_config.enabled:false` (disabled, not absent — matches the §40.17.6 correction). `system` prefix (first 2256 characters, up to the "Project Health delegation:" marker) confirmed **byte-identical** to production's own `system` string.
+- **Specialist** `agent_01KNiQDzzPjaMU6LLF4mU6uM`: version **3**, Sonnet 5, `effort: high`, pinned `project-health` Skill, `multiagent: null` — unchanged from §40.2/§40.13.
+
+No drift from the expected pre-flight state. The update was safe to draft.
+
+### 41.7 Official update semantics checked — STOP before mutation
+
+Per the slice's explicit instruction to verify official Agent-update semantics before mutating and to stop if current official behavior materially contradicts the expected semantics, the live `platform.claude.com` documentation for `POST /v1/agents/{agent_id}` ("Update Agent") was fetched and checked field-by-field against the planned system-only update.
+
+**Every field this update needed to omit, except one, is explicitly documented as "omit to preserve":**
+
+- `description`: *"Omit to preserve; send empty string or null to clear."*
+- `mcp_servers`: *"Full replacement. Omit to preserve; send empty array or `null` to clear."*
+- `model`: *"Omit to preserve. Cannot be cleared."*
+- `name`: *"Must be non-empty. Omit to preserve. Cannot be cleared."*
+- `skills`: *"Full replacement. Omit to preserve; send empty array or null to clear."*
+- `tools`: *"Full replacement. Omit to preserve; send empty array or null to clear."*
+- `system` (the one field this update *does* send): *"Omit to preserve; send empty string or null to clear."*
+- `version`: *"used to prevent concurrent overwrites… the request fails if it does not match the server's current version; omit to apply the update unconditionally."* — confirms the planned optimistic-concurrency use (`version: 4`) is correct: a mismatch fails the request rather than silently overwriting, and does not itself say what HTTP status that failure returns (not exercised here since no update was sent).
+
+**`multiagent` is the one exception.** Its documented description is only: *"A coordinator topology: the session's primary thread orchestrates work by spawning session threads, each running an agent drawn from the `agents` roster."* — with no "omit to preserve" sentence, no clearing behavior, and no statement of what happens when the field is left out of an update request. Every other field on this same endpoint explicitly documents its omission behavior; `multiagent` conspicuously does not. The SDK's own generated type comment (`node_modules/@anthropic-ai/sdk/resources/beta/agents/agents.d.ts`, `AgentUpdateParams.multiagent`) matches the live docs exactly — same silence, not an SDK-only gap.
+
+This is precisely the ambiguity the slice instructions asked to be checked: *"multiagent roster preservation when omitted."* It could not be resolved by documentation alone. Given:
+
+- the planned update is instructed to omit `multiagent` (send only `version` and `system`);
+- omitting it is explicitly safe for every sibling field but is undocumented for this one;
+- the resource in question is the temporary validation coordinator whose **entire purpose in this Wave is its one-entry roster pinning specialist v3** — if omitting `multiagent` on update instead cleared or reset it, the roster would be silently destroyed by an update whose only intended effect was a `system` prompt change;
+- rebuilding a lost roster would itself be an additional, unauthorized mutation beyond this slice's scope, and would not be discovered until a later validation Session unexpectedly found no delegation;
+
+the safe reading of the slice's own instruction — *"If current official behavior materially contradicts the expected update semantics: STOP before mutation"* — is applied here: an **undocumented** field on which the whole roster depends is treated as a stop condition rather than an assumed-safe omission, even though the failure mode is silence rather than an explicit contradiction. **No `agents.update` call was made.** The v5 system text is fully drafted (§41.4) and ready to apply once this is resolved — by an explicit confirmation of platform behavior, or, more simply, by having a future authorized update also pass `multiagent` explicitly (echoing back the currently-resolved one-entry roster) so preservation does not depend on omission semantics at all.
+
+### 41.8 Coordinator v4 → v5 result
+
+**Not performed.** Per §41.7, the update was drafted but not sent. Coordinator `agent_01GFCLFYq6uLRHG8vMCrAgeK` remains **version 4**, byte-identical to the §41.6 pre-flight snapshot.
+
+### 41.9 Full coordinator read-back
+
+**Not applicable** — no update was sent, so there is no v4→v5 diff to read back. The version retrieved in §41.6 stands as the current, unchanged state.
+
+### 41.10 Roster proof
+
+Confirmed at pre-flight (§41.6): the coordinator's `multiagent` still resolves to exactly one entry, `{ id: "agent_01KNiQDzzPjaMU6LLF4mU6uM", type: "agent", version: 3 }`. No roster change was made or attempted.
+
+### 41.11 Specialist unchanged proof
+
+Confirmed at pre-flight (§41.6): specialist `agent_01KNiQDzzPjaMU6LLF4mU6uM` remains version 3, Sonnet 5, `effort: high`, pinned `project-health` Skill, `multiagent: null` — identical to §40.2/§40.13. No specialist call beyond this one read-only retrieval was made.
+
+### 41.12 Production unchanged proof
+
+Confirmed at pre-flight (§41.6): production `agent_01WGRHDBjQa3eMhoGJMmQ1dh` remains version 17, Haiku, `updated_at` unchanged, `multiagent: null`, same 5 skills. No production call beyond this one read-only retrieval was made.
+
+### 41.13 Zero Session / zero inference / zero Trello / zero Calendar proof
+
+- No Session was created; no `sessions.create`, `sessions.events.send`, or any Session-scoped call of any kind was made.
+- No `user.message` was sent anywhere.
+- No Trello MCP call, no Calendar MCP call.
+- The only API calls made in this slice were three read-only `agents.retrieve` calls (production, coordinator, specialist) — no `agents.update` call was made (§41.7–§41.8).
+- No Memory Store call of any kind.
+
+### 41.14 Explicit status
+
+- **Specialist v3 natural PM voice remains UNPROVEN** — §40/§40.17 never produced a graded health-check answer (the Trello MCP outage prevented one), and this slice performed no Session, so nothing new was proven or disproven about v3's response shape.
+- **Trello MCP recovery is NOT tested here** — no Trello call of any kind was made.
+- **Coordinator v5 behavior is NOT live-validated** — indeed, coordinator v5 does not yet exist; the drafted text in §41.4 has not been applied to any live Agent resource.
+- **#18** (the accepted conditional same-turn fresh-read platform limitation) remains unchanged and unaffected by this slice.
+
+### 41.15 Next paid Scenario A retest — deferred, and now blocked on a prior decision
+
+> **§41.15 (and the corresponding parts of §41.7–§41.9) are superseded by §41.16.** The update-semantics question has since been resolved and the v5 update has been applied. This subsection is left as historical record of the state at the time it was written; do not act on its "blocked" framing.
+
+Deferred, per scope, exactly as before. Additionally: a next paid Scenario A retest against a hardened coordinator cannot happen until the §41.7 update-semantics question is resolved and the v5 system text in §41.4 is actually applied to `agent_01GFCLFYq6uLRHG8vMCrAgeK` via a separately authorized update (either after obtaining an explicit confirmation of `multiagent`-omission behavior, or by re-scoping that future update to also pass `multiagent` explicitly). Until then, coordinator v4 (with both defects from §40 still present) remains the only live validation coordinator.
+
+### 41.16 Update-semantics resolution and completed v5 apply
+
+> **Scope:** completes the coordinator v4 → v5 update already drafted and reviewed in §41.1–§41.6, using exactly the transport-contract text from §41.4. No Session, no inference, no Trello/Calendar call, no Skill/specialist/production change. `agents.update` was called exactly once, on `agent_01GFCLFYq6uLRHG8vMCrAgeK` only.
+
+#### 41.16.1 §41.7 STOP was conservative but is now superseded
+
+§41.7 stopped because the per-field API reference for `multiagent` documented only its *replace-when-supplied* and *null-clears* behavior, with no explicit "omit to preserve" sentence — unlike every sibling field on the same endpoint. That silence is resolved by the endpoint-level "Update semantics" section on `platform.claude.com/docs/en/managed-agents/agent-setup#update-semantics` (fetched fresh in this session, not from memory), which states, as its own bullet, independent of any individual field's description:
+
+> **"Omitted fields are preserved. You only need to include the fields you want to change."**
+
+and, specifically for `multiagent`:
+
+> **"`multiagent` is replaced as a whole, including its `agents` roster. Pass `null` to clear it."**
+
+The `multiagent` bullet describes what happens when the field **is supplied** (whole-object replace; `null` clears) — it does not carve out an exception to the endpoint-level omission rule, and nothing on the page suggests one field is exempt from "omitted fields are preserved." The same page also documents, as a related but distinct behavior: *"Coordinator rosters are not updated. Coordinators that reference this agent in their `multiagent.agents` roster keep the version that was pinned when the coordinator was created or last updated, even if the reference omits `version`."* — confirming the platform's general design intent is roster stability across updates, not silent roster loss. §41.7's caution is recorded as correct-for-the-evidence-available-at-the-time and is not being erased; it is superseded now that the endpoint-level documentation has been read directly.
+
+#### 41.16.2 Official endpoint-level update semantics (verbatim, as checked)
+
+From the live page (not the SDK type comments, which are silent on this point in the same way §41.7 found):
+
+- *"`version` is optional and must be at least 1 when supplied. When supplied, the request returns a 409 if it doesn't match the agent's current version… When omitted, the update applies unconditionally…"*
+- *"Omitted fields are preserved. You only need to include the fields you want to change."*
+- *"Scalar fields (`model`, `system`, `name`, `description`) are replaced with the new value…"*
+- *"Array fields (`tools`, `mcp_servers`, `skills`) are fully replaced by the new array…"*
+- *"`multiagent` is replaced as a whole, including its `agents` roster. Pass `null` to clear it."*
+- *"No-op detection. If the update produces no change relative to the current version, no new version is created and the existing version is returned."*
+
+Therefore: multiagent omission is safe for this system-only update — sending only `version` and `system` and omitting `multiagent` (along with `tools`, `mcp_servers`, `skills`, `model`, `metadata`, `name`, `description`) preserves the existing roster exactly, per the endpoint's own general rule.
+
+#### 41.16.3 Pre-flight (immediately before the update; read-only)
+
+Re-retrieved all three agents, matching §41.6 exactly with zero drift:
+
+- **Production** `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: v17, Haiku, `multiagent: null`, `updated_at` unchanged (`2026-09-18T13:08:46.751798Z`), same 5 skills.
+- **Validation coordinator** `agent_01GFCLFYq6uLRHG8vMCrAgeK`: **v4**, Haiku, roster exactly one entry (`agent_01KNiQDzzPjaMU6LLF4mU6uM` v3), `project-health` Skill absent (4 ordinary skills), `updated_at` unchanged from §41.6 (`2026-09-20T07:43:00.066032Z`). System prefix (up to the "Project Health delegation:" marker, 2256 chars) re-confirmed byte-identical to production's own `system` string by direct string comparison in the runner before sending the update (the runner aborts with no call if this check fails).
+- **Specialist** `agent_01KNiQDzzPjaMU6LLF4mU6uM`: v3, Sonnet 5, `effort: high`, pinned `project-health` Skill, `multiagent: null` — unchanged.
+
+No drift. Proceeded to the update.
+
+#### 41.16.4 Exact update request fields
+
+Single `agents.update` call, on `agent_01GFCLFYq6uLRHG8vMCrAgeK`, with a request body containing **only**:
+
+- `version: 4`
+- `system: "<production system prefix, byte-identical> + \"\n\n\" + <§41.4 addendum, verbatim>"`
+
+No `multiagent`, `tools`, `mcp_servers`, `skills`, `model`, `metadata`, `name`, or `description` field was present in the request body. The new `system` string was assembled by the runner as `prefix + "\n\n" + addendum`, where `prefix` was read from the just-retrieved coordinator's own `system` (up to the addendum marker, trailing newlines stripped) and `addendum` was extracted verbatim from §41.4 of this report (fenced code block, CRLF-normalized to LF, leading/trailing blank lines stripped) — not retyped by hand.
+
+#### 41.16.5 Coordinator v4 → v5
+
+The update succeeded on the first call (no 409): `version: 4 → 5`, `updated_at: 2026-09-20T07:43:00.066032Z → 2026-09-20T17:47:22.141060Z`.
+
+#### 41.16.6 Full read-back diff
+
+Comparing the pre-update (§41.16.3) and post-update coordinator snapshots field by field:
+
+| Field | Result |
+|---|---|
+| `id` | identical |
+| `name` | identical |
+| `description` | identical |
+| `metadata` | identical (`{}` both) |
+| `model` | identical (`claude-haiku-4-5-20251001`, `standard`) |
+| `tools` | identical (deep JSON-equality checked) |
+| `mcp_servers` | identical (`trello`, `google-calendar-calendarmcp`, same URLs) |
+| `skills` | identical (same 4 ordinary skills, `project-health` still absent) |
+| `multiagent` | identical — see §41.16.7 |
+| `version` | **4 → 5** (only expected numeric change) |
+| `updated_at` | **changed** (expected) |
+| `system` | **changed** — new v5 transport contract (§41.16.4/§41.16.8) |
+
+A programmatic deep-equality check with `version`, `updated_at`, and `system` excluded from both sides confirmed the remaining JSON is byte-for-byte identical. **No difference occurred outside the three expected fields.**
+
+#### 41.16.7 Roster preserved exactly
+
+Post-update `multiagent`:
+
+```json
+{
+  "type": "coordinator",
+  "agents": [
+    { "type": "agent", "id": "agent_01KNiQDzzPjaMU6LLF4mU6uM", "version": 3 }
+  ]
+}
+```
+
+Exactly one entry, exactly matching the pre-update roster. No Advisor entry, no self entry, no second entry. `multiagent`-omission was confirmed safe in practice as well as in documentation.
+
+#### 41.16.8 New system content confirmed
+
+The post-update `system` string's prefix (everything before the "Project Health delegation:" marker) is unchanged from pre-update, and the suffix is exactly the §41.4 text (verified by direct comparison against the file read from the report, not by eye): exactly one "Project Health delegation:" section; silent-wait-after-delegation instruction present; explicit "produce no message… until the specialist's content arrives" (no `agent.message` before child result); "whatever the specialist sends back is already the complete, final Project Health answer" (child content = final answer); the refusal/clarification/tool-failure path is explicitly listed as ordinary final content to relay unchanged; no coordinator fallback, alternative workflow, or diagnosis language; and an explicit "end the turn" instruction after relay.
+
+#### 41.16.9 Specialist unchanged proof
+
+Re-retrieved `agent_01KNiQDzzPjaMU6LLF4mU6uM` after the coordinator update: version **3** (unchanged), `updated_at` unchanged, model/effort unchanged (`claude-sonnet-5`, `effort: high`), `system` byte-identical, `tools` byte-identical (same 4 Trello reads, zero writes), no Calendar server, `multiagent: null`. No specialist call other than this one read-only retrieval was made.
+
+#### 41.16.10 Production unchanged proof
+
+Re-retrieved `agent_01WGRHDBjQa3eMhoGJMmQ1dh` after the coordinator update: version **17** (unchanged), `updated_at` unchanged (`2026-09-18T13:08:46.751798Z`), Haiku, `system` byte-identical, same 5 skills, `tools`/`mcp_servers` byte-identical, `multiagent: null`. No production call other than this one read-only retrieval was made.
+
+#### 41.16.11 Zero Session / zero inference / zero Trello / zero Calendar proof
+
+- **0 Sessions** created; no `sessions.create`, `sessions.events.send`, or any Session-scoped call of any kind.
+- **$0 inference** — the only billable-adjacent calls in this slice are plain `agents.retrieve` (pre-flight ×2 rounds) and one `agents.update`; none of these invoke the model or a Session turn (Agent resources are static configuration, not inference).
+- **0 Trello calls**, **0 Calendar calls** — no MCP server of any kind was contacted.
+- **0 Memory writes** — no Memory Store call of any kind.
+
+#### 41.16.12 v5 remains NOT live-validated
+
+Coordinator v5 now exists as a live Agent resource, but **no Session has been created against it and no turn has been run**. Whether the new transport contract actually stops the premature message and produces a verbatim relay (including on a refusal path) is unproven until a separately authorized Scenario A retest.
+
+#### 41.16.13 Specialist v3 natural PM voice remains unproven
+
+Unchanged from §41.14: no health-check content has ever been produced and graded against the response-shape rubric (the one live run that reached the specialist, §40, hit a Trello MCP outage). This slice made no Session and does not change that.
+
+#### 41.16.14 Next paid Scenario A remains separately authorized/deferred
+
+A live Scenario A retest against coordinator v5 — to confirm the premature-message and non-verbatim-relay defects are actually fixed, and to attempt (again) to grade specialist v3's health-check response shape — is a separate, future Product Owner decision with its own budget/session guardrail. Nothing in this slice authorizes or performs that retest.
