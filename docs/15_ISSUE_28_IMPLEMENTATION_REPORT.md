@@ -2191,3 +2191,280 @@ Local-only follow-up. No live or API call of any kind was made (no Agent retriev
 ```
 
 - **No additional live/API mutation occurred during this follow-up.** Specialist stays v3 and the validation coordinator stays v4; no commit, push, deploy, roadmap edit, issue update/close or archive.
+
+## 40. Wave C1 specialist v3 live validation — Scenario A
+
+> **Authorization used:** exactly 1 fresh Managed Agent Session; validation coordinator `agent_01GFCLFYq6uLRHG8vMCrAgeK` v4; specialist `agent_01KNiQDzzPjaMU6LLF4mU6uM` v3; platform Session budget `max_list_cost` $0.32; absolute ceiling $0.45; 0 Trello mutations; 0 Calendar calls; 0 Memory writes; no Agent/Skill mutation; no production change; exactly one user turn; Scenarios B/C/D not run. **Result: FAIL.** Total cost **$0.07** of the $0.32 cap.
+
+### 40.1 Authorization and budget
+
+Scope was exactly as declared above. No second Session was created and no second user message was sent. The runner (a scratch-only Node script using `@anthropic-ai/sdk`, never committed to the repo — created and deleted from the repository root for each invocation, confirmed by `git status --short` returning clean before and after every run) used the official `client.beta.agents.*` and `client.beta.sessions.*` Managed Agents API, matching `src/djonikClient.ts`'s existing usage pattern. No repository runtime code was edited.
+
+### 40.2 Pre-flight — zero inference
+
+Retrieved all three agents by ID immediately before Session creation:
+
+- **Production** `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: version **17**, model `claude-haiku-4-5-20251001` / `standard`, `multiagent: null`, 5 custom skills (`task-management`, `daily-planning`, `weekly-planning`, `studio-intake`, `project-health`, all `version: "latest"`) — no reference to the validation coordinator or specialist anywhere in its configuration.
+- **Validation coordinator** `agent_01GFCLFYq6uLRHG8vMCrAgeK`: version **4**, Haiku, base system prompt byte-identical to production's base prompt plus one appended "Project Health delegation" section (verbatim pass-through instructions: send the user's request verbatim, do not add analysis, relay the specialist's report unchanged, no title/preface/reformatting/translation, do not recompute any project fact). `project-health` Skill **absent** from its own skill list (4 ordinary skills only, matching production minus `project-health`). Exactly **one** multiagent roster entry: `agent_01KNiQDzzPjaMU6LLF4mU6uM` version **3**. No advisor entry, no self entry. Trello `mcp_toolset`: `trelloWriteCard=true` (all other writes `false`) — i.e. writes were **not yet** disabled at the agent level (disabling happened via the session-level override, §40.3). Calendar toolset `default_config.enabled=false`.
+- **Specialist** `agent_01KNiQDzzPjaMU6LLF4mU6uM`: version **3**, `claude-sonnet-5`, `effort: high`, `multiagent: null`. Pinned `project-health` Skill at `skill_01Treson5zdU1TgxXDaREwnY` / `skver_01JLTtMvUgfEqdcBBGj4WGVm` — the exact required version. System prompt byte-identical (LF-normalized) to `managed-agents/project-health-specialist.md` (confirmed by direct string comparison). Only one MCP server attached (`trello`; no Calendar server at all). Tool surface: built-in `read` only (all other built-ins `enabled:false`), and exactly `trelloSearch` / `trelloReadBoard` / `trelloReadList` / `trelloReadCard` enabled on the Trello toolset (`default_config.enabled:false`, so nothing else is reachable) — **no Trello write tool exists on this agent at all**.
+- `claude-lock.json` maps the specialist to version `"3"` — matches.
+
+No unexpected drift was found. Session creation proceeded.
+
+### 40.3 Session
+
+Created exactly one Session pinned to validation coordinator v4:
+
+- `agent: { type: "agent_with_overrides", id: "agent_01GFCLFYq6uLRHG8vMCrAgeK", version: 4, tools: <coordinator's own tools, with every trelloWrite* forced to enabled:false> }`. `agent_with_overrides` has no `multiagent` override field, so the pinned v4 roster (specialist v3, exactly one entry) came through unmodified from the pinned agent version — it cannot be tampered with by a session-level override.
+- Same `environment_id` and `vault_id` as production/prior validations.
+- Memory Store attached **read-only** (`access: "read_only"`), with the production `DJONIK_MEMORY_INSTRUCTIONS` text passed verbatim (copied from `src/djonikClient.ts`).
+- Platform budget: `{ type: "limit", max_list_cost: { amount: "32", currency: "USD" } }`, attached at creation.
+- **Session id:** `sesn_01AtNJ9moyhegF261Kvg7Rb5`.
+
+**Before sending the message**, the created Session was retrieved and its resolved agent inspected: coordinator id/version = v4 ✅; Haiku ✅; roster still exactly one entry, specialist v3 ✅; all 6 Trello write tool configs `enabled:false` ✅ (verified again after the turn completed — see the resolved tool dump captured from the primary thread's snapshot, all `trelloWrite*` false); Calendar toolset `default_config.enabled:false` ✅; Memory `access:"read_only"` ✅; budget `max_list_cost.amount:"32"` ✅. No unexpected drift; the pre-send gate passed and the message was sent.
+
+### 40.4 Scenario A — exact message and delegation
+
+Sent exactly, no suffix, no hints:
+
+> `Що зараз по Extract? Дай короткий health check: що активне, що чекає, чи є реальні ризики і що мені варто зробити далі.`
+
+**Runner deviation (disclosed).** My first attempt watched the primary-thread event stream and stopped as soon as it saw the *first* `session.status_idle` event, then aborted the connection. That was wrong: for a multiagent turn the primary thread can go idle while the child (specialist) thread is still running, and the session as a whole later reschedules the primary thread to relay the child's result. Aborting the client-side stream connection does **not** stop server-side processing — the Session kept running Independently. I did not send any further event; I only reconnected read-only (`sessions.retrieve`, `sessions.events.list`, `sessions.threads.list/events.list`) and polled the Session's `status` field every 5s with no writes until it reported `idle` itself. This was the same one Session and the same one user turn throughout; no second message was ever sent.
+
+**Delegation:** the primary (coordinator) thread `sthr_01BV1fqK92kBbTszDVHue6sh` received the user message, then spawned exactly one child thread `sthr_01Rm1v7StaP4rBxUon9eDnsF` running specialist v3 via `agent.thread_message_sent`. Native delegation itself worked (child thread created, correct agent/version, one roster entry).
+
+**Delegated task text** (`agent.thread_message_sent` content, i.e. what the coordinator actually forwarded to the specialist) was not separately inspectable as distinct from the user's own text in this run's event log — the coordinator's `agent.thread_message_sent` event carried the user's request essentially as given (no separate "task" field with added coordinator narrative was observed in the captured event; the specialist's own reply, quoted in §40.6, responds to exactly the user's Extract/health-check request with no sign it was working from an invented project description). No coordinator-added factual assumption was detected to flag as a delegation-context defect.
+
+### 40.5 Provider-side Trello MCP failure (runtime evidence)
+
+Two separate, non-terminal `session.error` / `mcp_connection_failed_error` events for the `trello` MCP server occurred in this Session, on **two different threads**:
+
+- Primary thread, immediately at Session start: `MCP server 'trello' initialize failed: upstream server error (HTTP 504)`, `retry_status: "retrying"`.
+- **Specialist child thread**, at its own start: `MCP server 'trello' initialize failed: upstream server error (HTTP 502)`, `retry_status: "retrying"`.
+
+The primary thread's connection evidently recovered (or was never needed, since the coordinator does not call Trello tools itself). The **specialist's Trello MCP connection did not recover within its one turn**: across the specialist thread's entire event log, it called the built-in `read` tool twice (the `project-health` Skill file, then the Memory mount) and made **zero** `agent.mcp_tool_use` calls of any kind — no `trelloSearch`, no `trelloReadBoard`, no `trelloReadList`, no `trelloReadCard`. This is an upstream/provider-side MCP outage for this turn, not a specialist defect in tool selection; the specialist's own agent definition does declare the `trello` MCP server and the four read tools (confirmed in §40.2).
+
+### 40.6 Specialist runtime and message discipline
+
+Faced with no working Trello tool this turn, the specialist did **not** guess, did not use Memory as a substitute for live evidence, and did not fabricate a health check. It sent **exactly one** message to the coordinator (matching the "work silently, send exactly ONE message" rule) — a plain refusal-with-reason, not a health check and not a clarification question in the authorized sense, but a single, complete, honest final message:
+
+> `Не можу виконати health check по Extract: у цій сесії мені не передані жодні Trello-інструменти (trelloSearch / trelloReadBoard / trelloReadList / trelloReadCard) — доступні лише читання файлової системи. Без свіжого читання Trello я не маю права стверджувати щось про поточний стан проєкту (це вимога Skill: жодних тверджень про активні/waiting/ризикові картки без live-даних).`
+>
+> `Потрібно або надати мені доступ до Trello read-інструментів у цьому виклику, або виконати health check іншим агентом/шляхом, у якого такий доступ є. Будь ласка, підтвердіть, як продовжити — я не гадатиму по пам'яті чи старих даних.`
+
+**One-final-child-message discipline: PASS.** Exactly one `agent.thread_message_sent` event from the specialist thread; no earlier acknowledgement, progress note, or partial result.
+
+Required-runtime checklist: fresh relevant Trello evidence this turn — **not applicable/failed**, none was obtainable (provider outage, honestly reported); zero Trello write calls ✅; zero Calendar calls ✅ (no Calendar server attached to the specialist at all); no unsupported entity/person/dependency/commitment invented ✅ (it made no factual claim about Extract at all); no invented weekday/timezone/countdown ✅ (none computed, nothing to compute from since no data was read).
+
+### 40.7 Critical defect — coordinator sent a premature message and never relayed the specialist's result
+
+Immediately after spawning the child thread and **before** the specialist thread had done any work (its own `session.thread_status_running` came roughly two minutes later), the coordinator emitted a **user-facing `agent.message`**:
+
+> `Чекаю на аналіз. Specialist зараз виглядає на Extract і дасть вам статус.`
+> ("Waiting for the analysis. The specialist is now looking at Extract and will give you a status.")
+
+This directly violates the coordinator's own system-prompt instruction: *"Do not send a user-facing progress or preamble message before the specialist finishes."*
+
+After the specialist's refusal message arrived (`agent.thread_message_received` on the primary thread), the primary thread produced **no further `agent.message` event at all** before the Session went idle. The entire session-level event history (`events.list`, exhaustively paginated) contains exactly **one** `agent.message` event on the primary thread — the premature placeholder above — and no second one. `session.usage` and `session.thread_status_idle` events follow, then the Session settles `idle` with no further coordinator output.
+
+**Consequence:** under the production Telegram adapter's documented behavior ("returns only the last `agent.message` after idle" — `docs/02` #18/production notes), Daniel would have received **only** the placeholder "Чекаю на аналіз…" and would **never have seen** the specialist's actual (honest, correctly-behaved) refusal-and-request-for-guidance message. The delegation is silently lost from the user's point of view.
+
+### 40.8 Final coordinator relay — strict comparison
+
+Required check: final coordinator text === specialist final report (raw string, no trim, no Markdown normalization).
+
+- Specialist final report (§40.6): `Не можу виконати health check по Extract: у цій сесії мені не передані жодні Trello-інструменти…` (2 paragraphs, ~530 chars).
+- Coordinator's actual final/only visible message (§40.7): `Чекаю на аналіз. Specialist зараз виглядає на Extract і дасть вам статус.` (74 chars).
+
+These are **not equal** by any measure — different content, different length, produced *before* the specialist result even existed.
+
+**Coordinator final exact relay: FAIL.**
+
+### 40.9 Factual correctness / natural PM voice / response shape
+
+Not meaningfully assessable: the specialist's one message is a tooling refusal, not a project-health interpretation, so there is no health-check content to grade for factual correctness, PM voice, or concision against the §37–39 rubric. This is scored as **FAIL** for the run's stated primary purpose (validate v3's natural-PM response shape on a real health check), since no health check was ever produced or delivered — not because v3's health-check wording was itself bad.
+
+### 40.10 Coordinator delegation-context hygiene
+
+**PASS.** No evidence the coordinator invented or added an unsupported project description, entity, or assumption to the delegated task; the specialist's reply responds to exactly the user's own Extract/health-check request framing with no sign of adopting a fabricated coordinator narrative.
+
+### 40.11 Zero mutation / Calendar / Memory-write proof
+
+Authoritative server-side event log for the whole Session (primary + child thread, exhaustively paginated via `events.list` / `threads.events.list`):
+
+- Trello write tool calls: **0** (no `trelloWrite*` `agent.mcp_tool_use` event of any kind appears anywhere).
+- Trello read tool calls: **0** (blocked by the provider-side MCP outage in §40.5 — not a write, but also not the fresh evidence the Skill requires).
+- Calendar MCP calls: **0** (no Calendar server attached to either the coordinator override or the specialist).
+- Memory writes: **0** (Memory Store was attached `read_only`; the specialist's one `read` call against `/mnt/memory/djonik-memory` was a read, and a read-only mount cannot itself accept a write).
+- Total tool calls this turn: 2 built-in `read` calls (Skill file, Memory mount) by the specialist; 0 MCP tool calls of any kind by either thread.
+
+### 40.12 Cost
+
+- **Session total list cost: $0.07** of the authorized $0.32 (well within the $0.45 absolute ceiling). `budget_reached: false`.
+- Coordinator thread (`sthr_01BV1fqK92kBbTszDVHue6sh`, Haiku): list cost **$0.02**; `input_tokens=15`, `cache_read_input_tokens=10450`, `cache_creation.ephemeral_5m_input_tokens=10999`, `output_tokens=479`; active time 5.5s.
+- Specialist thread (`sthr_01Rm1v7StaP4rBxUon9eDnsF`, Sonnet 5 / high effort): list cost **$0.05**; `input_tokens=8`, `cache_read_input_tokens=30015`, `cache_creation.ephemeral_5m_input_tokens=12225`, `output_tokens=1252`; active time 24.3s.
+- Session-level cumulative usage: `input_tokens=23`, `output_tokens=1731`, `cache_read_input_tokens=40465`, `active_seconds=331.224` (session-level active time is deduplicated across overlapping thread activity plus the ~2-minute gap while the child thread's Trello MCP connection was retried/failing before it gave up and replied).
+- `stop_reason`: not applicable — the turn ended by both threads reaching `idle`, not by a budget/requires-action stop.
+
+### 40.13 Production safety
+
+Retrieved production, coordinator, and specialist again after the Session reached `idle`:
+
+- **Production** `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: still v17, `updated_at` unchanged, `system`/`tools`/`skills` byte-for-byte identical (JSON-equality checked) to the pre-flight snapshot, Haiku, `multiagent: null`.
+- **Validation coordinator**: still v4, `updated_at` unchanged, `system`/`tools` identical to pre-flight.
+- **Specialist**: still v3, `updated_at` unchanged, `system`/`tools` identical to pre-flight.
+
+No Agent/Skill mutation of any kind occurred.
+
+### 40.14 Overall classification
+
+| # | Criterion | Result |
+|---|---|---|
+| 1 | Native delegation | **PASS** — child thread created, correct agent/version, one roster entry |
+| 2 | Specialist fresh-evidence runtime | **FAIL** — provider-side Trello MCP outage; zero Trello reads obtained |
+| 3 | Specialist factual correctness | N/A — no factual health claim was made (correctly withheld) |
+| 4 | Natural PM voice | N/A — no health-check content was produced to grade |
+| 5 | Short response shape / concision | N/A — not applicable to a tooling refusal |
+| 6 | One-final-child-message discipline | **PASS** |
+| 7 | Coordinator delegation context hygiene | **PASS** |
+| 8 | Coordinator final exact relay | **FAIL** — coordinator's only visible message predates and does not match the specialist's report at all |
+| 9 | Zero mutation / Calendar / Memory write | **PASS** |
+| 10 | **Overall Scenario A** | **FAIL** |
+
+The run does not fail because specialist v3's health-check wording was bad — no health check was ever produced to judge, so the run's stated primary purpose (validating v3's natural-PM response shape) is **unproven**, not merely failed. It fails because of two independent problems, at least one of them a genuine coordinator behavioral defect:
+
+1. A provider-side Trello MCP outage denied the specialist any live evidence this turn (infrastructure/runtime evidence, not a Skill or specialist wording defect).
+2. **The coordinator sent a premature "please wait" message to the user and then never sent a second message relaying the specialist's actual result**, so the user-visible outcome under the production Telegram adapter's "last message after idle" behavior would have been the placeholder text, not the specialist's (correct, honest) refusal. This is a new, previously-unobserved coordinator defect distinct from anything found in §24–§39, and it independently fails delegation-relay fidelity regardless of the MCP outage.
+
+Per the stop rule, Scenarios B/C/D were not run: the primary purpose could not be evaluated this turn regardless of further scenarios, and spending further budget on the same coordinator defect would not change the verdict.
+
+### 40.15 Confirmations
+
+- Paid Managed Sessions: **1** (`sesn_01AtNJ9moyhegF261Kvg7Rb5`), total **$0.07** of the authorized $0.32 (well under the $0.45 ceiling).
+- Trello mutations: **0**. Calendar calls: **0**. Memory writes: **0** (Memory attached read-only).
+- No Agent/Skill mutation: confirmed by identical pre/post retrieval of production, coordinator, and specialist (§40.13).
+- Scenarios B, C, D: **not run**.
+- No second Session, no second user turn: confirmed — the one runner deviation (§40.4) only re-read already-produced server state and polled Session status; it sent no additional event to the Session.
+- No commit, push, deploy, roadmap edit, or issue update/close.
+- Issue #18 (conditional same-turn fresh-read platform limitation) remains an accepted platform limitation; this run's evidence gap was a distinct provider MCP-connectivity outage, not a repeat of #18.
+
+### 40.16 Suggested next bounded step (for Product Owner decision; nothing changed)
+
+Not evaluated/decided here, per scope. Two independent things would need addressing before a further validation run could usefully judge v3's health-check wording: (a) the coordinator's premature-message and missing-final-relay defect found in §40.7–§40.8, and (b) confirming the specialist's Trello MCP connection is healthy before spending further validation budget on it.
+
+> **§40.16 is superseded by §40.17.** Item (a)'s premature-message finding stands, but "missing final relay" is wrong: the coordinator did produce a final relay message. The real, confirmed defect is that the relay was **not verbatim**. See §40.17 for the corrected mechanism and corrected next step.
+
+### 40.17 Zero-inference event-order forensic review
+
+> **Scope:** read-only re-retrieval of the already-existing Session `sesn_01AtNJ9moyhegF261Kvg7Rb5` only — no new Session, no new user turn, no inference, no Agent/Skill update, no Trello call, no Calendar call, no production mutation. Exhaustively paginated `sessions.events.list`, `sessions.threads.list`, and `sessions.threads.events.list` for both threads, merged by event `id` (deduplicated), sorted by `processed_at`. This corrects two inaccuracies in §40 using only the persisted event log — §40's original text is left in place and marked superseded below rather than silently rewritten.
+
+#### 40.17.1 Full chronological timeline (merged, deduplicated, 45 unique persisted events)
+
+| processed_at (UTC) | type | event id | thread |
+|---|---|---|---|
+| 17:17:12.136825 | session.error (Trello 504, retrying) | sevt_01U4qpQxjmeT8VnfYPtCbe1s | primary |
+| 17:17:12.136826 | session.status_running | sevt_01SFa6cYofvx9AyQA54oiTnx | primary |
+| 17:17:12.136827 | session.thread_status_running | sevt_01WRVtgXhwctGQwp6Ago6jyR | primary |
+| 17:17:12.227043 | user.message | sevt_01NUG37Wq4zU5eiBP6KwnaFz | primary |
+| 17:17:12.227044 | span.model_request_start | sevt_01PBDsYXaSApRUopKUFUHhTk | primary |
+| 17:17:15.779940 | agent.thinking | sevt_01U9LmhE1khd6mgHAjxBj5ie | primary |
+| 17:17:16.428388 | span.model_request_end | sevt_0117EBD2SzR6ejAn234K8xrd | primary |
+| 17:17:16.681737 | session.thread_created (specialist v3) | sevt_01L7CmSf3U3dKJaVEumBhgiY | specialist |
+| 17:17:16.681738 | agent.thread_message_sent (coordinator → specialist) | sevt_016nSLWLLFcLivJbABiazS6z | primary |
+| 17:17:16.745229 | span.model_request_start | sevt_01U4B8iKK5eeFhYpFhc7K1zE | primary |
+| 17:17:17.610253 | **agent.message** ("Чекаю на аналіз…") | sevt_011MfSBtDA7ViW4VTrb6W7zc | primary |
+| 17:17:17.610254 | span.model_request_end | sevt_0114JKM6fJk5KL6pXPAouYX6 | primary |
+| 17:17:17.686700 | **session.thread_status_idle** (primary only) | sevt_01JJae51zUB9BkLzsG8Sorgz | primary |
+| 17:19:17.734839 | session.error (Trello 502, retrying) | sevt_01GfWXvCxYSC9Y7VJeZc1SV2 | specialist |
+| 17:19:17.777311 | session.thread_status_running | sevt_011mhE3LAtr5sjFyqJScC4jt | specialist |
+| 17:19:18.004231 | agent.thread_message_received (specialist receives delegated task) | sevt_01Gaeb2KtxzaVSTGiSuJcaFC | specialist |
+| 17:19:18.004232–17:19:40.120301 | (model_request_start/thinking/tool_use `read` skill file/tool_result/model_request_start/thinking/tool_use `read` memory mount/tool_result/model_request_start/thinking/model_request_end) | — | specialist |
+| 17:19:40.255404 | agent.thread_message_sent (specialist → coordinator, final refusal text) | sevt_01JfV81RPQHzfjAwgvuHZ72Q | specialist |
+| 17:19:40.328270–17:19:42.046134 | span.model_request_start / **agent.message** (specialist's own terminal message) / span.model_request_end | sevt_017rs7eNPqY4cmtvABUrKtJ4 | specialist |
+| 17:19:42.094820 | session.thread_status_idle (specialist) | sevt_014V8QdJK11Tq19BC3avCZpc | specialist |
+| 17:19:42.181264 | session.usage (interim snapshot) | sevt_01Hx5ZDCBLZjfrFd3MooiCJh | primary |
+| **17:21:41.741032** | session.error (Trello 502, retrying) | sevt_015767bi3awrsmeiCrTcqMmX | primary |
+| **17:21:41.741033** | **session.thread_status_running (primary reschedules)** | sevt_01BQTqwEo5k4Qne24RFT8SBn | primary |
+| **17:21:41.840604** | **agent.thread_message_received (primary receives the specialist's final report)** | sevt_012fNkGSUeUvnaf6V25Jmzx7 | primary |
+| **17:21:41.840605** | **span.model_request_start (second coordinator model call)** | sevt_01LZMxhuAp4Er4SXPscGhUxV | primary |
+| 17:21:43.906761 | agent.thinking | sevt_019dwzB5tjHMi2oG5VFWfMt7 | primary |
+| **17:21:45.902073** | **agent.message — the true final coordinator relay** | sevt_019UvgNWuadPBowjYjyitnJX | primary |
+| 17:21:45.902074 | span.model_request_end | sevt_0192zEdo9PnCkH78M8vLJMKh | primary |
+| 17:21:46.030992 | session.thread_status_idle (primary, final; `stop_reason: end_turn`) | sevt_01T8ynueJEg6noS224x4WTcR | primary |
+| 17:21:46.030993 | session.usage (final snapshot) | sevt_01YQiYcYUXY3qVGHhbKZDpve | primary |
+| **17:21:46.030994** | **session.status_idle (the ONLY session-level idle event in the whole log; `stop_reason: {"type":"end_turn"}`)** | sevt_01TuwnX7KGu9VCuawnfhHZYW | primary |
+
+`agent.thread_message_sent`/`agent.thread_message_received` confirmed paired correctly by direction: the coordinator's send at 17:17:16 is received by the specialist at 17:19:18 (~2 min scheduling gap); the specialist's send at 17:19:40 is received by the coordinator at 17:21:41 (~2 min scheduling gap). Both gaps align with a `session.error` "Trello initialize failed, retrying" event immediately preceding the corresponding `thread_status_running`, consistent with the platform retrying a failed MCP connection before resuming that thread.
+
+#### 40.17.2 Answer to (A): which idle event did the runner actually stop on?
+
+**Zero inference, straight from the persisted log: there is exactly one `session.status_idle` event in the whole Session, and it occurs at 17:21:46.030994 — after the specialist completed, after the primary thread's second model request, and after the true final relay message.** There is no persisted `session.status_idle` event anywhere before that.
+
+What actually happened in the original §40 run: the runner's live-stream loop (which broke on the *first* `session.status_idle`-shaped condition it observed) matches the description in §40.4 of stopping too early, but the **follow-up poll** (`sessions.retrieve().status`, repeated every 5s with no writes) is what reported `status: "idle"` at 17:20:09 — roughly 90 seconds before the one genuine `session.status_idle` *event* at 17:21:46. That earlier poll never observed a `session.thread_status_idle` event being misread as session-level either — it read the session resource's own top-level `status` field, which apparently returned `"idle"` transiently while the coordinator thread was between its first idle (17:17:17) and its reschedule (17:21:41), before the platform had actually finished processing the turn. Retrieving the same resource fresh via `sessions.retrieve` for this forensic review (no new call semantics beyond a plain GET) now returns `status: "idle"` correctly and consistently with the final persisted event.
+
+**Conclusion: this was a runner interpretation problem, not a coordinator behavior defect and not a documented platform inconsistency.** The reliable signal is the persisted `session.status_idle` **event** (with its `stop_reason`), not a point-in-time read of the session resource's `status` field taken via polling. The original data collection in §40 (`collect_out2.json`, 17 top-level events) was captured after the second `sessions.retrieve` poll reported `idle`, but before the platform had actually emitted the final relay — the correct fix for any future runner is to keep the event stream open (or keep re-listing) until a persisted `session.status_idle` **event** is actually observed, not to trust a single `status` field snapshot.
+
+#### 40.17.3 Answer to (B): did a real `session.status_idle` occur before the specialist completed?
+
+**No.** Per §40.17.2, the only `session.status_idle` event in the log is the final one at 17:21:46, which is after the specialist thread reached its own `session.thread_status_idle` at 17:19:42. There is no case in this Session of the session-level idle event firing prematurely. §40's implicit premise that the session had gone genuinely idle without a relay is **not supported by the persisted log** — it was still processing (or restarting, per the ~2-minute scheduling gaps) at the time it was read.
+
+#### 40.17.4 Answer to (C): what happened after the specialist's final report reached the primary thread?
+
+All four sub-questions, answered directly from the timeline in §40.17.1:
+
+- **Did the primary thread transition to running again?** Yes — `session.thread_status_running` at 17:21:41.741033.
+- **Was another coordinator model request started?** Yes — `span.model_request_start` at 17:21:41.840605.
+- **Did it end?** Yes — `span.model_request_end` at 17:21:45.902074.
+- **Was a final `agent.message` produced?** Yes — at 17:21:45.902073 (`sevt_019UvgNWuadPBowjYjyitnJX`), immediately before the primary and then the whole session went idle.
+
+#### 40.17.5 Corrected finding: the "missing final relay" claim in §40.7–§40.9 is WRONG; the real, confirmed defect is a non-verbatim relay
+
+> **§40.7, §40.8, and the "no further `agent.message` event at all" / "coordinator... never sent any final relay message" claims in §40 are hereby corrected/superseded by this subsection.** The premature-message finding in §40.7 (the "Чекаю на аналіз…" placeholder sent before the specialist had done any work) is **confirmed accurate and unchanged** — that remains a real violation of "Do not send a user-facing progress or preamble message before the specialist finishes." But the claim that no second message followed is **false**: a second, final `agent.message` was produced by the coordinator at 17:21:45.902073.
+
+The true final coordinator message (verbatim, from the persisted event):
+
+> `На жаль, у цій сесії мені не доступні інструменти для читання Trello — я не можу витягти поточний стан Extract без цього.`
+>
+> `Щоб дати вам коректний health check, мені потрібна:`
+> `- інтеграція з Trello у цій сесії, або`
+> `- ви прямо розповісте поточний стан (які картки активні/чекають, які основні ризики)`
+>
+> `Як вам зручніше — налаштувати інтеграцію чи ви розповісте, що там зараз?`
+
+Compared strictly (raw string, no trim, no Markdown normalization) against the specialist's actual final report (§40.6, unchanged):
+
+> `Не можу виконати health check по Extract: у цій сесії мені не передані жодні Trello-інструменти (trelloSearch / trelloReadBoard / trelloReadList / trelloReadCard) — доступні лише читання файлової системи. Без свіжого читання Trello я не маю права стверджувати щось про поточний стан проєкту (це вимога Skill: жодних тверджень про активні/waiting/ризикові картки без live-даних).`
+>
+> `Потрібно або надати мені доступ до Trello read-інструментів у цьому виклику, або виконати health check іншим агентом/шляхом, у якого такий доступ є. Будь ласка, підтвердіть, як продовжити — я не гадатиму по пам'яті чи старих даних.`
+
+These are **not equal**. The coordinator did not copy the specialist's report verbatim — it composed its own paraphrase. Worse, the paraphrase **invents a new option the specialist never offered**: "ви прямо розповісте поточний стан" (you just tell me the current state directly) is a workaround the coordinator made up on its own, not something the specialist said or the Skill sanctions — a direct violation of the coordinator's own instruction "Do not independently calculate, reinterpret, or add any project fact" and "Copy the specialist report verbatim. Do not summarize it. Do not rewrite it."
+
+**Coordinator final exact relay: still FAIL — but for a different, now-confirmed mechanism.** It is not a missing relay (the coordinator did eventually reply, using the correct stop_reason `end_turn`, and the user would have received this second message as production's "last `agent.message` after idle" behavior, superseding the earlier premature placeholder). It is a **non-verbatim, reworded relay that adds an unsupported alternative the specialist never proposed** — itself a clear, confirmed coordinator defect distinct from the premature-message issue, and distinct from §40's original ("no relay at all") description.
+
+Item 8 in the §40.14 classification table ("Coordinator final exact relay: FAIL") is **confirmed correct as a verdict**, but its stated reason ("coordinator's only visible message predates and does not match the specialist's report at all") is **superseded**: the coordinator's *only visible message* was not the premature placeholder — the true final visible message (per "last `agent.message` after idle") is the 17:21:45 paraphrase, which still fails strict-equality relay but for the reworded/invented-option reason above, not for being absent.
+
+#### 40.17.6 Calendar wording correction (item 5)
+
+§40.11 stated: *"Calendar MCP calls: 0 (no Calendar server attached to either the coordinator override or the specialist)."* **This is inaccurate for the coordinator and is corrected here.** Per the pre-flight retrieval (§40.2, and the raw `coord0.mcp_servers` captured during the run), the validation coordinator's `mcp_servers` list **does include** `google-calendar-calendarmcp` (inherited from the same MCP server configuration as production) — the server itself is attached; only its **toolset is disabled** (`default_config.enabled:false`, confirmed unchanged in the session-resolved agent snapshot, §40.3). The specialist genuinely has **no** Calendar MCP server at all in its `mcp_servers` list (correctly stated elsewhere in §40.6/§40.11). So: zero Calendar calls occurred because the coordinator's Calendar toolset was disabled (not because the server was absent), and because the specialist has no Calendar server configured at all (absent, correctly). The zero-Calendar-calls **result** in §40.11 is unaffected and still correct; only the parenthetical explanation for the coordinator half is corrected.
+
+#### 40.17.7 Configured-vs-available Trello distinction for the specialist (item 6)
+
+§40.2 and §40.5 already stated correctly that the specialist's own Agent definition **does** declare the `trello` MCP server and the four read tools (`trelloSearch`, `trelloReadBoard`, `trelloReadList`, `trelloReadCard`), and that the observed failure was an MCP initialization/connectivity error (HTTP 502, `retrying`), not a configuration gap. This forensic pass reconfirms that distinction and makes it explicit for clarity: **configured capability existed** (the agent resource, both before and after this Session, lists the four read tools as `enabled:true` on an attached `trello` MCP server — confirmed identical in the pre- and post-Session agent retrievals, §40.13); **usable Trello tools were unavailable during this specific turn** because the MCP connection failed to initialize for the specialist's child thread and did not recover before the thread's model calls ran out. The specialist's own self-report ("у цій сесії мені не передані жодні Trello-інструменти" — "no Trello tools were given to me in this session") describes its own runtime experience honestly (it had no callable Trello tool this turn) but should not be read, and is not being read here, as evidence that the Agent's configuration itself lacks Trello read tools — it does not. No report text elsewhere claims the configuration was absent; this subsection exists to make that distinction explicit per the review request.
+
+#### 40.17.8 Corrected §40.14 classification (deltas only; full table in §40.14 stays as historical record)
+
+| # | Criterion | §40 original | Corrected |
+|---|---|---|---|
+| 8 | Coordinator final exact relay | FAIL — "coordinator's only visible message predates and does not match the specialist's report at all" (a missing-relay framing) | **FAIL (verdict unchanged) — reason corrected:** the coordinator did produce a final relay message (`stop_reason: end_turn`, true final `agent.message` at 17:21:45.902073) but it is a non-verbatim paraphrase that invents an alternative the specialist never offered, not an absent relay |
+| 9 | Zero mutation / Calendar / Memory write | PASS — "(no Calendar server attached to either the coordinator override or the specialist)" | **PASS (verdict unchanged) — reason corrected:** the coordinator does have a Calendar MCP server attached, with its toolset disabled; the specialist has no Calendar server at all |
+| 10 | Overall Scenario A | FAIL | **FAIL (verdict unchanged)** — still fails on (1) the provider-side Trello MCP outage denying the specialist evidence, (2) the confirmed premature user-facing message before the specialist finished, and (3) the confirmed non-verbatim/invented-option final relay; no criterion changes from FAIL to PASS as a result of this forensic pass |
+
+All other §40.14 rows are unaffected by this review.
+
+#### 40.17.9 Confirmation of zero inference / zero mutation for this follow-up
+
+- No new Session was created. No event of any kind (`user.message` or otherwise) was sent to `sesn_01AtNJ9moyhegF261Kvg7Rb5` or any other Session during this follow-up — every API call used was a plain retrieval (`sessions.retrieve`, `sessions.events.list`, `sessions.threads.list`, `sessions.threads.events.list`).
+- No Agent or Skill was read-modified beyond the same pre-existing pre-flight-style `agents.retrieve` calls already covered by §40.2/§40.13 (not repeated here — this follow-up relied entirely on the already-retrieved, already-reported agent snapshots plus the Session's own persisted event log).
+- No Trello call, no Calendar call, no Memory write, no production mutation.
+- No commit, push, or deploy.
+- Total cost for this Session remains what it already was: the additional coordinator model request that produced the true final relay (§40.17.1) had already run and been billed as part of the original Scenario A turn before this follow-up began; re-reading it here added **zero** additional model cost. The Session's own final persisted usage snapshot (`session.usage` at 17:21:46.030993) shows **$0.08 total list cost** — the authoritative final figure, correcting §40.12's **$0.07** (captured from an earlier, not-yet-final `sessions.retrieve` read, consistent with the runner-timing issue in §40.17.2). Both figures are far under the $0.32 cap and $0.45 ceiling; `budget_reached` was never true.
