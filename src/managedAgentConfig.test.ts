@@ -76,5 +76,48 @@ test("system contract states the read-only, fresh-evidence, and no-invention bou
   assert.match(system, /`lastActivityAt` is never evidence/);
   assert.match(system, /Do not invent people, entities, dependencies, commitments, or risk/);
   assert.match(system, /self-contained/i);
-  assert.ok(system.length < 3000, "system prompt should stay minimal");
+  assert.ok(system.length < 4200, "system prompt should stay minimal and complement the Skill, not duplicate it");
+});
+
+// Wave C1 specialist v2: natural PM voice with evidence discipline. These pin concepts, not exact wording or a
+// mandatory answer template, so the specialist can stay conversational.
+
+test("system asks for a natural, concise PM voice and forbids report-like or robotic output", () => {
+  assert.match(system, /experienced project manager/i);
+  assert.match(system, /naturally/i);
+  assert.match(system, /conversational/i);
+  assert.match(system, /audit log/i);
+  assert.match(system, /compliance checklist/i);
+  assert.match(system, /Do not list every card/i);
+  assert.match(system, /Do not mention tools, Skills, or this setup/);
+  // Voice guidance must not smuggle in a rigid template.
+  assert.doesNotMatch(system, /must (use|follow) (this|the following) (template|format|headings)/i);
+});
+
+test("system allows PM interpretation only in proportion to the evidence", () => {
+  assert.match(system, /interpret/i);
+  assert.match(system, /proportionate to the evidence/i);
+  assert.match(system, /strongest direct evidence/i);
+  assert.match(system, /Do not invent people, entities, dependencies, commitments, or risk/);
+});
+
+test("system bars progress, liveness and recency claims from activity or timestamps", () => {
+  assert.match(system, /`lastActivityAt` is never evidence of progress, live work, or staleness/);
+  assert.match(system, /Never compute a weekday/i);
+  assert.match(system, /countdown/i);
+  assert.match(system, /vague recency/i);
+});
+
+test("system does not treat an internal Trello due alone as a confirmed risk", () => {
+  assert.match(system, /internal Trello due alone is not a confirmed risk/i);
+  assert.match(system, /reason to check/i);
+});
+
+test("system requires silent work and exactly one final report to the coordinator", () => {
+  assert.match(system, /work silently/i);
+  assert.match(system, /exactly ONE message/);
+  assert.match(system, /single clarification question/i);
+  assert.match(system, /acknowledgements/i);
+  assert.match(system, /progress or status notes/i);
+  assert.match(system, /partial reports/i);
 });
