@@ -9,9 +9,9 @@
     "./managed-agents/project-health-specialist.md": {
       "kind": "agent",
       "id": "agent_01KNiQDzzPjaMU6LLF4mU6uM",
-      "version": "2",
-      "hash": "03916cd5183e18bcbc29ca3638af586f",
-      "remote_hash": "6028bfa000d8b6bb4cf179bdef3f0c22"
+      "version": "3",
+      "hash": "ddc7edc16638cd0c892c036c6ffa3e82",
+      "remote_hash": "4214f34010c3404644856a3b3881a5c0"
     }
   }
 }

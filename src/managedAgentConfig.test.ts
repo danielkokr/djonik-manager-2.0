@@ -76,10 +76,10 @@ test("system contract states the read-only, fresh-evidence, and no-invention bou
   assert.match(system, /`lastActivityAt` is never evidence/);
   assert.match(system, /Do not invent people, entities, dependencies, commitments, or risk/);
   assert.match(system, /self-contained/i);
-  assert.ok(system.length < 4200, "system prompt should stay minimal and complement the Skill, not duplicate it");
+  assert.ok(system.length < 5000, "system prompt should stay minimal and complement the Skill, not duplicate it");
 });
 
-// Wave C1 specialist v2: natural PM voice with evidence discipline. These pin concepts, not exact wording or a
+// Wave C1 specialist v2/v3: natural PM voice with evidence discipline. These pin concepts, not exact wording or a
 // mandatory answer template, so the specialist can stay conversational.
 
 test("system asks for a natural, concise PM voice and forbids report-like or robotic output", () => {
@@ -88,7 +88,7 @@ test("system asks for a natural, concise PM voice and forbids report-like or rob
   assert.match(system, /conversational/i);
   assert.match(system, /audit log/i);
   assert.match(system, /compliance checklist/i);
-  assert.match(system, /Do not list every card/i);
+  assert.match(system, /do not list every card/i);
   assert.match(system, /Do not mention tools, Skills, or this setup/);
   // Voice guidance must not smuggle in a rigid template.
   assert.doesNotMatch(system, /must (use|follow) (this|the following) (template|format|headings)/i);
@@ -120,4 +120,54 @@ test("system requires silent work and exactly one final report to the coordinato
   assert.match(system, /acknowledgements/i);
   assert.match(system, /progress or status notes/i);
   assert.match(system, /partial reports/i);
+});
+
+// Wave C1 specialist v3: a short health check is a small natural PM read, not a structured report. Concepts only:
+// no exact-response snapshot and no pinned example wording.
+
+test("system defaults a short health check to compact natural prose with no headings, bullets or table", () => {
+  assert.match(system, /short health check defaults to one compact paragraph/i);
+  assert.match(system, /three to five natural sentences/i);
+  assert.match(system, /no headings, bullets, or table/i);
+  assert.match(system, /no wording template/i);
+});
+
+test("system allows structure only when Daniel explicitly asks for details, a list or a table", () => {
+  assert.match(system, /explicitly asks for details, a breakdown, a list, all cards, or a table/i);
+  assert.match(system, /structure and bullets are fine/i);
+});
+
+test("system leads with the PM read rather than a preamble or the evidence process", () => {
+  assert.match(system, /Lead with the PM read/);
+  assert.match(system, /first sentence answers what Daniel actually asked/i);
+  assert.match(system, /not "here is the health check"/i);
+});
+
+test("system does not enumerate cards or expose evidence mechanics by default", () => {
+  assert.match(system, /only facts that change the judgement/i);
+  assert.match(system, /at most a few supporting cards/i);
+  assert.match(system, /Done cards/);
+  assert.match(system, /Inspecting many cards does not put them in the answer/i);
+  assert.match(system, /Do not explain how the project was found/i);
+  assert.match(system, /board vs label/i);
+  assert.match(system, /unless a scope limit is needed/i);
+});
+
+test("system avoids raw timestamps by default but still allows the recorded value when it matters", () => {
+  assert.match(system, /Do not quote a raw timestamp just to say a card has a due/i);
+  assert.match(system, /if the exact date matters or Daniel asks for it, quote the recorded Trello value as-is/i);
+  assert.match(system, /no conversion or derivation/i);
+  assert.match(system, /Never compute a weekday/i);
+});
+
+test("system treats coordinator-added context as a hint, not evidence, and requires fresh verification", () => {
+  assert.match(system, /coordinator-added descriptions or assumptions/i);
+  assert.match(system, /hints, not evidence/i);
+  assert.match(system, /fresh Trello or trusted durable context/i);
+  assert.match(system, /Ignore a coordinator description that is unsupported or conflicts with fresh evidence/i);
+});
+
+test("system keeps risk claims proportionate and gives one practical next PM step", () => {
+  assert.match(system, /nothing is critical or definitely late without evidence/i);
+  assert.match(system, /one practical next PM step/i);
 });

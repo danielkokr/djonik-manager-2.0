@@ -2073,3 +2073,121 @@ Scenarios B, C and D were not run. There was no second Session, no second turn a
 - **Exactly 1 Session and exactly 1 user turn** (the only `user.message`); no second Session or turn; no interrupt; no budget increase; no B/C/D.
 - **0 Trello mutations, 0 Calendar calls**, no Memory write; no production Agent, specialist, validation coordinator, Skill, Memory or `claude-lock.json` change; no runtime/repository code change (scratch-only runner).
 - No commit, push, deploy, branch, roadmap or issue change; no archive.
+
+
+## 39. Wave C1 specialist v3 — natural response-shape hardening
+
+> **Scope:** change only the specialist `system` contract so a short Project Health question gets a small natural PM read instead of a structured report; apply it as specialist **v3**; re-pin the temporary validation coordinator roster to it. **Only live changes:** specialist `agent_01KNiQDzzPjaMU6LLF4mU6uM` v2 → v3 and validation coordinator `agent_01GFCLFYq6uLRHG8vMCrAgeK` v3 → v4. **0 Sessions, 0 inference, 0 `user.message`, 0 Trello calls, 0 Calendar calls, $0 spend.** No commit, push, deploy, branch, roadmap or issue change. **Specialist v3 is NOT live-validated.**
+
+### 39.1 Measured §38 problem
+
+Specialist v2 was factually clean and relay-clean (§38.15 criteria 1–3, 5–7 PASS) but failed the voice criterion (4): four-section report structure with several headings, a walk through all 10 live cards, evidence mechanics in the prose (board/label discovery), a raw ISO timestamp where only "has a due" was needed, and no short overall PM judgement up front. Separately, the Haiku coordinator's delegated task contained an invented description of Extract as an extraction/parsing service; the specialist ignored it, so it did not affect the result (§38.5, §38.16).
+
+### 39.2 Product Owner direction
+
+Daniel wants a normal experienced PM: **natural PM voice + evidence discipline + small default answer**. Do not make the specialist more robotic. The PO's sample ("По проєкту зараз дві задачі в роботі, явних блокерів не бачу …") is a style reference only: no project facts are hard-coded and no wording is enforced.
+
+### 39.3 Decision
+
+Specialist `system`-only change. No Skill change, no runtime change, no model/effort/tool/MCP/Skill-pin/permission change, no router, no output middleware, no new Agent. The existing Voice/Shape guidance was rewritten in place rather than adding a policy layer.
+
+### 39.4 Exact conceptual system changes (YAML frontmatter unchanged; all hunks are after the closing `---`)
+
+- **Voice:** added "lead with the PM read": the first sentence answers what Daniel actually asked, not "here is the health check" or how evidence was gathered. Kept proportionate interpretation, the In-progress ≠ "живий/рухається" rule, and Backlog + due = reason to check. Added "nothing is critical or definitely late without evidence". The required "not a confirmed risk" formula was replaced by the simpler "you would check it because it is still in Backlog but has a due" (the internal-due-is-not-a-confirmed-risk rule stays).
+- **Shape (rewritten):** a short health check defaults to **one compact paragraph of about three to five natural sentences, no headings, bullets or table, no wording template**; only facts that change the judgement, at most a few supporting cards; no full card list, no Done cards, no descriptions unless they change the judgement; "inspecting many cards does not put them in the answer"; do not explain how the project was found (board vs label, card counts, searches, what was read) unless a scope limit is needed; one practical next PM step; say what could not be determined only if it matters. **Structure and bullets are allowed when Daniel explicitly asks for details, a breakdown, a list, all cards or a table.** Clarification question and "do not mention tools, Skills, or this setup" kept.
+- **One short tone example** (clearly labelled "tone and shape only, not facts or a template"; the PO's own sample, no real card names).
+- **Timestamp bullet:** the no weekday / local time / today-yesterday-tomorrow / N-days-ago / countdown / vague-recency rules are kept; added "do not quote a raw timestamp just to say a card has a due"; the exact recorded Trello value may be quoted as-is (no conversion or derivation) only when the date matters or Daniel asks for it.
+- **New bullet, coordinator-added context is not evidence:** delegated descriptions/assumptions are hints; the named project and question define intent; any factual project description must come from fresh Trello or trusted durable context; an unsupported or conflicting coordinator description is ignored and never repeated. This is not a phrase/intent router.
+- System length 3,349 → 4,715 characters (LF-normalized body, trimmed).
+
+### 39.5 v2 correctness boundaries preserved (unchanged text or unchanged meaning)
+
+Read-only, no Calendar; fresh Trello evidence for current-state claims; Waiting ≠ Blocked; Backlog is never Waiting; `lastActivityAt` never proves progress/live work/staleness; no relative-date computation; no invented people/entities/dependencies/commitments/risk; internal due alone ≠ confirmed risk or client commitment; silent work and exactly ONE final child message (or the single clarification question); no acknowledgements/progress/status/partial reports.
+
+### 39.6 Tests changed (`src/managedAgentConfig.test.ts`)
+
+All existing capability/safety tests are untouched. One regex was made case-insensitive (`Do not list every card`); the system-length ceiling was raised **4,200 → 5,000** (measured 4,715; the growth is the new required concepts, and the Skill is still not duplicated). Seven new concept tests (no exact-response snapshot, no example-wording assertion, no whole-prompt regex): default short answer is compact natural prose with no headings/bullets/table and no wording template; structure allowed only on explicit request for details/list/table; PM read comes first (not a "here is the health check" preamble); no card enumeration or evidence mechanics by default (Done cards, board vs label, scope limit only when needed); raw timestamps avoided by default but the recorded value is allowed when it matters/asked, with no derivation; coordinator-added context is a hint, not evidence, and must be verified against fresh Trello or trusted durable context; proportionate risk claims and one practical next PM step.
+
+### 39.7 Local pre-apply checks (before any live mutation)
+
+`npm run typecheck`: exit 0. `npm test`: tests 277, pass 277, fail 0 (270 → 277). `git diff --check`: exit 0 (only LF→CRLF working-copy notices). Diff inspected: only source hunks after the frontmatter end; model, Skill pin, MCP, tool allowlist and permissions unchanged.
+
+### 39.8 Pre-flight (read-only; PASS with one explained note)
+
+Working tree clean at `db082e4`. `claude-lock.json` mapped the file to `agent_01KNiQDzzPjaMU6LLF4mU6uM` v2. Live specialist exactly v2 (`updated_at` 2026-09-20T06:44:51.206771Z), Sonnet 5, `multiagent: null`, system equal to the repo body. Validation coordinator exactly v3 (`updated_at` 2026-09-20T06:45:17.868457Z), roster exactly `[specialist v2]`. Production `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: v17, Haiku 4.5, `multiagent: null`, `updated_at` 2026-09-18T13:08:46.751798Z, canonical JSON equal to the earlier v17 snapshot. **Note:** two of my scratch snapshot comparisons "failed" only because the saved files were older versions (specialist v1 / coordinator v2 snapshots, not v2/v3); the live `updated_at` values match the §37 records exactly, so this was a stale-fixture mismatch, not drift, and fresh v2/v3 snapshots were taken as the baseline.
+
+### 39.9 Official semantics verified (fetched 2026-09-20)
+
+Agent setup / update semantics: a changed configuration generates a new version; `version` supplied for optimistic concurrency returns 409 on mismatch; omitted fields are preserved; `tools`/`mcp_servers`/`skills` are replaced whole; **`multiagent` is replaced as a whole, including its roster**; "Coordinator rosters are not updated": a coordinator keeps the pinned version until it is updated. Multiagent orchestration: `{"type":"agent","id":…,"version":…}` pins a specific version; the roster is snapshotted at coordinator create/update. `ant apply --help` (v1.34.0, the same SHA-256-verified binary as §32.2/§37.6, zip hash `6f0d96db…d222`) confirms `--dry-run`, `--yes`, `--verbose`, `--force`. No contradiction with the expected semantics. (One CLI docs URL tried returned 404; the CLI help and the two docs pages above were used.)
+
+### 39.10 `ant apply --dry-run --verbose managed-agents/project-health-specialist.md`
+
+Exit 0. One line: `~ ./managed-agents/project-health-specialist.md  update  agent_01KNiQDzzPjaMU6LLF4mU6uM`, single changed field `~ system`; `Resources ~ 1 to update`. No create, archive, delete, adopt or other resource; the lockfile was not touched. **PASS.**
+
+### 39.11 Specialist v2 → v3
+
+`ant apply --yes managed-agents/project-health-specialist.md` (no `--force`): `updated  agent_01KNiQDzzPjaMU6LLF4mU6uM`, `Resources ~ 1 updated`, `State written to ./claude-lock.json`.
+
+### 39.12 Specialist read-back (fresh retrieve vs the fresh v2 snapshot; 12/12 PASS)
+
+Only `version` (2 → 3), `updated_at` (2026-09-20T06:44:51.206771Z → 2026-09-20T07:42:24.311480Z) and `system` (3,349 → 4,715 characters) differ. Same id; `claude-sonnet-5`, `model` object (effort/speed) deep-equal to v2; same pinned Skill `skill_01Treson5zdU1TgxXDaREwnY` / `skver_01JLTtMvUgfEqdcBBGj4WGVm`; Trello MCP URL unchanged; exactly `trelloSearch`, `trelloReadBoard`, `trelloReadList`, `trelloReadCard` enabled (all `always_allow`); 0 Trello writes; builtin toolset only `read`; no Calendar anywhere in the declared configuration; `multiagent: null`; not archived; version history 1, 2, 3. **`system` equals the repo source body: true.**
+
+### 39.13 `claude-lock.json`
+
+Same Agent id, `version` "2" → "3", `hash` `03916cd5…` → `ddc7edc1…`, `remote_hash` `6028bfa0…` → `4214f340…`; origin and the single resource entry otherwise unchanged. Written by `ant apply`, not hand-edited.
+
+### 39.14 Validation coordinator v3 → v4
+
+Not lockfile-managed. Official `agents.update` via the SDK with **only** `{"version": 3, "multiagent": {"type":"coordinator","agents":[{"type":"agent","id":"agent_01KNiQDzzPjaMU6LLF4mU6uM","version":3}]}}`. No system/model/tools/MCP/Skills/name/description/metadata sent. Pre-checks immediately before the call: coordinator exactly v3 and canonical JSON equal to the pre-flight snapshot. Result: version 4, `updated_at` 2026-09-20T07:43:00.066032Z, **no 409**, no retry.
+
+### 39.15 Roster read-back (fresh retrieve v4 vs v3 snapshot; 14/14 PASS incl. production checks)
+
+Only `version` (3 → 4), `updated_at` and `multiagent` (specialist pin 2 → 3) differ. Unchanged: Haiku 4.5, the v2 pass-through system, tools, MCP servers, four ordinary Skills (`project-health` absent), Calendar toolset still `enabled:false`, metadata, name, description. Roster exactly one entry `agent_01KNiQDzzPjaMU6LLF4mU6uM` version 3 (numeric); no Advisor, no self, no extra specialist. Update response equals fresh retrieve. Version history exactly 1, 2, 3, 4.
+
+### 39.16 README status correction
+
+`managed-agents/README.md` said v2 was not live-validated, which had become stale. It now states: v2 WAS live-validated in §38 (passed factual/relay/runtime boundaries, failed the natural-PM-voice and concision target); the live specialist is v3; production still has no roster; the validation coordinator is now v4 and pins specialist v3; **specialist v3 has not been live-validated yet.** The entry stays a single concise bullet, not a history log.
+
+### 39.17 Production unchanged proof
+
+Fresh retrieve of `agent_01WGRHDBjQa3eMhoGJMmQ1dh` after both live updates: canonical JSON **byte-identical** to the pre-flight snapshot; v17, `updated_at` 2026-09-18T13:08:46.751798Z, Haiku 4.5, five Skills, `multiagent: null`, and it references neither temporary agent. No production Agent or Skill mutation.
+
+### 39.18 Second dry run
+
+After apply: `./managed-agents/project-health-specialist.md  unchanged  agent_01KNiQDzzPjaMU6LLF4mU6uM`, `Resources 1 unchanged`; `claude-lock.json` byte-identical before and after the dry run.
+
+### 39.19 Zero Session / zero inference / zero Trello / zero Calendar proof
+
+Only Agent `retrieve`, version-list, Session-**list** (read-only) and the two Agent updates were made. The coordinator still has exactly its three earlier Sessions (§34, §36, §38; ids unchanged) and the specialist has none. No `sessions.create`, no `user.message`, no event send, no Trello or Calendar call, no Memory access, $0 spend.
+
+### 39.20 Confirmations and status
+
+- Specialist v2 → v3 and validation coordinator v3 → v4 only; no new Agent, no archive, no `--force`, no Skill change, no model/effort/tool/MCP change, no runtime/Telegram adapter change.
+- No commit, push, deploy, branch; `docs/01` and `docs/02` untouched; issue #28 not updated or closed.
+- **Specialist v3 behavior is NOT live-validated.** The paid Scenario A retest (same question against coordinator v4 → specialist v3, judged on: overall read first, one compact paragraph, no headings/bullets, no card inventory, no evidence mechanics, no raw timestamp, no coordinator-invented description repeated, plus the v2 correctness checks) is **deferred** and needs a separate Product Owner budget authorization. Scenarios B–D remain unrun; the validation coordinator is not archived; #18 platform limitation unchanged.
+
+### 39.21 Final local verification
+
+Local-only follow-up. No live or API call of any kind was made (no Agent retrieve/update, no Session, no inference, no Trello, no Calendar, no production access).
+
+- **Files changed (exactly the expected five; nothing else modified, nothing untracked):** `managed-agents/project-health-specialist.md`, `managed-agents/README.md`, `claude-lock.json`, `src/managedAgentConfig.test.ts`, `docs/15_ISSUE_28_IMPLEMENTATION_REPORT.md`.
+- **Diff inspection:**
+  - The specialist YAML frontmatter (lines 1–41) is **byte-identical to `HEAD`** (checked by extracting and diffing the frontmatter of both versions); all four source hunks start after the closing `---`. So the body is the only change: `claude-sonnet-5` with the same (default) effort behavior, the same pinned `project-health` Skill, the same Trello MCP, the same four read tools, the read-only builtin toolset, and zero Trello-write/Calendar capability are unchanged (the frontmatter contains no `trelloWrite`, `calendar` or `googleapis`).
+  - The tests are semantic concept assertions (regex on concepts such as compact natural prose, structure only on explicit request, PM read first, no card inventory/evidence mechanics, raw timestamp handling, coordinator context as a hint, proportionate risk); there is no exact-response snapshot, no example-wording assertion and no whole-prompt regex. The only removed test lines are the length ceiling (4,200 → 5,000), a comment line updated to "v2/v3", and one regex made case-insensitive.
+  - No runtime source changed: the only modified file under `src/` is `src/managedAgentConfig.test.ts`.
+  - `docs/00`–`docs/03` (including `docs/01` and `docs/02`) are unchanged.
+  - `claude-lock.json` changes are limited to the specialist entry (`version` "2" → "3", `hash`, `remote_hash`), written by `ant apply`.
+- **`npm run typecheck`:** exit 0, no errors.
+- **`npm test`:** tests 277, pass 277, fail 0, cancelled 0, skipped 0, todo 0.
+- **`git diff --check`:** exit 0, no whitespace errors (only LF→CRLF working-copy notices); re-run after this subsection was added with the same result.
+- **Final `git status --short`:**
+
+```text
+ M claude-lock.json
+ M docs/15_ISSUE_28_IMPLEMENTATION_REPORT.md
+ M managed-agents/README.md
+ M managed-agents/project-health-specialist.md
+ M src/managedAgentConfig.test.ts
+```
+
+- **No additional live/API mutation occurred during this follow-up.** Specialist stays v3 and the validation coordinator stays v4; no commit, push, deploy, roadmap edit, issue update/close or archive.
