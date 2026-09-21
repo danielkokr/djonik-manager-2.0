@@ -3421,3 +3421,248 @@ Re-retrieved after both live changes: `agent_01GFCLFYq6uLRHG8vMCrAgeK` is still 
 ### 45.18 Remaining gate
 
 **One final production smoke is the only remaining gate before Issue #28 can close**: a fresh Session created from the production Agent that must resolve `session.agent.version === 19` with its roster pinning specialist v4, then graded against the same 13-point bar as §44 (including exact final relay). This slice does not run it and does not pre-judge it: specialist v4 is unproven live, and the coordinator's delegated-task expansion (§44.11) is unchanged and may still recur. The validation coordinator stays unarchived until that smoke passes. Issue #28 remains open; #18 (same-turn fresh-read platform limitation) is unchanged.
+
+## 46. Wave C1 final production v19 acceptance smoke
+
+### 46.1 Product Owner authorization
+
+Exactly ONE final paid production smoke: exactly 1 fresh Managed Agent Session created from production `agent_01WGRHDBjQa3eMhoGJMmQ1dh`, which must resolve to v19 with the roster pinning specialist `agent_01KNiQDzzPjaMU6LLF4mU6uM` v4; exactly 1 user turn; platform Session budget `max_list_cost = $0.32`; absolute Product Owner ceiling `$0.45`; 0 Trello mutations, 0 Calendar calls, 0 Memory writes; no Agent/Skill/production-config update; no validation-coordinator mutation/archive. After that turn: STOP — no retry, no second Session, no second turn, no B/C/D, no budget increase. All honored (§46.30).
+
+### 46.2 Accepted main
+
+`7eaddb640895af946b82f096bdc9dccd763b27ef` — `feat: harden project health specialist v4`. Working tree clean, `HEAD == origin/main`. Canonical NOW (from `docs/02_DEVELOPMENT_ROADMAP.md` only): Wave C1 (#28). Issue #28 still has only the 2026-09-19 Product Owner architecture-decision comment.
+
+### 46.3 Locked acceptance bar (fixed before the run; not changed after seeing output)
+
+HARD PASS required all 17: (1) Session resolves production v19; (2) roster resolves specialist v4; (3) exactly one native child; (4) zero primary `agent.message` before the specialist result; (5) fresh Trello in this delegated task; (6) specialist factual content correct; (7) no unsupported Waiting/Blocked/risk/actor/assignee/commitment; (8) no `lastActivityAt` misuse; (9) no model-derived weekday/local time/countdown/relative-age wording; (10) specialist final is normal user-facing PM prose (one compact paragraph, ~3–5 sentences, no headings/bullets/table, no technical/coordinator note, no board/label/tool/search mechanics, no pool/card-count inventory, only material cards/facts, exactly one practical next step); (11) exactly one child → coordinator final message; (12) production coordinator final equals specialist final character-for-character; (13) no post-relay extra Project Health message; (14) 0 Trello writes; (15) 0 Calendar calls; (16) 0 Memory writes; (17) cost within authorization.
+
+Locked delegation clarification: the delegated task need not be byte-identical to the user's request and may restate the four dimensions in neutral language; delegation-context FAIL only if the coordinator adds factual assumptions about Extract, invented state, invented people/entities, a conclusion before the specialist, instructions that materially change the requested PM judgement, or misleading evidence requirements that corrupt the specialist result.
+
+### 46.4 Production v19 pre-flight (zero inference)
+
+Live `agents.retrieve` of `agent_01WGRHDBjQa3eMhoGJMmQ1dh`, all required values held and the whole object deep-equal (key-order-insensitive) to the §45.15 read-back: `version 19`; `updated_at 2026-09-21T08:01:32.367348Z`; `claude-haiku-4-5-20251001`; `project-health` Skill absent, exactly the four ordinary Skills unchanged (`skill_01WS6JtY1GMu3rGZaKCVR9w1`, `skill_01G9DtQEzPYxgw78riFh8k99`, `skill_01PTmbvLHJj1HuUxvDKhpaiE`, `skill_015c8dtDnWyDfVLwS6NLS7r6`); `system` byte-identical to the accepted v18 system; `multiagent` = `{coordinator, [{agent_01KNiQDzzPjaMU6LLF4mU6uM, v4}]}` (one entry, no Advisor, no self); `tools` and `mcp_servers` byte-identical to v18; Calendar server attached with `default_config.enabled:false` and no enabled override.
+
+### 46.5 Specialist v4 pre-flight
+
+`agent_01KNiQDzzPjaMU6LLF4mU6uM`: `version 4`, `updated_at 2026-09-21T08:00:37.180815Z`, deep-equal to the §45.11 read-back; `claude-sonnet-5`, `effort high`; Skill pinned `skill_01Treson5zdU1TgxXDaREwnY` @ `skver_01JLTtMvUgfEqdcBBGj4WGVm`; Trello MCP only; enabled reads exactly `trelloSearch`, `trelloReadBoard`, `trelloReadList`, `trelloReadCard`; 0 `trelloWrite*`; no Calendar in the configuration; `multiagent null`; `claude-lock.json` v4 (`id agent_01KNiQDzzPjaMU6LLF4mU6uM`, `remote_hash accb81e9fbb7d27d17990972e501114b`); live `system` equals the source body (trim-equal).
+
+### 46.6 Validation coordinator v5 proof
+
+`agent_01GFCLFYq6uLRHG8vMCrAgeK`: `version 5`, `updated_at 2026-09-20T17:47:22.141060Z`, `archived_at null`, roster pins specialist v3, deep-equal to its §45 snapshot. Unchanged and unarchived.
+
+### 46.7 Session id
+
+**`sesn_01Gt2KrLoZf6FrMaRP6jqGib`**, created `2026-09-21T08:13:23.192106Z`. Exactly one Session. Primary thread `sthr_01BfwHXP2dUs7YMzf1dobCFK`; child thread `sthr_01Vm7dNUGpghUfNEae82m6Sb`.
+
+### 46.8 Resolved production-v19 Session proof (inspected BEFORE `user.message`, at $0)
+
+Creation: `agent: {type: "agent_with_overrides", id: agent_01WGRHDBjQa3eMhoGJMmQ1dh, version: 19, tools: <§46.9>}`; the same `DJONIK_ENVIRONMENT_ID` / `DJONIK_VAULT_ID` as production runtime; one `memory_store` resource (same `DJONIK_MEMORY_STORE_ID`), `access: "read_only"`, `instructions` = `DJONIK_MEMORY_INSTRUCTIONS` extracted programmatically from `src/djonikClient.ts`; `budget {type: "limit", max_list_cost: {amount: "32", currency: "USD"}}`; no override of model/system/Skills/MCP/roster.
+
+Resolved `session.agent`: `id agent_01WGRHDBjQa3eMhoGJMmQ1dh`, **`version 19`**; Haiku primary; `system` byte-identical to production v19; four ordinary Skills, `project-health` absent; `multiagent` = coordinator with exactly one entry `{id agent_01KNiQDzzPjaMU6LLF4mU6uM, version 4, type agent}` whose expanded snapshot is field-identical to the live specialist v4 (`system`, `model` incl. `effort high`, `skills`, `mcp_servers`, `tools`, `name`) — the v4 final-answer discipline is therefore what the Session's child ran; no Advisor, no self entry; all six coordinator `trelloWrite*` disabled with Trello reads kept; Calendar `default_config.enabled:false`; `tools`/`mcp_servers` equal production's (writes off); budget 32 USD; Memory `read_only`; `usage.list_cost.amount "0"`. All 15 gate checks passed, and only then was the prompt sent.
+
+### 46.9 Write-safety override
+
+Session-level `tools` = a deep clone of production v19's complete `tools` array with the one enabled Trello write (`trelloWriteCard`) set to `enabled:false`; nothing else altered. Resolved Session confirmed all six `trelloWrite*` `enabled:false`, Trello `default_config.enabled:true`, Calendar disabled, built-in toolset unchanged, roster unaffected (§46.8).
+
+### 46.10 Exact user prompt
+
+One `user.message` (`sevt_01SMi4JuSJsQz3vbcFcud5AU`), no suffix, no hint, no test wording:
+
+> Що зараз по Extract? Дай короткий health check: що активне, що чекає, чи є реальні ризики і що мені варто зробити далі.
+
+No second message was sent.
+
+### 46.11 Event timeline
+
+25 session events, exhaustively paginated (identical to the live stream); primary-thread event list identical. Completion taken from the persisted `session.status_idle` with a `stop_reason`, not from `sessions.retrieve().status`.
+
+| # | processed_at (2026-09-21) | Type | Event id / note |
+|---|---|---|---|
+| 1 | 08:13:39.286440 | `session.status_running` | `sevt_01H9dE3vjg6kycDaWsiwDi2B` |
+| 2 | 08:13:39.286441 | `session.thread_status_running` | primary |
+| 3 | 08:13:39.350424 | `user.message` | `sevt_01SMi4JuSJsQz3vbcFcud5AU` |
+| 4 | 08:13:39.350425 | `span.model_request_start` | primary request 1 |
+| 5 | 08:13:41.320115 | `agent.thinking` | |
+| 6 | 08:13:42.129954 | `span.model_request_end` | |
+| 7 | 08:13:42.378676 | `session.thread_created` | child `sthr_01Vm7dNUGpghUfNEae82m6Sb` |
+| 8 | 08:13:42.378677 | `agent.thread_message_sent` | `sevt_01BD5uvLUFk77eyha27JCSfg`, coordinator → specialist |
+| 9 | 08:13:42.443814 | `span.model_request_start` | primary request 2 |
+| 10 | 08:13:42.882474 | `span.model_request_end` | |
+| 11 | 08:13:42.923455 | `session.thread_status_running` | child |
+| 12 | 08:13:42.960254 | `session.thread_status_idle` | primary, `end_turn` (mid-turn per-thread idle) |
+| 13 | 08:15:22.892188 | `session.thread_status_running` | primary resumes |
+| 14 | 08:15:22.968812 | `span.model_request_start` | primary request 3 |
+| 15 | 08:15:23.374945 | `span.model_request_end` | |
+| 16 | 08:15:23.506093 | `agent.thread_message_received` | `sevt_01Sr6EUsRU9wyDNe2NF1noST`, coordinator ← specialist |
+| 17 | 08:15:23.506094 | `span.model_request_start` | primary request 4 |
+| 18 | 08:15:24.024174 | `session.thread_status_idle` | child, `end_turn` |
+| 19 | 08:15:24.087437 | `session.usage` | cumulative list_cost `28` |
+| 20 | 08:15:26.036375 | `agent.thinking` | |
+| 21 | 08:15:28.488984 | `agent.message` | `sevt_01D7qVpKi1qNRS46uYU5HPPh`, the coordinator's only `agent.message` |
+| 22 | 08:15:28.488985 | `span.model_request_end` | |
+| 23 | 08:15:28.627324 | `session.thread_status_idle` | primary, `end_turn` |
+| 24 | 08:15:28.627325 | `session.usage` | cumulative list_cost `31` |
+| 25 | 08:15:28.627326 | `session.status_idle` | **`sevt_01EMpv3ZfHHLCLJ9zFJFL2zy`**, `stop_reason {"type":"end_turn"}` |
+
+0 `session.status_rescheduled`, 0 `session.thread_status_rescheduled`, 0 `session.error`. A 4-second post-idle wait produced no further events.
+
+### 46.12 Exact delegated task (coordinator → specialist, verbatim)
+
+```text
+Дай короткий health check для проекту Extract: що активне, що чекає, чи є реальні ризики, і що варто зробити далі. Доповідай коротко й сфокусовано.
+```
+
+The specialist thread's `agent.thread_message_received` carries a byte-identical copy.
+
+### 46.13 Delegation-context verdict under the locked rule: **PASS**
+
+The coordinator restated the user's four dimensions in neutral language and added only "Доповідай коротко й сфокусовано" (consistent with "короткий health check"). It added no factual assumption about Extract, no invented state, people or entities, no conclusion before the specialist, no instruction that changes the requested PM judgement, and no evidence requirement. (The §44.12 additions "блокери, затримки, невирішені питання" did not recur.)
+
+### 46.14 Silent-wait verdict: **PASS**
+
+Primary `agent.message` count before delegation (#1–#7): **0**; between the delegation (#8) and the specialist result reaching the coordinator (#16): **0**. Only `span.model_request_*`, `session.thread_status_*` and `session.usage` occurred in that window.
+
+### 46.15 Child thread + specialist-v4 proof
+
+`threads.list` returned exactly two threads. Child `sthr_01Vm7dNUGpghUfNEae82m6Sb`: `parent_thread_id = sthr_01BfwHXP2dUs7YMzf1dobCFK`; `threads.retrieve` → `agent.id agent_01KNiQDzzPjaMU6LLF4mU6uM`, **`agent.version 4`**, model `claude-sonnet-5`, `effort high`. Primary `sthr_01BfwHXP2dUs7YMzf1dobCFK` → `agent_01WGRHDBjQa3eMhoGJMmQ1dh`, **`version 19`**, Haiku. Exactly one child; no Advisor, no self, no second child. Native delegation: **PASS**.
+
+### 46.16 Skill-read proof
+
+Child event #5 (`08:13:45.478808Z`): `agent.tool_use read {"file_path":"/workspace/skills/project-health/SKILL.md"}`; result #7 `is_error:false`. The specialist read its pinned Skill before any Trello call. The primary thread made **0** tool calls.
+
+### 46.17 Exact Trello read sequence (Trello healthy)
+
+Child thread, in order, all `is_error:false`:
+
+1. `trelloSearch {"action":"search_boards","query":"Extract"}` → 0 results.
+2. `trelloSearch {"action":"search_boards","limit":25,"query":"Extract"}` → 0 results.
+3. `trelloReadBoard {"action":"list","limit":100}` → the shared "Djonik" board.
+4. `trelloReadBoard {"action":"list_labels","boardId":"…6aa00b20c257a1b4d852e504","limit":100}` → label "Extract".
+5. `trelloReadCard {"action":"list_by_board","boardIdOrUrl":"…6aa00b20c257a1b4d852e504","filter":"all","limit":50}` → 53 cards (`filter:"all"`, so it includes archived ones), `hasNextPage:false`.
+6. `trelloReadList {"action":"list_by_board","boardId":"…6aa00b20c257a1b4d852e504","limit":50}` → the board's lists.
+
+All six occurred at 08:13:50–08:14:38, after the task arrived (08:13:43): fresh evidence in this delegated task. 0 Trello writes. Process notes (not graded): the specialist also made three `read` attempts on the Memory mount (`/mnt/memory/djonik-memory` twice, `/mnt/memory/djonik-memory/projects.md`), all `is_error:true` (directory / no such file), returning no content and writing nothing; its thread used 12 model requests versus 7 in §44.
+
+### 46.18 Exact child → coordinator message count
+
+**1** — `agent.thread_message_sent` `sevt_01EAYhq7q1NKztpGNtTYnnNt` (08:15:22.296576). Private/internal child `agent.message` events, recorded separately (never sent to the coordinator): `sevt_01Suko7yYP66hvxrqsB5FprC` (mid-work narration: "Exactly one label "Extract" matches. Now I need to find cards carrying this label. Let me pull all cards on the board grouped by list and filter for the Extract label."), `sevt_01YL3gzGhwPEmcNhLWvgEK19` (the final answer as drafted; string-identical to the sent message), `sevt_01UCTRLUR1wP3FDmmftbCJ1E` (post-handoff: "Готово — звіт по Extract передано координатору."). Bar item 11: **PASS**.
+
+### 46.19 Exact specialist final answer (verbatim; 514 characters)
+
+```text
+По Extract зараз немає жодної задачі в списку «In progress» — найближче до активної роботи це кілька задач у списку «This week», зокрема «Чорні аромати» та «Флакони 1.5 ML», які запланові на найближчий час, але старт по них у Trello не зафіксовано. Явного waiting чи підтверджених блокерів по проєкту я не бачу. Єдине, що варто перевірити — задача «Брендбук» досі лежить у backlog, але має дедлайн у Trello: 2026-09-25T15:00:00.000Z, тож я б уточнив, чи він ще актуальний, і якщо так — підняв задачу вище в роботу.
+```
+
+### 46.20 Specialist factual verdict: **PASS**
+
+Ground truth (fresh `list_by_board`, `filter:"all"`): 18 cards carry the Extract label, of which 8 are archived (`closed:true`) and irrelevant to current state, leaving 10 open. Open Extract cards: **This week** — «Флакони 1.5 ML», «Чорні аромати», «Міні-парфуми адаптація» (all `due:null`, `startedAt:null`, no members); **Backlog** — «Рендер Відео білих ароматів» (no due), «Брендбук» (`due 2026-09-25T15:00:00.000Z`), «Флакони 7.5 ML» (no due); **Done** — «Коментарі по пінкам», «Автоматизація рендеру», «Білі аромати 3D відео», «Кохаю пінка». No open Extract card is in **In progress** (its three cards belong to other projects) or **Waiting** (three non-Extract cards). No card has a member. (Live state moved since §44: «Міні-парфуми адаптація» went from In progress to This week at ~07:48 today, per its `lastActivityAt`, so the answer legitimately differs from §44.)
+
+Statement by statement: "немає жодної задачі в «In progress»" ✔; "кілька задач у «This week», зокрема «Чорні аромати» та «Флакони 1.5 ML»" ✔ (three open, two named); "старт по них у Trello не зафіксовано" ✔ (`startedAt` null on each); "Явного waiting чи підтверджених блокерів … не бачу" ✔; «Брендбук» in Backlog with a Trello due ✔; the quoted value equals the recorded Trello value exactly ✔; the internal due is framed as "варто перевірити", not a commitment or a confirmed/critical risk ✔; no actor/owner/assignee/client/team ✔; no `lastActivityAt` use ✔; no weekday, local-time, today/yesterday/tomorrow, countdown or relative-age wording ✔; no invented people/entities/dependencies ✔; no card counts or arithmetic ✔; zero mutation ✔. **No factual, count or actor error.**
+
+Minor language/rule notes (not bar failures): "запланові" is a typo for "заплановані"; the raw UTC timestamp is quoted although the specialist's own system says a bare "має дедлайн у Trello" is enough unless the exact date matters (it is quoted as-is, unconverted, so bar item 9 holds).
+
+### 46.21 Specialist v4 voice/shape verdict: **PASS**
+
+One compact paragraph, ordinary Ukrainian, **3 sentences** (within "roughly 3–5"), PM conclusion first (what is/isn't active), no headings/bullets/table, no "technical note", no "for coordinator", no setup/tool/search/board-vs-label mechanics, no full/open/done/backlog counts, no "rest of the cards" inventory, only three material cards, and one next step ("check whether the due is still valid; if so, raise it"), phrased without any actor. The v4 discipline worked on the specialist's final: the §44 technical-note paragraph, the inventory sentence with its count error, and the "виконавець" did not recur.
+
+### 46.22 Unsupported-actor / count / inventory checks
+
+- Unsupported actor/executor/assignee/client/team/named person in the specialist final: **none**.
+- Card counts or pool inventory or arithmetic in the specialist final: **none**.
+- Coordinator-addressed note or mechanics text in the specialist final: **none**.
+- (Coordinator's own final, §46.23: no actor either, but see its other defects.)
+
+### 46.23 Exact final production coordinator answer (verbatim; the only primary `agent.message`, `sevt_01D7qVpKi1qNRS46uYU5HPPh`, 461 characters)
+
+```text
+По Extract:
+
+**Стан:**
+- Нічого в активній роботі (In progress пусто)
+- Кілька задач у «This week» (типу «Чорні аромати», «Флакони 1.5 ML»), але старт не зафіксований
+- Явних блокерів нема
+
+**Ризик:**
+- **«Брендбук» — дедлайн 25 вересня** (4 дні). Лежить у backlog, але вже мав би бути в роботі.
+
+**Далі:**
+1. Уточни, чи дедлайн по «Брендбуку» ще актуальний
+2. Якщо так — підніми його в роботу негайно
+3. Визнач, коли стартуєш по «Чорних ароматах» та «Флаконах»
+```
+
+This is not a relay of the specialist's paragraph. The coordinator **rewrote and reformatted** it into a Markdown report (bold section headings, bullets, a numbered list) and changed the content: it added a **countdown** ("4 дні") and a reformatted date ("25 вересня"), upgraded the "worth checking" card to a **risk** ("Ризик") with an **unsupported claim** ("вже мав би бути в роботі") and an urgency word ("негайно"), and added a **third next step** ("Визнач, коли стартуєш…") that the specialist never gave. The user-visible answer therefore has three next steps, headings/bullets, a model-derived countdown and an overstated risk — all of which the specialist final did not contain.
+
+### 46.24 Strict raw equality: **FAIL**
+
+Computed programmatically on the raw extracted strings, no trimming or normalization:
+
+- specialist `agent.thread_message_sent` content === primary `agent.thread_message_received` content: **true** (514 = 514 characters; transport to the coordinator was lossless).
+- specialist final === coordinator final `agent.message`: **false** (514 vs 461 characters; first difference at index 10: the coordinator's text begins `По Extract:\n\n**Стан:**` where the specialist's continues `По Extract зараз немає жодної задачі…`).
+
+The specialist obeyed its user-facing-only rule, so there was nothing for the coordinator to remove — yet the coordinator did not relay it: it rewrote it wholesale. Per the locked bar, any addition/removal/rewrite is FAIL. (This differs in kind from §44.21, where the coordinator only dropped a trailing paragraph the specialist should not have sent.)
+
+### 46.25 Persisted final idle
+
+After the coordinator's final `agent.message` (#21): 0 further `agent.message` (0 post-relay Project Health output). Authoritative persisted event: `session.status_idle`, **event id `sevt_01EMpv3ZfHHLCLJ9zFJFL2zy`**, **`processed_at 2026-09-21T08:15:28.627326Z`**, **`stop_reason {"type":"end_turn"}`**; it is the last of the 25 events. Bar item 13: **PASS**.
+
+### 46.26 Cost split (platform `list_cost`, USD cents)
+
+| Scope | Model | `list_cost` | Model requests | `input_tokens` | `cache_creation` (5m) | `cache_read_input_tokens` | `output_tokens` |
+|---|---|---|---|---|---|---|---|
+| Primary `sthr_01BfwHXP2dUs7YMzf1dobCFK` | `claude-haiku-4-5-20251001` (production v19) | **$0.03** | 4 | 30 | 18,428 | 52,928 | 764 |
+| Specialist `sthr_01Vm7dNUGpghUfNEae82m6Sb` | `claude-sonnet-5`, effort high (v4) | **$0.27** | 12 | 24 | 58,274 | 260,474 | 7,525 |
+| **Session total** | — | **$0.31** | 16 | 54 | 76,702 | 313,402 | 8,289 |
+
+Thread token sums equal the Session totals; per-thread costs ($0.03 + $0.27 = $0.30) are individually rounded, the Session-level authoritative total is **$0.31**. Budget `max_list_cost 32 USD` (unchanged); final `stop_reason end_turn` (not a budget stop); `status idle`; two `session.usage` snapshots (`28`, `31`). $0.31 is within the $0.32 platform budget (a $0.01 margin) and the $0.45 ceiling. Bar item 17: **PASS**. No inference was initiated beyond this one turn.
+
+### 46.27 Zero-write / Calendar / Memory proof
+
+- **Trello writes: 0.** Tool uses across both threads: `read` ×5, `trelloSearch` ×2, `trelloReadBoard` ×2, `trelloReadCard` ×1, `trelloReadList` ×1; no `trelloWrite*`, and all six were disabled at the Session level anyway. The primary thread made no tool calls.
+- **Calendar calls: 0.**
+- **Memory writes: 0.** The store was attached `read_only`; the only Memory-path activity was the three failed read attempts in §46.17.
+
+### 46.28 Post-run unchanged resource proof (re-retrieved after idle; deep-equal to the §46.4–46.6 pre-run snapshots)
+
+- Production: still **v19**, `updated_at 2026-09-21T08:01:32.367348Z` unchanged, entire object equal (same `system`, model, four Skills, tools, MCP, roster → specialist v4).
+- Specialist: still **v4**, `updated_at 2026-09-21T08:00:37.180815Z` unchanged, entire object equal.
+- Validation coordinator: still **v5**, `updated_at 2026-09-20T17:47:22.141060Z` unchanged, entire object equal, `archived_at null`, still pinned to specialist v3.
+
+### 46.29 Overall verdict: **FAIL**
+
+Trello was healthy and the run was conclusive; not INCONCLUSIVE. Against the locked 17-point bar:
+
+| # | Requirement | Result |
+|---|---|---|
+| 1 | Session resolves production v19 | PASS |
+| 2 | Roster resolves specialist v4 | PASS |
+| 3 | Exactly one native child | PASS |
+| 4 | Zero primary `agent.message` before the result | PASS |
+| 5 | Fresh Trello in this delegated task | PASS |
+| 6 | Specialist factual content correct | PASS |
+| 7 | No unsupported Waiting/Blocked/risk/actor/assignee/commitment | PASS on the specialist final; **the user-visible coordinator final adds an unsupported risk ("вже мав би бути в роботі")** — FAIL end to end |
+| 8 | No `lastActivityAt` misuse | PASS |
+| 9 | No weekday/local-time/countdown/relative-age wording | PASS on the specialist final; **the coordinator final adds "(4 дні)"** — FAIL end to end |
+| 10 | Specialist final is normal user-facing PM prose | **PASS** (§46.21); the user-visible coordinator final is headings/bullets/numbered list with three next steps |
+| 11 | Exactly one child → coordinator final message | PASS |
+| 12 | Coordinator final === specialist final, character-for-character | **FAIL** |
+| 13 | No post-relay extra message | PASS |
+| 14 | 0 Trello writes | PASS |
+| 15 | 0 Calendar calls | PASS |
+| 16 | 0 Memory writes | PASS |
+| 17 | Cost within authorization | PASS ($0.31) |
+
+Items 12 (hard fail) and, end to end, 7 and 9 fail because of a single defect: **the production Haiku coordinator did not relay the specialist's answer and instead rewrote it into a different, Markdown-structured, three-step answer with added countdown/risk content.** What this run establishes: production v19 resolves; the roster pins specialist v4; delegation is native and clean; silent wait, single child message, end-turn, zero mutation and cost all hold; and **specialist v4's final-answer discipline works** — its final is compact, factual, mechanics-free, count-free, actor-free and has one next step. What it establishes as *not* holding: the exact-relay contract on production. Recorded as observation only: in this single sample the coordinator's failure mode differs from §44's (a full rewrite rather than a dropped paragraph), and §42 (validation coordinator v5, same prompt) relayed byte-identically, so this is a single-sample result about the production coordinator that one Session cannot characterize further. No remediation was attempted or proposed; the next decision belongs to the Product Owner.
+
+### 46.30 Explicitly not done this slice
+
+- **No retry.**
+- **No second Session** (exactly one: `sesn_01Gt2KrLoZf6FrMaRP6jqGib`).
+- **No second user turn** (exactly one `user.message`).
+- **No Scenarios B/C/D.**
+- **No budget increase** ($0.32 platform budget as authorized; $0.31 spent).
+- **No Agent or Skill mutation** (production, specialist and validation coordinator are deep-equal pre/post, §46.28); no production, specialist or coordinator update; no new Agent; no Advisor.
+- **Validation coordinator `agent_01GFCLFYq6uLRHG8vMCrAgeK` NOT archived** (still v5, live).
+- **Issue #28 not closed in this slice** — and not commented on or updated; remains open.
+- **#18** (same-turn fresh-read platform limitation) unchanged.
+- No runtime code, Telegram adapter, router, middleware, custom loop, roadmap edit, next-issue promotion, commit, push, deploy or branch. The Session was driven by throwaway scripts kept outside the repository; no script or log from this run was added to it.
