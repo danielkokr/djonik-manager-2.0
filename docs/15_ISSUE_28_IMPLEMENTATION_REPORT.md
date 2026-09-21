@@ -3815,3 +3815,198 @@ Exit 0, no whitespace errors (only the pre-existing LF→CRLF working-copy notic
 - No deploy, no commit/push/branch, no issue close or comment, no next-issue promotion; `docs/02`'s canonical NOW stays #28.
 - The finalizer is **not live-validated**: that a real production Session's event stream carries exactly the fields the SDK types and the §46 recording show is established only by the recorded §46 shapes and the type definitions, and that the `sessions.create` response (as opposed to `sessions.retrieve`, which is what §46 recorded) carries the populated roster entry with the specialist `name` is inferred from the shared SDK type and unobserved (§47.4). If either assumption were wrong the failure mode is safe — the finalizer stays inactive and the coordinator reply is returned exactly as before — but the safeguard would then not deliver the exact relay; the live validation is what settles it.
 - **One bounded live production validation of this safeguard is the only remaining gate before Issue #28 can close** (a fresh Session resolving production v19/specialist v4, graded against the same strict-equality bar). The validation coordinator stays unarchived until then. #18 (same-turn fresh-read platform limitation) is unchanged.
+
+## 48. Wave C1 final live acceptance of deterministic relay safeguard
+
+### 48.1 Product Owner authorization
+
+Exactly ONE final paid live acceptance: exactly 1 fresh Managed Agent Session created by the **real repository `connectToDjonik()`** against production `agent_01WGRHDBjQa3eMhoGJMmQ1dh` (must resolve to v19, roster → specialist `agent_01KNiQDzzPjaMU6LLF4mU6uM` v4); exactly 1 user turn; platform Session budget `max_list_cost = $0.35`; absolute Product Owner ceiling `$0.45`; 0 Trello mutations, 0 Calendar calls, 0 Memory writes; no Agent, Skill, production-config, specialist or validation-coordinator mutation/archive. After that turn: STOP — no retry, no second Session, no second turn, no B/C/D, no budget increase. All honored (§48.25).
+
+### 48.2 Accepted main
+
+`ac34b8be8d3a8673885ccf7f890cd09d1f1da2d0` — `fix: preserve project health specialist reply`. Working tree clean, `HEAD == origin/main`. Canonical NOW (from `docs/02_DEVELOPMENT_ROADMAP.md` only): Wave C1 (#28). Issue #28 still has only the 2026-09-19 Product Owner architecture-decision comment. Unlike §44/§46, the primary acceptance property here is **`runtimeReturnedReply === specialistFinal`** (locked before the run); `coordinatorFinal === specialistFinal` is diagnostic only.
+
+### 48.3 Pre-flight (zero inference, fresh `agents.retrieve` ×3; all objects deep-equal, key-order-insensitive, to the §46 post-run snapshots)
+
+- **Production** `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: `version 19`, `updated_at 2026-09-21T08:01:32.367348Z`, `claude-haiku-4-5-20251001`, `system` byte-identical to the accepted v18 system, four ordinary Skills (`project-health` absent), `multiagent` = coordinator with exactly one entry `{agent_01KNiQDzzPjaMU6LLF4mU6uM, v4}` (no Advisor, no self), `tools`/`mcp_servers` equal to v18, Calendar attached with `default_config.enabled:false` and no enabled override.
+- **Specialist** `agent_01KNiQDzzPjaMU6LLF4mU6uM`: `version 4`, `updated_at 2026-09-21T08:00:37.180815Z`, `claude-sonnet-5`, `effort high`, Skill pinned `skill_01Treson5zdU1TgxXDaREwnY` @ `skver_01JLTtMvUgfEqdcBBGj4WGVm`, Trello MCP only, exactly `trelloSearch`/`trelloReadBoard`/`trelloReadList`/`trelloReadCard` enabled, 0 writes, no Calendar in the configuration, `multiagent null`; `claude-lock.json` v4 (`remote_hash accb81e9fbb7d27d17990972e501114b`).
+- **Validation coordinator** `agent_01GFCLFYq6uLRHG8vMCrAgeK`: `version 5`, `updated_at 2026-09-20T17:47:22.141060Z`, `archived_at null`.
+
+All 16 checks passed; a fresh production drift check inside the live script (before `sessions.create`) passed again.
+
+### 48.4 Exact scratch SDK safety proxy
+
+Scratch-only (kept in the session scratchpad, not in the repository, not committed): a `Proxy` around the real `Anthropic` client that intercepts **only** `client.beta.sessions.create` and forwards everything else (`events.stream`, `events.send`, retrieval, …) untouched. Before forwarding, it asserted that the request `connectToDjonik()` sent was exactly the expected production request (bare `agent` id string, the production `environment_id`, `vault_ids`, exactly one `memory_store` resource with the production id and `access: "read_write"`), and it then replaced **only**:
+
+1. `agent`: bare id → `{type: "agent_with_overrides", id: agent_01WGRHDBjQa3eMhoGJMmQ1dh, version: 19, tools: <production-v19 tools deep clone with every enabled trelloWrite* set disabled — only trelloWriteCard was enabled>}` (no override of `system`, `model`, Skills, MCP or the roster);
+2. the Memory resource `access`: `read_write` → `read_only` (same `memory_store_id`, same `instructions` verbatim — the 992-character string equals the repository's, verified);
+3. `budget: {type: "limit", max_list_cost: {amount: "35", currency: "USD"}}` added.
+
+One further, harmless addition beyond the four specified items: a `metadata.purpose` label (`issue28-wave-c1-final-live-acceptance-relay-finalizer`). The proxy also made one read-only `sessions.retrieve` of the same Session right after creation to run a safety gate (agent v19, Haiku, roster → v4, system, Skills, six `trelloWrite*` disabled, Calendar disabled, budget 35, Memory read-only, usage 0, MCP equal to production) that would have blocked the send; it passed. The retrieve was performed by the proxy, not by `connectToDjonik()`, and did not alter what `connectToDjonik()` received.
+
+### 48.5 Proof the real `connectToDjonik()` was used
+
+The scratch runner did `import("file:///C:/Projects/djonik-manager 2.0/src/djonikClient.ts")` (through `tsx`), called the **exported repository `connectToDjonik(clientProxy, PROD, environmentId, memoryStoreId, vaultId, onTrace, onTurnTelemetry, "diagnostic")`**, and then `handle.send(EXACT_PROMPT)`. No event loop, finalizer or reply logic was reimplemented in the scratch code. Evidence: the request captured at the proxy is the byte-for-byte production request shape `connectToDjonik()` builds (`request_from_repo.json`: keys `agent`, `environment_id`, `vault_ids`, `resources` only — no `budget`, bare agent id, `read_write`); the runtime `project_health_reply_finalized` trace event (a code path that exists only in the repository implementation) fired via the repository's own `onTrace` hook; and the repository's per-turn telemetry callback (`source: "diagnostic"`, 4 model iterations, `listCost 21`) fired. HEAD was `ac34b8b`, so the code exercised is the committed §47 safeguard.
+
+### 48.6 Raw `sessions.create` response provenance — the §47 unobserved assumption is now observed
+
+Captured at the proxy from the actual `sessions.create` response, **before** `connectToDjonik()` continued (`create_response_raw.json`, not normalized or reconstructed):
+
+- `session.id`: `sesn_016kcfFheL7cYd4w5y2N1qsr`, `created_at 2026-09-21T09:11:33.222223Z`;
+- `session.agent.id`: `agent_01WGRHDBjQa3eMhoGJMmQ1dh`; `session.agent.version`: **19**;
+- `session.agent.multiagent`: **present**, `type: "coordinator"`, **1** roster entry;
+- roster child: `id agent_01KNiQDzzPjaMU6LLF4mU6uM`, `name "Djonik Project Health Specialist"`, `version 4`, `type "agent"`;
+- the committed `resolveProjectHealthSpecialistName(session.agent)` applied to that response returned **`"Djonik Project Health Specialist"`**.
+
+The create response itself therefore carries enough data for the finalizer to resolve the canonical specialist; the §47 caveat (create response vs `retrieve`) is closed. The create response also showed `resources[0].access "read_only"` and the budget `{35 USD}`.
+
+### 48.7 Session id
+
+**`sesn_016kcfFheL7cYd4w5y2N1qsr`**. Exactly one Session. Primary thread `sthr_01P9tCiB2Va5wSjZ4JAdrGmB`; child thread `sthr_01YSEDXcpzCaqEb9ZouNzaN5`.
+
+### 48.8 Resolved production-v19 Session proof (before `user.message`; all 11 gate checks PASS, usage `0`)
+
+`session.agent.id agent_01WGRHDBjQa3eMhoGJMmQ1dh`, **`version 19`**; Haiku primary; `system` byte-identical to production v19; four ordinary Skills, `project-health` absent; roster = exactly one entry, `{agent_01KNiQDzzPjaMU6LLF4mU6uM, version 4, type agent}`; all six coordinator `trelloWrite*` `enabled:false`; Calendar `default_config.enabled:false`; `mcp_servers` equal to production's; budget 35 USD; Memory `read_only`.
+
+### 48.9 Exact prompt
+
+One `user.message` (`sevt_01KV6ResUvLufdnJ9w8WtQjt`), sent through `handle.send(...)`, no suffix or hint:
+
+> Що зараз по Extract? Дай короткий health check: що активне, що чекає, чи є реальні ризики і що мені варто зробити далі.
+
+No second message. `handle.send()` resolved with no error (about 60 s of session activity).
+
+### 48.10 Exact delegated task (coordinator → specialist; diagnostic, outside the locked bar)
+
+```text
+Provide a short Project Health check for Extract. Answer these specific questions:
+1. What is currently active on this project?
+2. What is waiting/blocked/in progress?
+3. Are there real risks or issues?
+4. What should Daniel do next?
+
+Report findings concisely and factually. If you need to read cards or boards to establish current state, do so. Focus on actionable insights for next steps.
+```
+
+Observed for the record: the coordinator wrote the task in English, merged waiting/blocked/in-progress into one question and added a generic "read cards or boards" instruction; it added no factual assumption about Extract and no invented state or people. The specialist replied in Ukrainian per its own system prompt. Silent wait held: 0 primary `agent.message` before delegation and before the specialist result (event #17).
+
+### 48.11 Child thread + specialist v4 proof
+
+`threads.list` returned exactly two threads. Child `sthr_01YSEDXcpzCaqEb9ZouNzaN5`: `parent_thread_id = sthr_01P9tCiB2Va5wSjZ4JAdrGmB`; `threads.retrieve` → `agent.id agent_01KNiQDzzPjaMU6LLF4mU6uM`, **`agent.version 4`**, `claude-sonnet-5`, `effort high`. Primary → `agent_01WGRHDBjQa3eMhoGJMmQ1dh` **v19**, Haiku. Exactly one canonical Project Health child; no Advisor, no self, no second child.
+
+### 48.12 Exact Trello read sequence (Trello healthy; fresh, all `is_error:false`)
+
+Child thread, after reading its pinned Skill (`read /workspace/skills/project-health/SKILL.md`, `is_error:false`):
+
+1. `trelloSearch {"action":"search_boards","query":"Extract"}` → 0 results.
+2. `trelloSearch {"action":"search_cards","query":"Extract"}` → 0 results.
+3. `trelloReadBoard {"action":"list"}` → the shared "Djonik" board.
+4. `trelloReadBoard {"action":"list_labels","boardId":"…6aa00b20c257a1b4d852e504"}` → label "Extract".
+5. `trelloReadBoard {"action":"list_by_workspace","workspaceId":"…6aa00b1e1ea493a95808aa9d"}` → workspace boards.
+6. `trelloReadCard {"action":"list_by_board","boardIdOrUrl":"…6aa00b20c257a1b4d852e504","filter":"open"}` → 34 open cards, `hasNextPage:false`.
+
+(Steps 2 and 3, and steps 4 and 5, were each issued as parallel pairs.) One incidental `read` of `/mnt/memory/djonik-memory` failed (`awk: read error (Is a directory)`, `is_error:true`) and returned nothing. 0 Trello writes.
+
+### 48.13 Exact specialist final (verbatim; the single child → coordinator message `sevt_01MBRpaM5xjjtBsZVF2M3iB1`, 747 characters)
+
+```text
+По Extract зараз нічого не в статусі "In progress" — активність зосереджена в списку "This week": там три картки, "Флакони 1.5 ML", "Чорні аромати" та "Міні-парфуми адаптація", які виглядають запланованими до найближчої роботи, але формально ще не розпочаті. У "Waiting" по Extract нічого немає, тож блокерів чи явного очікування на когось я не бачу. У Backlog лежать ще три картки ("Рендер Відео білих ароматів", "Флакони 7.5 ML" та "Брендбук") — це нормальна черга, окрім "Брендбук": вона й досі в Backlog, хоча має дедлайн у Trello, і це варто перевірити. Реального ризику чи блокера з фактами, що щось конкретне заважає прогресу, зараз не видно. Я б перевірив, чи дедлайн по "Брендбук" ще актуальний, і якщо так — підняв би цю картку в роботу.
+```
+
+Child → coordinator transport count: **exactly 1**. Internal child `agent.message` events (never sent to the coordinator): a mid-work narration (`sevt_012h8rxETowfYjETnmwy1t4x`), the draft of the final answer (`sevt_01DKMNrtFNTKGoDAADuWBUZY`), and a post-handoff "Reported the Extract health check to the coordinator." (`sevt_01H2L3f976XcP3rpHhY7eGGv`). The coordinator's `agent.thread_message_received` (`sevt_01QzKW1y2L8JRokDCNzD9RXQ`) is string-identical to the sent content.
+
+### 48.14 Exact coordinator final (verbatim; the only primary `agent.message`, `sevt_016BKa9pQNmc5w9WzZ3aDYvA`, 747 characters)
+
+```text
+По Extract зараз нічого не в статусі "In progress" — активність зосереджена в списку "This week": там три картки, "Флакони 1.5 ML", "Чорні аромати" та "Міні-парфуми адаптація", які виглядають запланованими до найближчої роботи, але формально ще не розпочаті. У "Waiting" по Extract нічого немає, тож блокерів чи явного очікування на когось я не бачу. У Backlog лежать ще три картки ("Рендер Відео білих ароматів", "Флакони 7.5 ML" та "Брендбук") — це нормальна черга, окрім "Брендбук": вона й досі в Backlog, хоча має дедлайн у Trello, і це варто перевірити. Реального ризику чи блокера з фактами, що щось конкретне заважає прогресу, зараз не видно. Я б перевірив, чи дедлайн по "Брендбук" ще актуальний, і якщо так — підняв би цю картку в роботу.
+```
+
+### 48.15 Exact `runtimeReturnedReply`
+
+The exact string resolved by `await handle.send(PROMPT)` on the real `connectToDjonik()` handle (747 characters, stored as JSON so no console normalization) — identical to the block in §48.13/§48.14:
+
+```text
+По Extract зараз нічого не в статусі "In progress" — активність зосереджена в списку "This week": там три картки, "Флакони 1.5 ML", "Чорні аромати" та "Міні-парфуми адаптація", які виглядають запланованими до найближчої роботи, але формально ще не розпочаті. У "Waiting" по Extract нічого немає, тож блокерів чи явного очікування на когось я не бачу. У Backlog лежать ще три картки ("Рендер Відео білих ароматів", "Флакони 7.5 ML" та "Брендбук") — це нормальна черга, окрім "Брендбук": вона й досі в Backlog, хоча має дедлайн у Trello, і це варто перевірити. Реального ризику чи блокера з фактами, що щось конкретне заважає прогресу, зараз не видно. Я б перевірив, чи дедлайн по "Брендбук" ще актуальний, і якщо так — підняв би цю картку в роботу.
+```
+
+### 48.16 PRIMARY: `runtimeReturnedReply === specialistFinal`: **TRUE**
+
+Strict equality on the raw strings (no trim, no normalization), computed programmatically: `runtimeReturnedReply === specialistFinal` is `true` (747 = 747 characters).
+
+### 48.17 Diagnostic only: `coordinatorFinal === specialistFinal`: true
+
+Also `true` (747 = 747), and `runtimeReturnedReply === coordinatorFinal` is `true`. In this single sample the Haiku coordinator happened to relay the specialist's answer exactly. Consequently the **rewrite-replacement branch of the finalizer — the case §46 exhibited, where the coordinator rewrites and the finalizer must substitute the child string — was NOT exercised live in this sample**; it remains proven by the §47 unit tests (test #28 2 and #28 3, with a scripted `"HAIKU REWRITE"` and a whitespace/Markdown-laden string) and not by a live rewrite. What this run does prove live is everything upstream of that branch (the create-response provenance, the thread/message provenance chain, single-result detection, no-write detection, the authoritative-idle decision, and exact return). The locked bar is met regardless of which branch fires, and no criterion was changed after seeing the result.
+
+### 48.18 Finalizer trace
+
+The repository's content-free trace fired exactly once: `{"type":"project_health_reply_finalized","replacedCoordinatorReply":false}`. It fired only because provenance resolved (roster from the create response → name; `session.thread_created` for that name; exactly one `agent.thread_message_received` from that thread; plain-text content), which also means the finalizer's own observation recorded **no Trello write attempt** this turn. `replacedCoordinatorReply:false` is exactly the expected value when the coordinator had already relayed the child string exactly. No other trace events fired (no `mcp_tool_use`, no verification nudge, no due-date finalization).
+
+### 48.19 Specialist factual regression check: no catastrophic regression (verified against the fresh 34-card read)
+
+Ground truth (open Extract cards, 10): **This week** — «Флакони 1.5 ML», «Чорні аромати», «Міні-парфуми адаптація» (all no due, `startedAt null`, no members); **Backlog** — «Рендер Відео білих ароматів» (no due), «Брендбук» (`due 2026-09-25T15:00:00.000Z`), «Флакони 7.5 ML» (no due); **Done** — 4 cards. No Extract card is In progress (its list holds 2 non-Extract cards) or in Waiting (3 non-Extract cards). No card has an assignee.
+
+- "нічого не в статусі In progress" ✔; three This-week cards named correctly ✔; "формально ще не розпочаті" ✔ (`startedAt` null); "У Waiting по Extract нічого немає" ✔; three Backlog cards named correctly, "три картки" ✔ (the count is right); «Брендбук» in Backlog with a Trello due, framed as "варто перевірити", not a commitment or a confirmed risk ✔; "Реального ризику … не видно" ✔ (no unsupported risk escalation); one next step ("check whether the due is still valid; if so, raise it") with **no actor/owner/assignee/client/team** ✔; no invented commitment ✔; no `lastActivityAt` use ✔; no weekday, local time, relative-age or countdown wording (the due value is not even quoted) ✔; zero writes ✔.
+- Observed variation, flagged and not graded as a failure (the instruction is not to fail minor style variation): the answer is five sentences / 747 characters and includes a Backlog list with a count ("ще три картки (…)"), which is more inventory than the v4 shape rule ("do not summarize the rest of the project", no counts) asks for; it is factually accurate. There is no technical/coordinator note, no board/label/tool mechanics, and no count or arithmetic error.
+
+### 48.20 Zero-write / Calendar / Memory proof
+
+- **Trello writes: 0.** Tool uses across both threads: `read` ×2, `trelloSearch` ×2, `trelloReadBoard` ×3, `trelloReadCard` ×1; no `trelloWrite*`. All six coordinator `trelloWrite*` were disabled at Session level (§48.8); the specialist has no write tools at all; the primary thread made **0** tool calls (so the finalizer's no-write observation was genuinely true).
+- **Calendar calls: 0.** Toolset disabled.
+- **Memory writes: 0.** Memory attached `read_only`; the only Memory-path activity was the one failed directory `read`.
+
+### 48.21 Persisted final idle
+
+25 session events, exhaustively paginated (identical to the live stream); after the coordinator's only `agent.message` (#21) no further `agent.message`. Authoritative persisted event: `session.status_idle`, **event id `sevt_0121qMzTSKbUJArp2ceXeiss`**, **`processed_at 2026-09-21T09:12:34.860807Z`**, **`stop_reason {"type":"end_turn"}`**, last of the 25 events; 0 `session.error`, 0 rescheduled. (A mid-turn per-thread `session.thread_status_idle` for the primary thread occurred at #12; `handle.send()` did not complete on it — it completed only on the session-level idle, consistent with test #28 11.)
+
+### 48.22 Authoritative cost split (platform `list_cost`, USD cents)
+
+| Scope | Model | `list_cost` | Requests | `input_tokens` | `cache_creation` (5m) | `cache_read_input_tokens` | `output_tokens` |
+|---|---|---|---|---|---|---|---|
+| Primary `sthr_01P9tCiB2Va5wSjZ4JAdrGmB` | `claude-haiku-4-5-20251001` (v19) | **$0.03** | 4 | 30 | 18,631 | 52,995 | 994 |
+| Specialist `sthr_01YSEDXcpzCaqEb9ZouNzaN5` | `claude-sonnet-5`, effort high (v4) | **$0.17** | 8 | 16 | 43,425 | 143,066 | 3,309 |
+| **Session total** | — | **$0.21** | 12 | 46 | 62,056 | 196,061 | 4,303 |
+
+Thread sums equal the Session totals; per-thread costs are individually rounded ($0.20) versus the authoritative Session total **$0.21**. Budget `max_list_cost 35 USD` unchanged; `stop_reason end_turn` (not a budget stop); `status idle`; two `session.usage` snapshots (`19`, `21`). $0.21 ≤ $0.35 platform cap ≤ $0.45 Product Owner ceiling. No inference beyond this one turn.
+
+### 48.23 Post-run resource proof (re-retrieved after idle; deep-equal to the §48.3 pre-run snapshots)
+
+- Production: still **v19**, `updated_at 2026-09-21T08:01:32.367348Z` unchanged, entire object equal.
+- Specialist: still **v4**, `updated_at 2026-09-21T08:00:37.180815Z` unchanged, entire object equal.
+- Validation coordinator: still **v5**, `updated_at 2026-09-20T17:47:22.141060Z` unchanged, `archived_at null`, entire object equal (still pinned to specialist v3).
+
+### 48.24 Overall verdict: **PASS**
+
+Against the locked 15-point bar:
+
+| # | Requirement | Result |
+|---|---|---|
+| 1 | Real repository `connectToDjonik()` used | PASS (§48.5) |
+| 2 | Exactly one fresh Session | PASS |
+| 3 | Production resolves v19 | PASS |
+| 4 | Create response provides provenance sufficient for the §47 finalizer | **PASS** — `multiagent` present in the create response; the committed resolver returned the specialist name (§48.6) |
+| 5 | Exactly one canonical Project Health specialist child | PASS |
+| 6 | Specialist resolves v4 | PASS |
+| 7 | Fresh Trello evidence | PASS (six reads in this delegated task) |
+| 8 | Exactly one child → coordinator final transport message | PASS |
+| 9 | `runtimeReturnedReply === specialistFinal` strict | **PASS** — `true`, 747 = 747 |
+| 10 | Zero Trello writes | PASS |
+| 11 | Zero Calendar calls | PASS |
+| 12 | Zero Memory writes | PASS |
+| 13 | Authoritative final `session.status_idle` | PASS (`sevt_0121qMzTSKbUJArp2ceXeiss`) |
+| 14 | Cost ≤ $0.35 cap and ≤ $0.45 ceiling | PASS ($0.21) |
+| 15 | No Agent/Skill/config mutation | PASS (§48.23) |
+
+What this acceptance establishes: the committed §47 safeguard runs correctly on the real production path — its provenance assumptions all held on a live create response and a live event stream, it fired on the right turn, it saw no write, it decided at the authoritative idle, and the caller received exactly the specialist's string. What it does **not** establish, and this report does not claim: that the rewrite-substitution branch works against a live Haiku rewrite. In this sample Haiku relayed exactly, so that branch (`replacedCoordinatorReply: true`) was covered only by unit tests; §46 showed the rewrite occurs in some samples, and one further live sample cannot be requested under this authorization. The two flagged observations (§48.10 delegated-task wording; §48.19 specialist inventory sentence) do not affect any bar item.
+
+### 48.25 Explicitly not done this slice
+
+- **No retry.**
+- **No second Session** (exactly one: `sesn_016kcfFheL7cYd4w5y2N1qsr`).
+- **No second user turn** (exactly one `user.message`).
+- **No Scenarios B/C/D.**
+- **No budget increase** ($0.35 platform budget as authorized; $0.21 spent).
+- **No Agent, Skill, production, specialist or validation-coordinator mutation** (all deep-equal pre/post, §48.23); no new Agent; no Advisor.
+- **Validation coordinator `agent_01GFCLFYq6uLRHG8vMCrAgeK` NOT archived in this slice** (still v5, live).
+- **Issue #28 NOT closed in this slice** — and not commented on or updated; it remains open.
+- **#18** (same-turn fresh-read platform limitation) unchanged.
+- No source-code edit, Telegram change, router, middleware, custom loop, roadmap edit, next-issue promotion, commit, push, deploy or branch. The scratch proxy and runner live outside the repository and are not committed; no script or log from this run was added to it.
