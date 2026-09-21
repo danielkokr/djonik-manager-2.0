@@ -76,7 +76,9 @@ test("system contract states the read-only, fresh-evidence, and no-invention bou
   assert.match(system, /`lastActivityAt` is never evidence/);
   assert.match(system, /Do not invent people, entities, dependencies, commitments, or risk/);
   assert.match(system, /self-contained/i);
-  assert.ok(system.length < 5000, "system prompt should stay minimal and complement the Skill, not duplicate it");
+  // Ceiling raised 5000 -> 6500 for the v4 final-answer discipline (user-facing-only final, no pool counts, no
+  // unsupported actor, silent self-check): about 1.6k characters of new rules, still bounded and still not a Skill copy.
+  assert.ok(system.length < 6500, "system prompt should stay minimal and complement the Skill, not duplicate it");
 });
 
 // Wave C1 specialist v2/v3: natural PM voice with evidence discipline. These pin concepts, not exact wording or a
@@ -170,4 +172,58 @@ test("system treats coordinator-added context as a hint, not evidence, and requi
 test("system keeps risk claims proportionate and gives one practical next PM step", () => {
   assert.match(system, /nothing is critical or definitely late without evidence/i);
   assert.match(system, /one practical next PM step/i);
+});
+
+// Wave C1 specialist v4: final-answer discipline after the §44 production smoke. Concepts only: no exact-response
+// snapshot and no pinned Ukrainian wording.
+
+test("system makes the one message to the coordinator user-facing content only", () => {
+  assert.match(system, /user-facing content only/i);
+  assert.match(system, /exactly what Daniel should read/i);
+  assert.match(system, /relayed to him unchanged/i);
+  assert.match(system, /no second channel for coordinator metadata/i);
+  assert.match(system, /never add a technical note, a note for the coordinator/i);
+  assert.match(system, /handoff or internal text/i);
+  assert.match(system, /instructions to the coordinator/i);
+  assert.match(system, /postscript addressed to anyone other than Daniel/i);
+  assert.match(system, /If something should not be shown to Daniel, do not send it at all/i);
+});
+
+test("system keeps evidence, discovery and tool mechanics out of the final message", () => {
+  assert.match(system, /evidence-process narration/i);
+  assert.match(system, /discovery, search or tool mechanics/i);
+  assert.match(system, /counts of what you inspected/i);
+  // A needed scope limit is allowed only as one plain clause for Daniel, never as a separate note.
+  assert.match(system, /one plain clause inside the answer itself, never as a separate note/i);
+});
+
+test("system forbids project-pool summaries and card counts unless Daniel explicitly asks for them", () => {
+  assert.match(system, /Do not summarize the rest of the project/i);
+  assert.match(system, /no cards per list/i);
+  assert.match(system, /no totals or open\/Done\/Backlog counts/i);
+  assert.match(system, /no card arithmetic/i);
+  assert.match(system, /only when Daniel explicitly asks for counts, totals, an inventory, or a full breakdown/i);
+});
+
+test("system bars recommending an unsupported actor, assignee, client or team", () => {
+  assert.match(system, /Do not send Daniel to "the executor", "the assignee", "the client", "the team"/i);
+  assert.match(system, /a named person, or any other actor/i);
+  assert.match(system, /unless fresh Trello evidence or trusted durable context establishes that actor's role/i);
+  assert.match(system, /if ownership is unknown, phrase the step without an actor/i);
+});
+
+test("system allows exactly one practical next PM step with no extra recommendations or workflow", () => {
+  assert.match(system, /exactly one practical next PM step/i);
+  assert.match(system, /no second or third recommendation/i);
+  assert.match(system, /no speculative workflow/i);
+});
+
+test("system requires a silent pre-send self-check that is never exposed", () => {
+  assert.match(system, /Before sending, silently check the message/i);
+  assert.match(system, /is every sentence meant for Daniel/i);
+  assert.match(system, /any card count Daniel did not ask for/i);
+  assert.match(system, /any invented actor, owner or assignee/i);
+  assert.match(system, /more than one next step/i);
+  assert.match(system, /any fact that does not change the judgement/i);
+  assert.match(system, /Remove whatever fails the check, and never mention the check/i);
 });

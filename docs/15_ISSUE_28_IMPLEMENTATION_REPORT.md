@@ -3305,3 +3305,119 @@ Items 4, 8 and 10 fail; a production-v18 smoke PASS requires all thirteen, so th
 - **#18** (same-turn fresh-read platform limitation) unchanged — accepted platform limitation, neither exercised as a defect nor claimed fixed here.
 - No runtime code, Telegram adapter, router, middleware, custom loop, Advisor, new Agent, roadmap edit, next-issue promotion, commit, push, deploy, or branch.
 - Note on the temporary runner: the Session was driven by throwaway scripts kept outside the repository (scratchpad); no script or log from this run was added to the repository.
+
+## 45. Wave C1 final specialist hardening and production v19 repin
+
+> **Scope:** two live configuration changes only — specialist `agent_01KNiQDzzPjaMU6LLF4mU6uM` v3 → v4 (system body only) and production `agent_01WGRHDBjQa3eMhoGJMmQ1dh` v18 → v19 (roster pin only). 0 Sessions, 0 `user.message`, $0 inference, 0 Trello, 0 Calendar, 0 Memory writes. No commit, push, deploy, branch, issue comment/close, or roadmap-NOW change. Base: `837f8d7` (`docs: record production project health smoke`), `HEAD == origin/main`, working tree clean before this work.
+
+### 45.1 §44 measured failures being fixed
+
+§44 (one real production-v18 Session, $0.21) proved the topology and runtime and failed on five narrow items:
+
+1. the specialist's final contained an unnecessary `Технічна примітка для координатора` paragraph (board/label discovery, card counts) — a second channel that the specialist's own contract forbids;
+2. the specialist included pool inventory/counting ("три штуки в Backlog без дат і чотири вже в Done") and made a count error (only two Backlog cards were undated);
+3. the specialist suggested "уточнити з виконавцем" although no assignee was evidenced;
+4. the coordinator then omitted the technical paragraph, so strict raw equality (`coordinatorFinal === specialistFinal`) failed;
+5. the coordinator's delegated task added unnecessary evidence dimensions ("блокери, затримки, невирішені питання").
+
+This slice hardens the specialist's final-answer discipline (1–3) so that there is nothing left for the coordinator to drop, which also removes the trigger of (4). Item (5) is a coordinator-side observation and is **not** changed here (production `system` is untouched by instruction); the final production smoke will show whether it recurs. Architecture, coordinator model, Trello tool surface, Calendar, Memory, the `project-health` Skill text, the Telegram adapter, #18 and the exact-relay design are explicitly not revisited.
+
+### 45.2 Product Owner authorization
+
+Exactly two live changes: specialist v3 → v4 and production v18 → v19. Not authorized and not performed: inference, Session creation, `user.message`, Trello/Calendar call, Memory write, Skill mutation, production system rewrite, production model/tool/MCP/Skill change, validation-coordinator update/archive, runtime code change, deploy, commit/push.
+
+### 45.3 Exact source-system changes
+
+Only the **system body** of `managed-agents/project-health-specialist.md` changed (YAML frontmatter byte-identical: same `name`, `description`, `model claude-sonnet-5`, Skill `skill_01Treson5zdU1TgxXDaREwnY` @ `skver_01JLTtMvUgfEqdcBBGj4WGVm`, Trello MCP only, four `always_allow` reads, no writes, no Calendar, built-in `read` only, no multiagent). `git diff` shows exactly two hunks in the body; all existing factual/safety rules are kept. Body length 4717 → 6333 characters (+1616).
+
+*Shape paragraph — added/strengthened:*
+
+- "Do not summarize the rest of the project: no "the remaining cards", no cards per list, no totals or open/Done/Backlog counts, no card arithmetic, even when true. Give counts or an inventory only when Daniel explicitly asks for counts, totals, an inventory, or a full breakdown."
+- The scope-limit exception is tightened: "…unless a scope limit is needed to understand or answer, and then in one plain clause inside the answer itself, never as a separate note."
+- "End with **exactly** one practical next PM step, with no second or third recommendation and no speculative workflow…"
+- "Do not send Daniel to "the executor", "the assignee", "the client", "the team", a named person, or any other actor unless fresh Trello evidence or trusted durable context establishes that actor's role for this exact fact or action; if ownership is unknown, phrase the step without an actor (for example, check whether the due is still valid)."
+
+*Messaging paragraph — new paragraph appended:*
+
+- "That one message is user-facing content only: exactly what Daniel should read, relayed to him unchanged. There is no second channel for coordinator metadata, so never add a technical note, a note for the coordinator, handoff or internal text, instructions to the coordinator, evidence-process narration, discovery, search or tool mechanics, counts of what you inspected, or a postscript addressed to anyone other than Daniel. If something should not be shown to Daniel, do not send it at all."
+- "Before sending, silently check the message: is every sentence meant for Daniel; is there any coordinator, internal or mechanics note; any card count Daniel did not ask for; any invented actor, owner or assignee; more than one next step; any fact that does not change the judgement. Remove whatever fails the check, and never mention the check."
+
+No rigid wording template was added; the existing "tone and shape only" example (which already avoids naming an actor) is unchanged.
+
+### 45.4 Tests added/changed (`src/managedAgentConfig.test.ts` only)
+
+- **Changed (bounded):** the existing system-length ceiling `system.length < 5000` → `< 6500` (comment records the reason: ~1.6k characters of new final-answer rules; still bounded and not a Skill copy). Actual length 6333, so ~170 characters of headroom remain. No other existing assertion was weakened or removed.
+- **Added (6 tests, semantic/concept-level; no exact-response snapshot, no pinned Ukrainian answer):** the one message is user-facing content only (no second channel for coordinator metadata, no technical/coordinator note, no handoff/internal text or instructions to the coordinator, no postscript to anyone but Daniel, "do not send it at all"); evidence/discovery/search/tool mechanics and inspected-pool counts are kept out, with a needed scope limit allowed only as one plain clause inside the answer; no project-pool summary, per-list counts, totals or card arithmetic unless Daniel explicitly asks for counts/totals/inventory/breakdown; no unsupported executor/assignee/client/team/named-person recommendation, and an actor-free phrasing when ownership is unknown; exactly one practical next PM step, no second/third recommendation, no speculative workflow; a silent pre-send self-check that lists its questions and is never mentioned.
+
+### 45.5 Local pre-apply checks (before any live change)
+
+`npm run typecheck`: clean. `npm test`: **283 tests, 283 pass, 0 fail** (277 before this slice + 6 new). `git diff --check`: exit 0 (only the pre-existing LF→CRLF working-copy notices). `git status --short` at that point: only `managed-agents/project-health-specialist.md` and `src/managedAgentConfig.test.ts` modified.
+
+### 45.6 Specialist v3 pre-flight (zero inference)
+
+Live `agents.retrieve`, deep-equal (key-order-insensitive) to the §44 post-run snapshot, and all required values held: `version 3`; `updated_at 2026-09-20T07:42:24.311480Z`; `claude-sonnet-5`, `effort high`; `multiagent null`; Skill exactly `skill_01Treson5zdU1TgxXDaREwnY` / `skver_01JLTtMvUgfEqdcBBGj4WGVm`; MCP `trello` only; exactly `trelloSearch`, `trelloReadBoard`, `trelloReadList`, `trelloReadCard` enabled, 0 `trelloWrite*`; no Calendar in the configuration (the system prose says "no Calendar", which is prose, not configuration); `metadata {}`. `claude-lock.json` recorded `id agent_01KNiQDzzPjaMU6LLF4mU6uM`, `version "3"` (`hash ddc7edc16638cd0c892c036c6ffa3e82`, `remote_hash 4214f34010c3404644856a3b3881a5c0`), and an `ant apply --dry-run` of the **unmodified** file returned `unchanged` — the source, lockfile and live v3 agree. (One check in my pre-flight script reported a false FAIL because it searched the whole object including `system` for the word "calendar"; re-run on the configuration fields excluding `system` it passed. Script artifact, not drift.)
+
+### 45.7 Production v18 pre-flight (zero inference)
+
+Live production, deep-equal to the §44 post-run snapshot: `version 18`, `updated_at 2026-09-20T19:03:48.352354Z` (equals §43.6), `claude-haiku-4-5-20251001`, exactly the four ordinary Skills (`skill_01WS6JtY1GMu3rGZaKCVR9w1`, `skill_01G9DtQEzPYxgw78riFh8k99`, `skill_01PTmbvLHJj1HuUxvDKhpaiE`, `skill_015c8dtDnWyDfVLwS6NLS7r6`), `project-health` absent, `multiagent` = `{coordinator, [{agent_01KNiQDzzPjaMU6LLF4mU6uM, v3}]}`, system unchanged (§43 accepted v18), `mcp_servers` trello + google-calendar-calendarmcp, tools unchanged (`trelloWriteCard` enabled, other five writes disabled; Calendar `default_config.enabled:false`).
+
+### 45.8 Validation coordinator v5 pre-flight
+
+`agent_01GFCLFYq6uLRHG8vMCrAgeK`: `version 5`, `updated_at 2026-09-20T17:47:22.141060Z`, roster pins specialist v3, `archived_at null`; deep-equal to the §44 post-run snapshot.
+
+### 45.9 Specialist dry-run plan
+
+`ant apply --dry-run --verbose managed-agents/project-health-specialist.md` (CLI `ant version 1.34.0`, the same binary as §32.2/§37.6/§41 — reused from an earlier session's scratchpad; its zip SHA-256 `6f0d96db9e16e129120b0d9d284f0123ecaff2b5755022a45cff04fbd792d222` was re-verified against the release's `ant_1.34.0_checksums.txt`; nothing downloaded or installed; no `ant apply .`). The plan was exactly: `~ ./managed-agents/project-health-specialist.md update agent_01KNiQDzzPjaMU6LLF4mU6uM`, a single `~ system:` diff whose added text is precisely the §45.3 additions and no other field, `Resources ~ 1 to update`. No create, no second Agent, no production mutation. `claude-lock.json` was untouched by the dry run.
+
+### 45.10 Specialist v3 → v4 apply
+
+`ant apply --yes managed-agents/project-health-specialist.md` (no `--force`, one named file): exit 0, `Status updated`, `Resources ~ 1 updated`, `State written to ./claude-lock.json`. Result: `agent_01KNiQDzzPjaMU6LLF4mU6uM` **v3 → v4**, `updated_at 2026-09-20T07:42:24.311480Z → 2026-09-21T08:00:37.180815Z`. Version history now `[4, 3, 2, 1]`.
+
+### 45.11 Specialist v4 full read-back diff
+
+Full `agents.retrieve` compared field by field against the §45.6 v3 snapshot: the **only** changed top-level fields are `system`, `updated_at`, `version` (3 → 4). All of the following are deep-identical: `id`, `name`, `description`, `model` (`claude-sonnet-5`, `effort high`, `speed standard`), `metadata`, `skills` (same id and `skver_01JLTtMvUgfEqdcBBGj4WGVm`), `tools` (exactly four enabled Trello reads, 0 writes; built-in `read` only), `mcp_servers` (trello only), `multiagent null`, no Calendar in the configuration, `archived_at null`. The v4 `system` begins with the v3 text and equals the source body except for 2 characters of trailing whitespace that `ant apply` trims (same behavior as the earlier applies; not semantic).
+
+### 45.12 `claude-lock.json` v4 proof
+
+Written by `ant apply` (not hand-edited): the single entry `./managed-agents/project-health-specialist.md` now records `id agent_01KNiQDzzPjaMU6LLF4mU6uM`, **`version "4"`**, `hash b2b7608b44d4d8d6536e476f813ac9d9`, `remote_hash accb81e9fbb7d27d17990972e501114b`; origin/workspace unchanged; no extra entry. It is the only lockfile change.
+
+### 45.13 Production update request
+
+Single `agents.update` on `agent_01WGRHDBjQa3eMhoGJMmQ1dh`, issued only after the specialist v4 read-back passed and only after a fresh production retrieve re-confirmed v18 with no drift. Request body — keys exactly `version` and `multiagent`, nothing else:
+
+```json
+{
+  "version": 18,
+  "multiagent": {
+    "type": "coordinator",
+    "agents": [
+      { "type": "agent", "id": "agent_01KNiQDzzPjaMU6LLF4mU6uM", "version": 4 }
+    ]
+  }
+}
+```
+
+No `system`, `model`, `tools`, `mcp_servers`, `skills`, `name`, `description`, or `metadata` was sent (omitted fields are preserved per the endpoint's documented update semantics, §41.16.2/§43.2). No Advisor, no self entry, no additional agent.
+
+### 45.14 Production v18 → v19
+
+The update succeeded on the first call (no 409): `version 18 → 19`, `updated_at 2026-09-20T19:03:48.352354Z → 2026-09-21T08:01:32.367348Z`. Exactly one update call.
+
+### 45.15 Production v19 full read-back diff
+
+Full `agents.retrieve` compared against the full v18 snapshot: the only changed top-level fields are `multiagent`, `updated_at`, `version`. Deep-identical: `system` (byte-identical string), `model` (Haiku), `skills` (the same four ordinary Skills, `project-health` still absent), `tools`, `mcp_servers` (Trello unchanged; Calendar still attached with `default_config.enabled:false` and no enabled override), `name`, `description`, `metadata`. `multiagent` before → after: `{coordinator, [{agent_01KNiQDzzPjaMU6LLF4mU6uM, version 3}]}` → `{coordinator, [{agent_01KNiQDzzPjaMU6LLF4mU6uM, version 4}]}` — exactly one roster entry, specialist v4, no Advisor, no self.
+
+### 45.16 Validation coordinator intentionally unchanged
+
+Re-retrieved after both live changes: `agent_01GFCLFYq6uLRHG8vMCrAgeK` is still **v5**, `updated_at 2026-09-20T17:47:22.141060Z`, deep-equal to its pre-flight snapshot, roster still pins specialist **v3**, `archived_at null`. It was neither updated, repinned to v4, replaced by a v6, nor archived; it remains temporary historical validation infrastructure, to be archived only after the final production smoke passes. Specialist re-retrieved after the production update: still v4 (`updated_at 2026-09-21T08:00:37.180815Z`), deep-equal to its post-apply read-back.
+
+### 45.17 Zero-impact proof
+
+- **0 Sessions** created; no `sessions.create`, `sessions.events.*`, or any Session-scoped call.
+- **$0 inference** — the only calls were `agents.retrieve`, `agents.versions.list` (read), one `ant apply` (a specialist agent update, not a model call), and one `agents.update` on production.
+- **0 Trello calls**, **0 Calendar calls** (no MCP server contacted), **0 Memory writes**.
+- No Skill mutation or new Skill version; no production `system`/model/tool/MCP/Skill change; no new Agent; no runtime code change (`src/managedAgentConfig.test.ts` is a test); no Telegram adapter change; no router/middleware/custom loop; no Advisor; no issue close/comment; no commit, push, deploy or branch.
+
+### 45.18 Remaining gate
+
+**One final production smoke is the only remaining gate before Issue #28 can close**: a fresh Session created from the production Agent that must resolve `session.agent.version === 19` with its roster pinning specialist v4, then graded against the same 13-point bar as §44 (including exact final relay). This slice does not run it and does not pre-judge it: specialist v4 is unproven live, and the coordinator's delegated-task expansion (§44.11) is unchanged and may still recur. The validation coordinator stays unarchived until that smoke passes. Issue #28 remains open; #18 (same-turn fresh-read platform limitation) is unchanged.
