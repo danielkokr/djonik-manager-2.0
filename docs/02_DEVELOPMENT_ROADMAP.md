@@ -30,11 +30,19 @@ Verified outcome:
 - focused tests passed 175/175, full suite passed 411/411, typecheck and `git diff --check` passed;
 - live Trello result-shape validation remains deferred to a separately authorized bounded smoke.
 
-### NOW — Reliability: correlate turn completion and preserve specialist results safely (#32)
+### DONE — Reliability: correlate turn completion and preserve specialist results safely (#32)
 
-Canonical bounded issue: [#32](https://github.com/danielkokr/djonik-manager-2.0/issues/32).
+Accepted 2026-09-21 at commit `82f50cdd8d51fc389e11ab3b71f62b7535297a80`.
 
-First pass is source-only. Correlate each visible user turn with authoritative completion state and specialist-child provenance so budget pauses, stale/late results, reused threads or ambiguous specialist outcomes cannot become false successful replies. Preserve the accepted Project Health specialist authority while keeping #31 mutation verification, #23 due safeguards, FIFO and telemetry intact. No paid inference, production mutation or live Trello write in this pass.
+Verified outcome:
+- only authoritative `end_turn` completes a visible turn; budget/retry/action/incomplete stops cannot surface partial text as success;
+- late specialist results cannot replace a later ordinary turn, and reused child threads require current-turn engagement;
+- canonical Project Health specialist identity remains stable with unrelated roster entries;
+- verified Project Health output remains authoritative byte-for-byte;
+- ambiguous, missing, duplicate, malformed or incomplete specialist outcomes fail visibly rather than silently falling back to coordinator Project Health reasoning;
+- #31 mutation verification, #23 due safeguards, FIFO and telemetry remain intact;
+- focused tests passed 230/230, full suite passed 459/459, typecheck and `git diff --check` passed;
+- live `user.message` echo/anchor behavior and mixed-intent production behavior remain for later explicitly authorized smoke validation.
 
 | Order | Bounded issue | Start / acceptance condition |
 |---|---|---|
@@ -382,9 +390,9 @@ Measured live validation changed the implementation direction:
 - **Wave C1 implementation, live acceptance and administrative closeout are COMPLETE.** #28 is closed as completed; capability order in `docs/03` is not execution order;
 - the accepted #18 same-turn fresh-read platform limitation is unchanged and remains an accepted platform limitation, not something this cutover fixes.
 
-### QUEUED — Wave C2: Reliable current-state work review and capability ownership validation (#29)
+### NOW — Wave C2: Reliable current-state work review and capability ownership validation (#29)
 
-Queued bounded issue: #29 (open), after #31/#32. `docs/03_TARGET_CAPABILITIES.md` §8 — Work history and reviews.
+Canonical bounded issue: #29 (open). `docs/03_TARGET_CAPABILITIES.md` §8 — Work history and reviews.
 
 Bounded goal: **support honest evidence-based work reviews from the history/current-state evidence the existing Trello surface actually exposes, without inventing chronology or adding history infrastructure prematurely.**
 
