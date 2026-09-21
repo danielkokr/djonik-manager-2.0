@@ -49,7 +49,11 @@ Before substantial work, read:
 3. `docs/02_DEVELOPMENT_ROADMAP.md`
 4. `docs/03_TARGET_CAPABILITIES.md`
 5. `AGENTS.md`
-6. the GitHub issue that roadmap marks as canonical NOW and its latest comments.
+6. `docs/17_DJONIK_V1_ARCHITECTURE_AUDIT.md` (accepted decisions, evidence and handoff)
+7. `docs/04_MANAGED_AGENT_TOKEN_COST_AUDIT.md` §27 (current validation policy)
+8. the GitHub issue that roadmap marks as canonical NOW and its latest comments.
+
+Distinguish proposed fixes, historical acceptance, current recorded Agent configuration and the actual serving Session. A fresh checkout with an older roadmap must obtain the governance documentation change before implementing new issues; issue numbering is not a substitute for canonical scope.
 
 Canonical NOW comes only from `docs/02_DEVELOPMENT_ROADMAP.md`. Do not infer it from issue numbers, dates, another chat or memory.
 

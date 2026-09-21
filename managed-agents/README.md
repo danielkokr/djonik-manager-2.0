@@ -4,6 +4,12 @@ Reviewed, repo-side **source** for Managed Agents that are separate from the pri
 
 Each file uses the official declarative `ant apply` format: YAML frontmatter is the agent configuration, the body is the `system` prompt.
 
+## Audit / release qualification — 2026-09-21
+
+The v21/v4 statements below describe recorded remote resource state from the rollback report, not fresh proof of the active Telegram Session. #33 will pin accepted coordinator Skill versions and attest application revision, resolved serving Session and specialist pins. No definition, lock or remote resource is changed by the governance update.
+
+#29's future capability-ownership experiment is isolated; an extension of the existing PH role is only a candidate. Keep the accepted definition unchanged until candidate acceptance and an authorized rollout. New reliability evidence in [docs/17](../docs/17_DJONIK_V1_ARCHITECTURE_AUDIT.md) requires #31/#32/#33 follow-up even though historical #28 acceptance remains valid for its tested scope.
+
 ## Conventions
 
 - One file per agent. Keep it minimal, and do not duplicate Skill contents in the system prompt.

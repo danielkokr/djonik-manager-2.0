@@ -22,6 +22,14 @@ Djonik should:
 - follow up on important unresolved outcomes;
 - eventually operate proactively when useful.
 
+## v1 release boundary — accepted 2026-09-21
+
+The first release is a useful conversational PM for Daniel's design work: natural text and rich intake, bounded verified task operations, realistic daily/weekly priorities, current project health/review, accepted commitments, and conversational waiting/follow-up. Daniel initiates the conversation in v1. The bot must preserve all parts of mixed requests, admit unavailable evidence, and distinguish an interrupted action from verified success.
+
+This is a release scope, not a claim that every capability is already reliable. [The architecture audit](17_DJONIK_V1_ARCHITECTURE_AUDIT.md) records uncovered reliability gaps and the accepted delivery decision; [the roadmap](02_DEVELOPMENT_ROADMAP.md) alone chooses current work. Release acceptance is approximately one real working week / 20–30 substantive natural turns with adequate scenario coverage, no known critical failures, and a Product Owner accept/hold decision (#35). It is not a statistical reliability guarantee.
+
+Scheduled proactive delivery, Calendar and historical work analytics follow v1 only when separately justified. Current-state review cannot prove completion or movement within a past period without historical evidence. Memory can retain an accepted plan; fresh connected tools own current facts. Due dates are not automatically hard client commitments, and waiting is not automatically blocked.
+
 ## 2. Core PM control loop
 
 `OBSERVE → ASSESS → PLAN → ACT → VERIFY → REMEMBER → FOLLOW UP → MONITOR`

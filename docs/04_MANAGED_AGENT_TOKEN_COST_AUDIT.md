@@ -723,6 +723,22 @@ Production Agent v12 remained unchanged throughout this gate; no Agent update, S
 
 ## 27. Development / validation spend guardrail (Issue #21)
 
+### Current policy amendment — 2026-09-21, architecture audit #30
+
+This amendment takes precedence over conflicting defaults and stop rules below, which remain as historical rationale. No paid run is authorized by this document or the creation of an issue. See [docs/17](17_DJONIK_V1_ARCHITECTURE_AUDIT.md) and revised #29. The former $0.50/five-session defaults and #29's $0.30/two-session starting preset are not reusable spend authorization or evidence that a behavioral gate fits those amounts.
+
+Before creating a validation Session or sending paid prompts, the bounded plan must declare an authorized total list-cost ceiling, maximum Sessions and turns, frozen candidate/control configurations, scenario coverage, expected evidence, mutation permissions (normally zero), and stop conditions. Separate source/config checks, isolated behavioral experiments and production promotion; a production attach is not the setup step for an unaccepted experiment.
+
+Admission of each additional turn requires remaining budget sufficient for the worst observed comparable **full turn**, plus a declared conservative reserve for in-flight model requests across active threads. Use a justified conservative estimate if no comparable observation exists; do not substitute a cheap coordinator-only turn for a delegated turn. In #29, $0.24 remaining could not cover the prior $0.31 delegated turn even before reserve. If the evidence cannot justify admission, stop as inconclusive and obtain authorization for a revised budget. Do not silently increase a cap or resume a budget-paused turn.
+
+Native `max_list_cost` is a backstop evaluated between requests, not an exact spend ceiling; already-running requests can overshoot. `budget_reached`, `requires_action` and an incomplete stream are not successful `end_turn`. Report partial results honestly. Read authoritative cumulative Session usage at safe measurement points; do not infer exact total spend by summing rounded thread displays. Record per-Session totals, stop reasons, source, deliberate test spend and any overshoot separately from natural production usage. See [official budgets](https://platform.claude.com/docs/en/managed-agents/budgets).
+
+For nuanced PM capability acceptance (#29), plan one fail-fast diagnostic first. If the frozen candidate proceeds, cover five independent varied samples in total plus one multi-turn case; the diagnostic may count if it used that same candidate. Distribute the required fixture dimensions across the samples. Stop immediately on critical factual, target, mutation, chronology or cross-turn failure, even if budget remains. Source regex tests only verify instructions exist. A paid sample gate is bounded evidence, not a guarantee of universal reliability; no requirement to repeat identical failed experiments or exhaust the budget. If the planned coverage cannot be completed within authorization, record `inconclusive — additional spend requires Product Owner approval`.
+
+Production rollout follows candidate acceptance and its separately authorized change/smoke scope. Prefer reusing sufficient earlier evidence; validate the actual serving Telegram Session and accepted version tuple, not merely a fresh diagnostic Session. Natural working-week observation for #35 does not require artificial traffic; any deliberately generated extra probes fall under this policy.
+
+### Historical policy and rationale (superseded where inconsistent above)
+
 > **Process/documentation only.** This section adds no runtime enforcement code, billing API, database, dashboard, scheduled usage polling, or Agent/Skill/Memory/MCP/session-lifecycle change. It generalizes the ad hoc ceilings already used informally in §16 ($0.18 bounded-test spend), §21 ($0.17), §23 ($0.12), §24 ($0.25), and §26 (an explicit "$0.80 stop ceiling," reached at $0.40) into one reusable rule for future work.
 
 ### Scope

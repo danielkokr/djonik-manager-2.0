@@ -2,6 +2,8 @@
 
 > This is a product capability map, **not execution order**. Current execution order lives only in `02_DEVELOPMENT_ROADMAP.md`.
 
+The map includes long-term capabilities and is not a v1 completion checklist. The current [v1 release boundary](00_DJONIK_PRODUCT_CONTRACT.md#v1-release-boundary--accepted-2026-09-21) and [audit decisions](17_DJONIK_V1_ARCHITECTURE_AUDIT.md) prioritize conversational usefulness and reliability. Current-state review is in v1; scheduled proactive delivery, Calendar and historical analytics are deferred. Accepted commitments already exist (#13); #34 extends their conversational lifecycle.
+
 ## 1. Conversational PM core
 
 Djonik should:

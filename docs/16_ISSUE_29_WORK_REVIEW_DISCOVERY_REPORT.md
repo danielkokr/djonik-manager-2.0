@@ -1,5 +1,8 @@
 # Звіт по Issue #29 — Wave C2: дискавері доказової бази для work review / retrospective
 
+> **2026-09-21 post-audit qualification:** Sections 26–27 preserve the failed attach and successful resource rollback as historical evidence. The former §27.16 hardening-only next step, §27.17 NOW assertion and §27.15 blanket claims about relay coverage are superseded by [docs/17](17_DJONIK_V1_ARCHITECTURE_AUDIT.md), the revised #29 and [canonical roadmap](02_DEVELOPMENT_ROADMAP.md). The work-review Skill already explicitly prohibited chronology/time conversion; regex source checks do not prove behavior. Offline fixtures expose broader completion/relay risks beyond the single budget-stop sample (#32). Agent v21 equivalence does not attest an already-serving Telegram Session (#33). Implement #31/#32 first, then simplified current-state review and isolated ownership validation; no production reattach merely to run an experiment. No runtime/Skill change is made by this addendum.
+
+
 > **Обсяг:** лише перший bounded-слайс Issue #29 — (A) синхронізація governance (#28 → #29) і (B) **дискавері**: що поточна поверхня Djonik + Trello реально здатна довести про історію роботи. Жодного paid Managed Session, жодного model inference, жодної мутації Trello/Calendar/Memory/Agent/Skill, жодного runtime-коду, жодного commit/push/deploy.
 
 ## 0. Короткий підсумок (TL;DR)
