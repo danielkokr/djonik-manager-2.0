@@ -631,3 +631,249 @@ test("studio-intake Skill does not contradict the new task-management project-id
   assert.match(content, /does not own Trello mutation, verification, or target\/project resolution/i);
   assert.doesNotMatch(content, /## Project identity/i);
 });
+
+// Issue #29 (Wave C2, slice 2): source-only work-review Skill. These are semantic
+// checks on the Skill's substance, not exact-answer snapshots or fixed Ukrainian
+// phrasing. Discovery (docs/16) established that Trello exposes the current state
+// but no transition history, so the Skill must stay honest about that boundary.
+
+function workReviewSection(heading: string): string {
+  const content = readSkill("work-review");
+  const start = content.indexOf(`## ${heading}`);
+  assert.ok(start >= 0, `expected a '${heading}' section in work-review`);
+  const nextHeading = content.indexOf("\n## ", start + 1);
+  return nextHeading >= 0 ? content.slice(start, nextHeading) : content.slice(start);
+}
+
+test("work-review Skill exists with valid frontmatter", () => {
+  const content = readSkill("work-review");
+  assert.match(content, /^---\nname: work-review\ndescription: .+\n---\n/);
+});
+
+test("work-review frontmatter covers current-state review and history-limited retrospective questions without claiming health, planning, or mutation", () => {
+  const frontmatter = readSkill("work-review").split("---")[1] ?? "";
+  for (const phrase of [
+    "Що зараз із тим, що ми планували",
+    "Дай короткий review по Extract",
+    "Що я реально завершив цього тижня",
+    "Коли ця задача перейшла в Done",
+  ]) {
+    assert.match(frontmatter, new RegExp(phrase, "i"));
+  }
+  assert.match(frontmatter, /Read-only/i);
+  assert.doesNotMatch(frontmatter, /create, update, move, or complete|Що робити сьогодні|Що робити цього тижня|Дай health check|Чи є ризики/i);
+});
+
+test("work-review requires fresh direct Trello evidence for exact current-state claims and does not trust search alone", () => {
+  const section = workReviewSection("Gather fresh evidence first");
+  assert.match(section, /in this turn/i);
+  assert.match(section, /fresh direct read/i);
+  for (const fact of ["Done membership", "closed/archived state", "`due`", "`dueComplete`"]) {
+    assert.ok(section.includes(fact), `expected the fresh-read rule to name ${fact}`);
+  }
+  assert.match(section, /trelloSearch.*discover/i);
+  assert.match(section, /not authoritative field evidence/i);
+});
+
+test("work-review ranks fresh Trello above Memory, prior conversation, and inference, and does not pretend to fix #18", () => {
+  const section = workReviewSection("Gather fresh evidence first");
+  assert.match(section, /outranks Memory, earlier conversation, and your own inference/i);
+  assert.match(section, /cannot deterministically force this fresh read/i);
+  assert.match(section, /does not add middleware, a phrase router, or a custom tool loop/i);
+});
+
+test("work-review uses only fields a fresh result actually returned", () => {
+  const section = workReviewSection("Gather fresh evidence first");
+  assert.match(section, /only values a fresh result actually returned/i);
+  assert.match(section, /Do not assume labels, members, checklist state, start dates/i);
+});
+
+test("work-review states that Trello exposes present state but no transition history, and never fabricates chronology", () => {
+  const section = workReviewSection("What Trello can and cannot prove");
+  assert.match(section, /present state but not the transition history/i);
+  assert.match(section, /Do not reconstruct any of it from present-state data/i);
+  assert.match(section, /never fabricate chronology/i);
+});
+
+test("work-review forbids inferring a completion date or period from current state", () => {
+  const section = workReviewSection("What Trello can and cannot prove");
+  assert.match(section, /completed this week, today, yesterday, or in any period/i);
+  assert.match(section, /who worked on a card during a period/i);
+  assert.match(section, /work progressed during a period/i);
+  assert.match(section, /repeatedly slipped/i);
+});
+
+test("work-review forbids inferring list movement or reopening from current state", () => {
+  const section = workReviewSection("What Trello can and cannot prove");
+  assert.match(section, /moved from one list to another, or when it moved/i);
+  assert.match(section, /reopened, or when/i);
+  const done = workReviewSection("What Done, closed, and dueComplete mean");
+  assert.match(done, /does not tell you whether it was ever Done or was reopened/i);
+});
+
+test("work-review answers a history question with a short limitation plus the useful current-state evidence, not a limitations essay", () => {
+  const section = workReviewSection("What Trello can and cannot prove");
+  assert.match(section, /one short sentence/i);
+  assert.match(section, /still give the useful current-state evidence/i);
+  assert.match(section, /Do not turn the answer into a limitations essay/i);
+  assert.match(section, /only where the question actually depends on history/i);
+});
+
+test("work-review keeps lastActivityAt narrow: only some recorded activity at a raw timestamp", () => {
+  const section = workReviewSection("`lastActivityAt`");
+  assert.match(section, /only that Trello recorded some activity on that card at that raw timestamp/i);
+  assert.match(section, /does not document the field/i);
+  assert.match(section, /moving, reordering, or creating a card can set it without any work/i);
+  assert.match(section, /weak discovery hint/i);
+});
+
+test("work-review does not let lastActivityAt prove completion, movement, reopening, progress, staleness, or period membership", () => {
+  const section = workReviewSection("`lastActivityAt`");
+  assert.match(
+    section,
+    /not proof of completion, list movement, reopening, work progress, active work, a specific actor, staleness/i,
+  );
+  assert.match(section, /anything happened inside a requested time window/i);
+  assert.match(section, /Do not use it to decide that a card belongs to, or is missing from, a period/i);
+});
+
+test("work-review derives no weekday, local date, relative wording, or this-week membership from lastActivityAt", () => {
+  const section = workReviewSection("`lastActivityAt`");
+  assert.match(section, /never derive a weekday, a local date or time/i);
+  assert.match(section, /«N днів тому», «сьогодні», «вчора», «завтра»/);
+  assert.match(section, /«this week» membership/i);
+  assert.match(section, /Quote it only as «Trello recorded activity at <ISO>»/);
+  assert.match(section, /later deterministic date boundary could own such calculations; until one exists, do not make them/i);
+});
+
+test("work-review applies the same date restraint to due and leaves post-write due wording to task-management", () => {
+  const section = workReviewSection("`lastActivityAt`");
+  assert.match(section, /quote the recorded ISO value without a self-computed weekday, local time, or countdown/i);
+  assert.match(section, /Exact due-date wording after a write stays with task-management/i);
+});
+
+test("work-review defines Done, closed, and dueComplete precisely without inventing a completion event", () => {
+  const section = workReviewSection("What Done, closed, and dueComplete mean");
+  assert.match(section, /list named .Done. is workflow evidence that Daniel's board currently treats it as Done/i);
+  assert.match(section, /Do not silently turn it into «Daniel completed it on DATE»/);
+  assert.match(section, /`closed` means the card is archived or closed now\. It does not mean the work was completed/i);
+  assert.match(section, /`dueComplete` is a current boolean with no completion timestamp/i);
+  assert.match(section, /no universal provider-level completion event/i);
+  assert.match(section, /evidence is mixed/i);
+});
+
+test("work-review gives Memory only the plan/context side and never lets it prove an outcome", () => {
+  const section = workReviewSection("Accepted plan versus current actual");
+  assert.match(section, /may supply only the PLAN or context side/i);
+  assert.match(section, /A suggestion that was only discussed is not a plan/i);
+  assert.match(section, /Memory never proves that work was completed, moved, or reopened/i);
+  assert.match(section, /never overrides a fresh read/i);
+});
+
+test("work-review gives fresh Trello only the current actual side and allows current-state plan framing", () => {
+  const section = workReviewSection("Accepted plan versus current actual");
+  assert.match(section, /Fresh Trello supplies only the current ACTUAL side/i);
+  assert.match(section, /У плані було A, B, C; зараз A у Done, B в In progress, C у Backlog/);
+});
+
+test("work-review forbids period-completion, slip, reopen, and on-time/late claims in plan-vs-actual without history", () => {
+  const section = workReviewSection("Accepted plan versus current actual");
+  assert.match(section, /Without history, do not say/i);
+  assert.match(section, /«A виконано цього тижня», «B зірвали вчора», «C повернули назад»/);
+  assert.match(section, /on time or late/i);
+  assert.match(section, /Do not compute lateness or a countdown/i);
+});
+
+test("work-review does not treat a Trello list as the accepted plan and reports a missing plan honestly", () => {
+  const section = workReviewSection("Accepted plan versus current actual");
+  assert.match(section, /Do not treat a Trello list such as .This week. as the accepted plan/i);
+  assert.match(section, /If no accepted plan is available, say so/i);
+});
+
+test("work-review clarifies rather than guesses when a plan item cannot be matched to one card", () => {
+  const section = workReviewSection("Accepted plan versus current actual");
+  assert.match(section, /ambiguous which Trello card a remembered plan item refers to/i);
+  assert.match(section, /clarify with one short question/i);
+  assert.match(section, /Do not guess a match/i);
+});
+
+test("work-review keeps the review isolated to the requested project through label scoping, with no hard-coded names", () => {
+  const section = workReviewSection("Project scope");
+  assert.match(section, /scoped to the project Daniel names/i);
+  assert.match(section, /do not let urgent-looking cards from another project/i);
+  assert.match(section, /Cards without that label do not drive the review/i);
+  assert.match(section, /ask one short clarification instead of guessing/i);
+  assert.match(section, /do not hard-code project or board names/i);
+  assert.match(section, /keep each project's facts separate/i);
+  assert.doesNotMatch(section, /Extract|Djonik|Seqthera|Limen|Cossack|A1/);
+});
+
+test("work-review is read-only and has no Trello write tool or Calendar dependency", () => {
+  const content = readSkill("work-review");
+  const section = workReviewSection("Read-only");
+  assert.match(section, /zero Trello mutations/i);
+  assert.match(section, /no Calendar dependency/i);
+  assert.match(section, /Never change a card just because a review recommends an action/i);
+  assert.doesNotMatch(content, /trelloWrite[A-Z]/);
+});
+
+test("work-review hands explicit action requests to task-management without duplicating write logic", () => {
+  const section = workReviewSection("Read-only");
+  assert.match(section, /task-management Skill/i);
+  assert.match(section, /target resolution/i);
+  assert.match(section, /separate verification/i);
+  assert.match(section, /Do not duplicate that logic here/i);
+  const scope = workReviewSection("Scope and handoffs");
+  assert.match(scope, /task-management Skill/i);
+  assert.match(scope, /same-card verification/i);
+});
+
+test("work-review leaves health interpretation and planning to their owning capabilities", () => {
+  const scope = workReviewSection("Scope and handoffs");
+  assert.match(scope, /Project Health capability, which owns that judgement/i);
+  assert.match(scope, /Do not re-derive or duplicate it here/i);
+  assert.match(scope, /do not issue a health verdict/i);
+  assert.match(scope, /daily-planning or weekly-planning Skill/i);
+  const form = workReviewSection("Form the review");
+  assert.match(form, /interpreting health belongs to the Project Health path/i);
+});
+
+test("work-review prefers a concise evidence-first review over an inventory", () => {
+  const form = workReviewSection("Form the review");
+  assert.match(form, /Lead with the current PM read/i);
+  assert.match(form, /only the strongest evidence/i);
+  assert.match(form, /one useful retrospective insight or next PM step/i);
+  assert.match(form, /Do not enumerate every card/i);
+  assert.match(form, /do not open with an inventory/i);
+  assert.match(form, /List everything only when Daniel explicitly asks/i);
+  const style = workReviewSection("Style");
+  assert.match(style, /conclusion first/i);
+  assert.match(style, /not a template/i);
+});
+
+test("work-review gives no score or productivity verdict and offers no unseen causes", () => {
+  const form = workReviewSection("Form the review");
+  assert.match(form, /do not give a score, percentage, or productivity verdict/i);
+  assert.match(form, /Do not offer causes you cannot see/i);
+});
+
+test("work-review does not store transient retrospective conclusions in Memory", () => {
+  const section = workReviewSection("Memory boundary");
+  assert.match(section, /Do not automatically write transient retrospective conclusions to durable Memory/i);
+  assert.match(section, /Recompute the review from fresh Trello evidence each time/i);
+});
+
+test("work-review adds no numeric age threshold", () => {
+  assert.doesNotMatch(
+    readSkill("work-review"),
+    /(older than|more than|over|>=?|≥)\s*\d+\s*(days?|дн|дні|днів|weeks?|тижн)/i,
+  );
+});
+
+test("existing Skills stay unchanged in substance and do not depend on work-review", () => {
+  for (const name of ["daily-planning", "weekly-planning", "task-management", "studio-intake", "project-health"]) {
+    assert.doesNotMatch(readSkill(name), /work-review/, `${name} must not depend on work-review`);
+  }
+  // Project Health keeps owning its health states; work-review does not restate them.
+  assert.doesNotMatch(readSkill("work-review"), /Backlog is a queue|not automatically Blocked|Blocked may be justified/i);
+});

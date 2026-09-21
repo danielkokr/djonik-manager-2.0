@@ -267,3 +267,120 @@ Read-only `agents.retrieve` (без Session, без inference), 2026-09-21:
  M docs/02_DEVELOPMENT_ROADMAP.md
 ?? docs/16_ISSUE_29_WORK_REVIEW_DISCOVERY_REPORT.md
 ```
+
+## 25. Slice 2 — source-only `work-review` Skill
+
+> **Обсяг:** лише source-only Skill і детерміновані source-тести. 0 paid Sessions, 0 inference, 0 викликів Trello/Calendar/Memory, жодної мутації Agent, жодного sync/apply Skill. §1–§24 вище — звіт дискавері (закомічений як `cdb132e`) — не змінювались.
+
+**Pre-flight:** `HEAD` = `origin/main` = `cdb132e1cf08b9f8eeb825675db9dc766c5ab184` («docs: record work review evidence discovery»); робоче дерево чисте; #29 OPEN без коментарів; canonical NOW у `docs/02` (рядок 347) = Wave C2 (#29). `docs/02` у цьому слайсі **не змінювався**.
+
+### 25.1 Прийняте рішення дискавері
+
+**Outcome B:** поточна поверхня підтримує current-state retrospective, але не справжню історію (немає Activity & History у Trello MCP; `lastActivityAt` — не доказ завершення/руху/reopen/прогресу; дата завершення, історія переміщень і reopen недоступні; plan-vs-actual — частково: Memory дає plan-сторону, Trello — лише поточний actual). Реалізовано свідомо обмежений source-only Skill.
+
+### 25.2 Архітектура Skill
+
+Один Skill на рівні Claude-native primitives (Skill, а не код): без runtime-змін, без нового specialist, без БД/snapshot/event store/webhook/scheduler/router. Skill описує *як працювати*, а не змінні факти проєктів (`docs/01` §7). Він не створює конкуруючого Djonik-ідентитету і не дублює Project Health.
+
+### 25.3 Точний source path
+
+`.claude/skills/work-review/SKILL.md` (~11.5 KB, 11 секцій; для порівняння `project-health` ~10.8 KB). Frontmatter: `name: work-review`; `description` покриває (а) current-state review-запити («Що зараз із тим, що ми планували…», «Дай короткий review по Extract», …) і (б) history-limited ретроспективні запити («Що я реально завершив цього тижня?», «Коли ця задача перейшла в Done?», …), з явним «Read-only; не health-оцінка, не planning, не мутація».
+
+Секції: Scope and handoffs · Gather fresh evidence first · What Trello can and cannot prove · `lastActivityAt` · What Done, closed, and dueComplete mean · Accepted plan versus current actual · Project scope · Form the review · Read-only · Memory boundary · Style.
+
+### 25.4 Правила current-state evidence
+
+- Кожне точне current-state твердження (list/status, Done membership, closed/archived, `due`, `dueComplete`) вимагає **свіжого direct read у цьому ході**; `trelloSearch` — лише discovery і не авторитетний для полів (відсутній `due` у search нічого не доводить).
+- Fresh Trello outranks Memory, попередню розмову та inference; використовуються лише значення, які свіжий результат **реально** повернув (без припущень про labels/members/чеклісти/дати старту).
+- Чесно зафіксовано #18: Skill вимагає fresh read, але не додає middleware/router/custom loop; відповідь із точними claims без свіжих доказів — неприйнятна.
+- Для питань про архівне — читати так, щоб `closed`-картки були видимі (типовий список показує лише open) — загальна вказівка без прив'язки до конкретного параметра.
+
+### 25.5 Правила історичного обмеження (hard rule)
+
+З одного лише поточного стану **ніколи** не стверджувати: завершено цього тижня/сьогодні/вчора/у період; переміщено A→B чи коли; reopen чи коли; «повторно зривалось»; «прогресувало в період» чи «проєкт забрав увагу»; хто працював над карткою в період. На такий запит: (1) одне коротке речення, що Trello показує поточний стан, але не історію переходів, потрібну для доказу; (2) все одно дати корисні поточні докази; (3) без вигаданої хронології. Не писати «есе про обмеження» — застереження лише там, де питання справді залежить від історії. Додано: покладатися на те, що свіжий результат реально містить, а не на припущену можливість.
+
+### 25.6 Контракт `lastActivityAt`
+
+Вузько: «Trello зафіксував якусь активність на картці в цей raw-момент». Допускається лише як слабка підказка, які картки прочитати уважніше; **не** доказ завершення, переміщення, reopen, прогресу, «активної» роботи, конкретного виконавця, staleness чи належності до періоду (заборонено рішення «картка входить/не входить у період»). Цитувати лише як «Trello recorded activity at <ISO>»; не виводити weekday, локальну дату/час, «N днів тому», сьогодні/вчора/завтра, «this week» membership — доки майбутня детермінована date-boundary явно не візьме ці обчислення. **Розширення поза буквою завдання (свідоме, мале):** та сама стриманість застосована до `due` (цитувати ISO як записано, без самостійно обчислених weekday/локального часу/countdown; точне формулювання дедлайну після запису лишається за `task-management`), бо модельна арифметика дат уже помилялась на верифікованих даних (#28).
+
+### 25.7 Семантика Done / closed / dueComplete
+
+- Картка у списку `Done` = workflow-свідчення, що дошка Daniel зараз трактує її як Done → «зараз у Done», **не** «Daniel завершив її DATE».
+- `closed` = зараз архівована/закрита, не обов'язково завершена.
+- `dueComplete` = поточний boolean без часової мітки завершення.
+- Універсальної провайдерної події завершення немає; відсутність у Done зараз не каже, чи картка коли-небудь була Done або повернута.
+- Якщо сигнали суперечать — сказати, що докази змішані, а не «узгоджувати» здогадом.
+
+### 25.8 Контракт plan-vs-actual
+
+Memory (або явно прийнятий у цій розмові план) дає **лише** plan/context-сторону; свіжий Trello — **лише** поточний actual. Дозволено: «У плані було A, B, C; зараз A у Done, B в In progress, C у Backlog.» Заборонено без історії: «A виконано цього тижня», «B зірвали вчора», «C повернули назад», «вчасно/із запізненням», обчислення lateness/countdown. Обговорена, але не прийнята пропозиція — не план; Trello-список на кшталт «This week» — не прийнятий план, якщо Daniel так не сказав; за відсутності прийнятого плану — сказати про це і дати current-state review. Неоднозначне зіставлення пункту плану з карткою → одне коротке уточнення або назвати непіддані зіставленню пункти; не вгадувати. Memory ніколи не доводить завершення/рух/reopen.
+
+### 25.9 Memory boundary
+
+Транзієнтні ретроспективні висновки («проєкт відставав», «Daniel був перевантажений», «забрав найбільше уваги», «тиждень (не)продуктивний») автоматично в durable Memory **не** пишуться; review перераховується зі свіжого Trello щоразу. Стабільні прийняті уроки/рішення — під наявною Memory policy.
+
+### 25.10 Mutation boundary
+
+Read-only: нуль Trello-мутацій, без залежності від Calendar; review-рекомендація ніколи не міняє картку. Явне прохання діяти → `task-management` (mutation intent, target resolution, bounded write, окрема verification); логіка не дублюється. У Skill немає жодної назви `trelloWrite*`.
+
+### 25.11 Project Health boundary
+
+Skill **не** замінює і **не** дублює прийнятий Project Health: поточну health/risk/waiting/blocking-інтерпретацію веде існуюча Project Health-можливість; для змішаного запиту тут відповідається частина про outcomes, health-вердикт не видається. Blocker називається лише якщо власний доказ картки називає конкретний; інтерпретація health — за Project Health. Daily/weekly-плани — за `daily-planning`/`weekly-planning`. Не змінено: `project-health` Skill, specialist v4, детермінований PH relay finalizer, `task-management`, planning Skills, `studio-intake`, Telegram adapter, due-date safeguard, write verification, `claude-lock.json`, `managed-agents/`.
+
+### 25.12 Додані тести
+
+`src/skills.test.ts`: **+28 source-тестів** (семантичні regex-перевірки суті, без exact-answer snapshot'ів і без жорсткої україномовної фрази), що покриває всі 16 обов'язкових пунктів: (1) fresh Trello для точних current-state claims; (2) без вигаданої історії; (3) без виведення дати завершення; (4) без виведення руху/reopen; (5) вузька семантика `lastActivityAt`; (6) `lastActivityAt` ≠ прогрес/staleness/завершення; (7) без relative/weekday/date-window із `lastActivityAt`; (8) Memory = лише plan/context; (9) Trello = поточний actual; (10) неоднозначне зіставлення → уточнення; (11) ізоляція проєкту; (12) read-only; (13) явна дія → `task-management`; (14) Project Health ownership не дублюється; (15) стисло й evidence-first; (16) без productivity-скорингу. Додатково: валідний frontmatter і покриття trigger-фраз без претензії на health/planning/mutation; відсутність числових вікових порогів; відсутність `trelloWrite*`; чесність щодо #18; Done/closed/`dueComplete`; відсутність гарного «This week»-як-плану; збереження Memory-boundary; **регресійний тест ізоляції** — жоден з існуючих Skills (`daily-planning`, `weekly-planning`, `task-management`, `studio-intake`, `project-health`) не посилається на `work-review`, а сам `work-review` не переповторює health-стани Project Health. Усі існуючі тести збережено. Валідність тестів перевірено: після видалення ключового правила з копії Skill відповідні regex перестають співпадати.
+
+### 25.13 Files changed
+
+- `?? .claude/skills/work-review/SKILL.md`
+- `M src/skills.test.ts` (+246 рядків)
+- `M docs/16_ISSUE_29_WORK_REVIEW_DISCOVERY_REPORT.md` (лише додано цей §25)
+
+Без змін: `docs/02`, runtime-код, Agent-конфіг, `claude-lock.json`, `managed-agents/`, інші Skills.
+
+### 25.14 Checks
+
+| Перевірка | Результат |
+|---|---|
+| `npm run typecheck` | пройшло, без помилок |
+| `npm test` | **330 tests, 330 pass, 0 fail, 0 cancelled, 0 skipped** (302 baseline + 28 нових) |
+| `git diff --check` | чисто, exit 0 |
+| `git status --short` | див. §25.18 |
+
+### 25.15 Limitations
+
+1. Це **лише source**: Skill не завантажений у Claude-workspace і не приєднаний до production Agent, тому на live-поведінку Djonik **не впливає**. Тести доводять наявність правил у тексті, а не те, що модель їх виконує.
+2. Виконання Haiku-координатором **не виміряне**. Досвід #28: навіть спрощені Skill-настанови Haiku виконував нестабільно (відхилення в точності, relative-датах, `lastActivityAt`-як-прогрес). Ризик, що «чесна відповідь про обмеження» дрейфує, лишається невимірним до live-acceptance.
+3. **Маршрутизація:** межа «review» vs «health» (наприклад «Що зараз по Extract?» vs «Дай review по Extract») семантична; ризик неправильного вибору Skill/шляху між `work-review`, `task-management` і Project Health виміряється лише live.
+4. Спостережні прогалини дискавері (§22) лишаються: повні поля `trelloReadCard get`, вихід `trelloReadChecklist`/`trelloReadList` — тому Skill формулює їх умовно («лише якщо свіжий результат їх віддає»).
+5. Календарна арифметика «цього тижня» навмисно **не** делегована моделі й не реалізована детерміновано; питання «за період» отримують лише чесне обмеження + поточний стан. Окрема date-boundary не обґрунтована без виміру.
+6. Плани, прийняті у ході live-валідації, за політикою Memory можуть бути записані агентом у Memory — це треба врахувати в guardrail «0 Memory writes» майбутнього слайсу.
+
+### 25.16 Рекомендація наступного live/config-слайсу
+
+**#29 / слайс 3 (потрібна явна авторизація Product Owner — це мутація Agent і платні Session'и):**
+
+1. Завантажити `work-review` як custom Skill у Claude workspace і приєднати до **координатора** (Haiku) — нова версія production Agent (v20); специфікатор v4, Project Health Skill, roster і finalizer **не чіпати**.
+2. Перед inference задекларувати guardrail за #21/#29: **≤ $0.30 list cost, ≤ 2 paid Managed Sessions, 0 Trello-мутацій**; більше — лише з approval PO.
+3. Сценарії з issue #29: A (completed work — має чесно дати поточний Done без дат завершення), B (moved/reopened — явне обмеження, без виведення з `lastActivityAt`), C (project-scoped — ізоляція), D (plan-vs-actual — Memory лише як plan; за потреби плануйте без нового Memory write), E (0 мутацій/0 Calendar), F (регресія: task-management, planning, studio-intake, Project Health delegation + relay finalizer, same-card verification, due-date safeguard). Кілька ходів в одній Session, щоб вкластися у 2 Session'и.
+4. Окремо виміряти маршрутизацію review↔health і чи дотримується Haiku заборон (без «нещодавно», «N днів тому», «цього тижня ти завершив»).
+5. За потреби (і лише за окремого рішення PO) закрити спостережні прогалини §22 одним авторизованим structure-only семплом.
+
+### 25.17 Явне підтвердження меж
+
+- **0 paid Managed Sessions**, **$0 inference**, 0 `user.message`.
+- **0 викликів Trello**, **0 Calendar**, **0 Memory** (жодних читань чи записів).
+- **0 Agent mutation** (навіть `agents.retrieve` у цьому слайсі не виконувався), **0 Skill mutation / live sync/apply**.
+- Локально: створено один source-файл Skill, додано тести, оновлено цей звіт. Жодного runtime-коду, БД/snapshot/event store, webhook, scheduler, router, нового specialist.
+- **Без** commit / push / deploy / нової гілки / змін GitHub issues.
+
+### 25.18 `git status --short`
+
+```
+ M docs/16_ISSUE_29_WORK_REVIEW_DISCOVERY_REPORT.md
+ M src/skills.test.ts
+?? .claude/skills/work-review/
+```
+
+(`git status` згортає нову директорію до одного рядка; єдиний файл усередині — `SKILL.md`. `git diff --check` — exit 0; одноразове git-попередження про LF→CRLF для цього `.md` — стандартна поведінка `core.autocrlf` на Windows, не whitespace-помилка.)
