@@ -384,3 +384,334 @@ Skill **не** замінює і **не** дублює прийнятий Projec
 ```
 
 (`git status` згортає нову директорію до одного рядка; єдиний файл усередині — `SKILL.md`. `git diff --check` — exit 0; одноразове git-попередження про LF→CRLF для цього `.md` — стандартна поведінка `core.autocrlf` на Windows, не whitespace-помилка.)
+
+## 26. Slice 3 — production `work-review` attach and bounded live acceptance
+
+> **Загальний вердикт: FAIL (live acceptance не прийнято).** Конфігураційна частина — **PASS** (Skill синхронізовано байт-в-байт, production v19 → v20 зі зміною лише `skills`, специфікатор v4 не чіпано). Живі ходи: **Turn 1 — FAIL** за критеріями (працював Skill і свіжий Trello, чесно названо обмеження історії, але додано непідтверджену хронологію з `lastActivityAt` і фактичні помилки); **Turn 2 — маршрутизація PASS, relay-межа НЕ перевірена** (Session упирається в budget cap). **Safety:** 0 Trello-записів / 0 Calendar / 0 Memory-записів — PASS. **Вартість: $0.32 > $0.30 — ПЕРЕВИЩЕННЯ на $0.02 (FAIL критерію 20), спричинене моїм рішенням про Turn 2.** Без retry, без збільшення бюджету, без відкату.
+
+### 26.1 Авторизація Product Owner
+
+Явно дозволено: (1) sync/upload reviewed source-only Skill `work-review`; (2) attach до production координатора, очікувано v19 → v20; (3) bounded платна live-валідація: ≤ 2 paid Sessions, **жорсткий загальний ceiling $0.30**, бажано одна multi-turn Session, 0 Trello-записів / 0 Calendar / 0 Memory-записів; без додаткових витрат понад $0.30 без нового approval.
+
+### 26.2 Accepted base SHA
+
+`51c0b719e0bc98c7f84e0948f4337755161da176` («feat: add bounded work review skill»). Pre-flight: чисте дерево, `HEAD` = `origin/main`; #29 OPEN, коментарів немає; canonical NOW у `docs/02` = Wave C2 (#29).
+
+### 26.3 Метод sync Skill
+
+**Офіційна Skills API через встановлений SDK** (`@anthropic-ai/sdk` 0.125.0): `client.beta.skills.create({ files: [toFile(bytes, "work-review/SKILL.md")] })` — той самий механізм, що вже використовувався в цьому проєкті для `studio-intake`/`task-management` (`docs/13` §23, `docs/14`). Актуальні офіційні доки (Managed Agents → Skills, перевірено 2026-09-21) описують також `ant apply <skill-dir>` (пише `claude-lock.json`), але `ant` у середовищі не встановлено, а завантаження бінарника потребувало б окремого approval; я його не завантажував. **Dry-run:** Skills API його не має; замість нього виконано (а) `skills.list({source:"custom"})` — 5 наявних custom Skills, жодного `work-review` (перевірено двічі: перед create і безпосередньо в create-скрипті); (б) для завантаження використано байти закоміченого blob'а (`git show HEAD:…`, sha256 `63864a4d…2783`, 11 515 байт; збігається з working copy і blob `4f028c49…`); (в) після create — read-back і `versions.download`. Операція торкнулась **лише** `work-review`; `claude-lock.json` цей маршрут **не змінює** (файл не модифіковано).
+
+### 26.4 Skill id / version / read-back
+
+- Skill id: **`skill_01RMRGWbrjW9EHSieymZ2NDV`**; `display_name`/`name`: `work-review`; `source: custom`; версія: **`skver_01JCf5J73Sik966ZR31u6Rhr`** (єдина; `latest`); `created_at` 2026-09-21T10:24:09.416406Z.
+- `versions.retrieve`: `name = work-review`, `skill_id` збігається; `description` (820 симв.) збігається з frontmatter джерела.
+- `versions.download` → zip (4 937 байт) із єдиним файлом `work-review/SKILL.md`, 11 515 байт; SHA-256 **`63864A4D…692783` — ідентичний** закоміченому джерелу та working copy (**byte-identical**).
+- Інші п'ять custom Skills не змінились (ті самі `latest_version_id` і `updated_at`).
+
+### 26.5 Production v19 pre-flight
+
+`agents.retrieve` (read-only) `agent_01WGRHDBjQa3eMhoGJMmQ1dh` та специфікатора; усі перевірки PASS: v19, `updated_at 2026-09-21T08:01:32.367348Z`; `claude-haiku-4-5-20251001`/standard; `system` довжина 3 664 (sha256-префікс `03b33a909123bb40`); рівно чотири координаторські Skills (`task-management`, `daily-planning`, `weekly-planning`, `studio-intake`, усі `latest`), `project-health` відсутній; Trello toolset `default enabled`, лише `trelloWriteCard` enabled, п'ять інших writes `enabled:false`; Calendar приєднано, `default enabled:false`, без overrides; `multiagent` = `coordinator` з рівно одним записом `{agent_01KNiQDzzPjaMU6LLF4mU6uM, v4, type agent}` (без Advisor/self). Specialist: v4, `updated_at 2026-09-21T08:00:37.180815Z`, Sonnet 5 / effort high, Skill pinned `skver_01JLTtMvUgfEqdcBBGj4WGVm`, рівно `trelloSearch`/`trelloReadBoard`/`trelloReadList`/`trelloReadCard`, `multiagent null`, `system` = тіло `managed-agents/project-health-specialist.md`; `claude-lock.json` → v4. **Дрейфу немає.**
+
+### 26.6 Точний production update request
+
+Безпосередньо перед update production v19 знову отримано і перевірено як deep-equal до збереженого snapshot (true). `client.beta.agents.update("agent_01WGRHDBjQa3eMhoGJMmQ1dh", body)` з тілом **лише** `version` + `skills` (усі інші поля опущені — за офіційною семантикою `agents.update` пропущені поля зберігаються, `skills` замінюється цілком):
+
+```json
+{
+  "version": 19,
+  "skills": [
+    { "skill_id": "skill_01WS6JtY1GMu3rGZaKCVR9w1", "type": "custom", "version": "latest" },
+    { "skill_id": "skill_01G9DtQEzPYxgw78riFh8k99", "type": "custom", "version": "latest" },
+    { "skill_id": "skill_01PTmbvLHJj1HuUxvDKhpaiE", "type": "custom", "version": "latest" },
+    { "skill_id": "skill_015c8dtDnWyDfVLwS6NLS7r6", "type": "custom", "version": "latest" },
+    { "type": "custom", "skill_id": "skill_01RMRGWbrjW9EHSieymZ2NDV", "version": "latest" }
+  ]
+}
+```
+
+Чотири наявні записи передано без змін і в тому ж порядку; п'ятий — `work-review`, `version: latest` (узгоджено з іншими координаторськими Skills). Без 409.
+
+### 26.7 Production v19 → v20
+
+Відповідь: `version 20`, `updated_at 2026-09-21T10:25:00.306931Z`. `agents.retrieve(…, {version: 19})` після оновлення все ще дорівнює pre-update snapshot.
+
+### 26.8 Повний diff v19 → v20
+
+Порівняно всі поля (canonical deep-equal): змінились **рівно** `version`, `updated_at`, `skills`. Перші чотири Skills deep-identical і в тому ж порядку; п'ятий = `work-review`, рівно один раз; `project-health` відсутній у координатора; `system`, `model` (Haiku), `tools`, `mcp_servers`, Calendar (attached, disabled), `multiagent` (рівно specialist v4, без Advisor/self), `name`/`description`/`metadata` — ідентичні. **PASS.**
+
+### 26.9 Specialist v4 unchanged
+
+Після attach і ще раз після live-run: `agents.retrieve(agent_01KNiQDzzPjaMU6LLF4mU6uM)` = v4, `updated_at 2026-09-21T08:00:37.180815Z`, deep-equal до snapshot. **PASS.**
+
+### 26.10 Session
+
+**`sesn_01QS3gZyCGyrSZKVNSU6F7pR`**, створена 2026-09-21T10:29:18.193654Z; одна Session, два ходи (Turn 1, Turn 2). Primary thread `sthr_01UHjLC7tHqUcpDTVh2HTTne`; child thread `sthr_01GzvVfmc74yhEa1W7sP17RB` (Turn 2).
+
+### 26.11 Safety override (scratch-only)
+
+Реальна `connectToDjonik()` з репозиторію (`src/djonikClient.ts`, HEAD `51c0b71`; жодного репо-коду не змінено, жодного скрипта в репо). Scratch `Proxy` навколо SDK перехоплює **лише** `beta.sessions.create` і: (1) `agent` → `{type: "agent_with_overrides", id: агент, version: 20, tools: <повні tools production v20, де кожен `trelloWrite*` = enabled:false>}`; (2) memory `access` `read_write` → **`read_only`** (та сама `memory_store_id` і `instructions`); (3) `budget: {type: "limit", max_list_cost: {amount: "30", currency: "USD"}}`. Не перевизначалися `model`, `system`, Skills, MCP, `multiagent`; `metadata` не додавалась. Перед `sessions.create` proxy перевірив, що запит репозиторію — це саме production-запит (ключі `agent/environment_id/vault_ids/resources`, bare agent id, `read_write`), і що production/specialist deep-equal snapshot'ам; після create — 17 gate-перевірок через `sessions.retrieve` (v20, Haiku, п'ять Skills із `work-review` рівно раз, roster = specialist v4, шість `trelloWrite*` disabled, Trello reads intact, Calendar disabled, budget 30, Memory `read_only`, usage 0) — **усі PASS до `user.message`**.
+
+### 26.12 Turn 1 — точний prompt
+
+> Що я реально завершив цього тижня по Extract? Дай короткий підсумок.
+
+`user.message` `sevt_01LLM6ExUiev85777XA3aJAn` (2026-09-21T10:29:21.616374Z). Без підказок.
+
+### 26.13 Proof: `work-review` Skill прочитано
+
+Перший tool call primary-thread: `read {"file_path":"/workspace/skills/work-review/SKILL.md"}` (10:29:24.159, `is_error:false`); telemetry `skillRead: true`. Жодного читання `project-health` Skill; жодного child thread.
+
+### 26.14 Точна послідовність свіжих Trello-читань (primary, усі `is_error:false`)
+
+1. `trelloSearch {"action":"search_boards","query":"Extract"}`
+2. `trelloSearch {"action":"search_cards","query":"Extract"}`
+3. `trelloReadBoard {"action":"list"}`
+4. `trelloReadCard {"action":"list_by_board","boardIdOrUrl":"https://trello.com/b/…/djonik"}` (типовий фільтр, 28 open-карток, `hasNextPage:false`)
+
+Свіжі, до точних тверджень; 0 записів. Memory не читалась.
+
+### 26.15 Точна відповідь Turn 1 (verbatim; фінальне `agent.message` `sevt_014PCMdSQhCoACHLgwZTqhbD`, 741 символ = `runtimeReturnedReply`)
+
+```text
+Готово. Зараз у Done стоять три карти Extract:
+
+1. **Коментарі по пінкам** — зараз у Done, Trello записав активність 21 вересня о 07:09
+2. **Автоматизація рендеру** — зараз у Done, мала дедлайн 18 вересня
+3. **Білі аромати 3D відео** — зараз у Done, мала дедлайн 14 вересня
+4. **Кохаю пінка** — зараз у Done, мала дедлайн 14 вересня
+
+Щодо того, коли саме вони туди потрапили — Trello показує поточний стан, але не історію переходів, тож підтвердити «за цей тиждень» я не можу.
+
+У **This week** наразі 5 карт Extract, які ще не у Done:
+- Брендбук (дедлайн 25 вересня)
+- Флакони 1.5 ML
+- Білі аромати 50 ML
+- Чорні аромати 100 ML
+- Флакони 7.5 ML
+
+На фоні — невеликий процес. Коментарі по пінкам було останньою замкненою задачею з Extract.
+```
+
+(До нього було ще чотири проміжні `agent.message` — «Пошукаю…» — під час tool-calls; клієнт повертає останнє. Verbatim, крім двох кінцевих пробілів у рядках 2 і «Білі аромати 50 ML», прибраних заради `git diff --check`.)
+
+### 26.16 Вердикт чесності щодо історії — **частково PASS**
+
+✅ Одне коротке речення: «Trello показує поточний стан, але не історію переходів, тож підтвердити "за цей тиждень" я не можу» — саме те, що потрібно; не «есе про обмеження». ✅ Не стверджено «ти завершив X цього тижня», «завершено вчора», «N днів тому», рух/reopen. ❌ **Але** остання фраза «Коментарі по пінкам було **останньою замкненою** задачею з Extract» — це непідтверджена хронологія завершення (порядок завершення), і вона суперечить власному застереженню відповіді.
+
+### 26.17 Вердикт `lastActivityAt` — **FAIL**
+
+Звірка із сирим payload'ом (той самий `list_by_board`): «Коментарі по пінкам» має `lastActivityAt 2026-09-21T07:09:13.924Z`, і лише вона з Done має активність саме цього дня; інші Done — 2026-09-16, 09-15, 09-14. Модель використала `lastActivityAt` як **доказ порядку/часу завершення** («остання замкнена»), а також переписала його словами «21 вересня о 07:09» замість цитати `Trello recorded activity at <ISO>` — час 07:09 є **UTC**, поданий без зони (для Києва це 10:09), тобто фактично оманливий локальний час. Порушено правила Skill: не доказ завершення; лише сирий ISO; без похідних дати/часу.
+
+### 26.18 Інші фактичні перевірки Turn 1 за сирим payload'ом (10 Extract-карток, `filter` за замовчуванням)
+
+- «**три** карти Extract» у Done, але перелічено чотири — **чотири** й є в Done (`Коментарі по пінкам`, `Автоматизація рендеру`, `Білі аромати 3D відео`, `Кохаю пінка`; усі `dueComplete: true`, `complete: true`) → лічильник неправильний.
+- «У This week **5** карт» — фактично **шість** (немає «Міні-парфуми адаптація») → пропуск/лічильник.
+- Дедлайни (Автоматизація рендеру 2026-09-18T17:00Z, Білі аромати 3D відео 09-14T15:00Z, Кохаю пінка 09-14T10:00Z, Брендбук 09-25T15:00Z) правильні за датою, але подані як «18 вересня» тощо замість цитати ISO (без weekday/countdown — м'яке порушення).
+- «На фоні — невеликий процес.» — беззмістовне/непідтверджене речення.
+- Ізоляція проєкту дотримана (жодної картки іншого проєкту). Нульова мутація.
+
+### 26.19 Turn 1 — оцінка за критеріями
+
+1 ✅ координатор сам відповів; 2 ✅ Skill прочитано; 3 ✅ свіжий Trello; 4 ✅ без PH child thread; 5 ❌ (є хронологічне «остання замкнена»); 6 ✅ коротке чесне обмеження; 7 ✅ є поточні докази; 8 ❌ по суті сирий перелік 9 карток; 9 ⚠️ «невеликий процес» — розмита/непідтверджена оцінка прогресу; 10 ❌ немає чіткого одного висновку, натомість непідтверджений; 11 ✅ нуль записів. `lastActivityAt` — ❌. **Turn 1: FAIL.**
+
+### 26.20 Рішення щодо Turn 2 і його prompt
+
+Відправлено **за заздалегідь заданим правилом**: після Turn 1 накопичено 6¢ з cap 30¢, залишок 24¢ ≥ поріг 22¢ (моя оцінка вартості delegated Project Health-ходу за #28: 17–21¢). **Це рішення було помилковим:** у #28 було й спостереження $0.31 (§46), яке я мав би взяти як worst-case; фактична вартість Turn 2 — 26¢. Prompt (точно):
+
+> А що зараз по Extract загалом: чи є реальні ризики або блокери і що мені варто зробити далі?
+
+`user.message` `sevt_01QeF2paGkrtJBDuFwC9DtfH` (2026-09-21T10:29:49.968243Z).
+
+### 26.21 Turn 2 — PH delegation proof
+
+Primary thread: 2 model requests, **0 tool calls**, 0 `agent.message`; `session.thread_created` `sevt_01ET4LGJmRWHPDToaLaN97Nx` (agent_name «Djonik Project Health Specialist», thread `sthr_01GzvVfmc74yhEa1W7sP17RB`) → `agent.thread_message_sent` `sevt_01TAy2LZ8Y9BWcXvVpREq26B`. `work-review` Skill у Turn 2 **не** читався — здоров'я не «проковтнув» (критерій 14 ✅). Native delegation ✅; рівно один child thread ✅.
+
+### 26.22 Specialist v4 proof + свіжі Trello-читання
+
+`threads.list`: child = `agent_01KNiQDzzPjaMU6LLF4mU6uM` **v4**, `claude-sonnet-5`, parent = primary. Child читав власний Skill `read /workspace/skills/project-health/SKILL.md` ✅; одне невдале читання Memory (`/mnt/memory/djonik-memory`, `is_error:true`, без запису); Trello (усі `is_error:false`): `trelloSearch search_boards "Extract"` ∥ `trelloReadBoard list` → `trelloReadBoard get` ∥ `list_labels` → `trelloReadCard list_by_board (filter:"all")`. Рівно **одне** child→coordinator повідомлення `sevt_015gCFLfc9VmJN7p1ZQX8Yxp` (specialist final; не оцінювався як redesign):
+
+```text
+По Extract (лейбл на дошці Djonik) явних блокерів чи підвислих задач я не бачу — усе активне зараз лежить у списку «This week»: підготовка брендбука та кілька великих виробничих завдань з рендерів флаконів і ароматів (1.5 мл, 7.5 мл, білі 50 мл, чорні 100 мл, міні-парфуми адаптація). З конкретним дедлайном у Trello там лише одна картка — «Брендбук» (2026-09-25T15:00:00Z), решта — це queued задачі-специфікації без дедлайну. Жодна з цих «This week» карток ще не перейшла в список «In progress», тож із самої дошки не видно, що фактична робота по них уже стартувала. У списку Waiting зараз лежать картки інших проєктів (A1, Cossack Labs, Seqthera), по Extract туди нічого не потрапило — залежностей чи чекання по цьому лейблу не видно. Я б перевірив статус саме цих «This week» карток (особливо чи рухається Брендбук із дедлайном 25.09), перш ніж туди додавати нові задачі.
+```
+
+### 26.23 PH relay-finalizer — **НЕ перевірено (критерії 6/15 не доведені)**
+
+`agent.thread_message_received` `sevt_01WEbbKfK4LyofUEvs53tCAj` (processed 10:31:42.380) зʼявився в списку подій **після** `session.status_idle`; причина: specialist thread завершився зі `stop_reason: budget_reached` (10:31:42.601), потім primary-thread також `budget_reached` (10:31:43.306) — координатор **не зміг зробити relay-запит**. Тому клієнт побачив `session.status_idle` без coordinator-повідомлення і без ще доставленого specialist-повідомлення → `finalizeProjectHealthReply` не спрацював (`project_health_reply_finalized` у trace відсутній) і `handle.send()` кинув «Djonik produced no text reply for this turn.». Це артефакт budget cap harness'у, а не змін v20: специфікатор і роутинг працювали. **Спостереження (не виправлялося):** finalizer залежить від порядку доставки `agent.thread_message_received` перед `session.status_idle`; за нормального завершення (як у #28 §48) цей порядок дотримується, але при `budget_reached` — ні; у production без cap це не виникає.
+
+### 26.24 Нуль записів / Calendar / Memory
+
+- `trelloWrite*` викликів: **0** (обидва ходи; усі шість write-tools були disabled на рівні Session); специфікатор без write-інструментів.
+- Calendar: **0** викликів (toolset disabled; специфікатор без Calendar).
+- Memory: mount `read_only`; `memoryVersions.list(session_id=…)` → **0** версій, загальна кількість версій до/після = 23/23; жодного `bash`/`write`/`edit` по `/mnt/memory`.
+- Жодних `session.error`. **PASS.**
+
+### 26.25 Авторитетні final idle
+
+- **Turn 1:** `session.status_idle` `sevt_01Rs836CgMaUonyXVhjcWRFr`, `processed_at 2026-09-21T10:29:43.111842Z`, `stop_reason: end_turn` (персистована подія, не лише `sessions.retrieve().status`).
+- **Turn 2:** `session.status_idle` `sevt_011d42MjNBuz9XAvdyt425Xi`, `processed_at 2026-09-21T10:31:43.306886Z`, **`stop_reason: budget_reached`** — хід **не** завершився нормально.
+
+### 26.26 Вартість (platform `list_cost`, у центах)
+
+| Показник | Turn 1 | Turn 2 | Разом |
+|---|---|---|---|
+| Session `list_cost` (кумулятивно) | 6¢ | 32¢ | **32¢ (cap 30¢; перевищення 2¢)** |
+| Primary Haiku | 6¢ (6 model requests; in 36 / out 937; cache-create 36 864; cache-read 102 535) | +3¢ (2 requests; in +15 / out +439; cache-create +19 872; cache-read +55 005) | 9¢ |
+| Specialist Sonnet (v4) | — | 22¢ (6 model requests; in 12 / out 7 918; cache-create 51 116; cache-read 84 389) | 22¢ |
+| Trello-читань | 4 | 5 (child) | 9 |
+| Skill-читань | 1 (`work-review`) | 1 (child, `project-health`) | 2 |
+
+(9 + 22 = 31¢ за потоками; Session-total 32¢ через округлення на рівні потоків.) Turn 2 коштував ~26¢. Cap `max_list_cost=30` зупиняє лише **нові** запити — запит, що вже виконувався, може виходити за межу; так і сталось. **Жорсткий ceiling $0.30 порушено на $0.02.** Бюджет не збільшувався, жодного retry, жодної третьої репліки.
+
+### 26.27 Post-run resources
+
+Production `agent_01WGRHDBjQa3eMhoGJMmQ1dh`: **v20**, `updated_at 2026-09-21T10:25:00.306931Z`, deep-equal до post-attach snapshot; `work-review` присутній рівно раз; roster = specialist v4. Specialist: v4, без змін. Custom Skills: шість (п'ять колишніх без змін + `work-review`). Session `sesn_01QS3gZyCGyrSZKVNSU6F7pR` — `idle`, cap досягнуто (не архівувалась). `claude-lock.json`, `managed-agents/` (окрім README, §26.29), runtime, Skill-джерела — без змін.
+
+### 26.28 Загальна класифікація
+
+| # | Критерій | Результат |
+|---|---|---|
+| 1–5 | CONFIG: Skill синхронізовано; v19→v20; рівно один доданий Skill; решта полів без змін; specialist v4 без змін | **PASS** |
+| 6–7 | Turn 1: Skill використано; свіжий Trello | **PASS** |
+| 8 | Turn 1: чесне історичне обмеження | **PASS** (коротко й точно) |
+| 9 | Turn 1: без вигаданої хронології | **FAIL** («остання замкнена») |
+| 10 | Turn 1: без зловживання `lastActivityAt` | **FAIL** |
+| 11 | Turn 1: корисний і стислий current-state review | **FAIL** (лічильники, інвентар, розмите речення) |
+| 12 | Turn 1: нуль мутацій | **PASS** |
+| 13 | Turn 2: health → specialist v4 | **PASS** |
+| 14 | work-review не «проковтнув» health | **PASS** |
+| 15 | PH relay-межа працює | **НЕ перевірено** (budget_reached) |
+| 16 | Turn 2: нуль мутацій | **PASS** |
+| 17–19 | 0 Trello writes / 0 Calendar / 0 Memory writes | **PASS** |
+| 20 | Загальна вартість ≤ $0.30 | **FAIL** ($0.32) |
+
+**Overall: FAIL.**
+
+### 26.29 Нове evidence-поле, виявлене під час run (уточнення дискавері §7/§22)
+
+У сирому `trelloReadCard list_by_board` (28 open-карток) вузол картки має ключі: `id, name, desc, webUrl, url, list, board, labels, labelsHasMore, due, dueComplete, lastActivityAt, startedAt, closed, complete, members, comments, commentsHasMore, checklists, checklistsHasMore`. Тобто **`comments` і `checklists` присутні в payload'і** (у цьому зрізі всі порожні масиви, `*HasMore:false`; форму елементів не спостережено), `startedAt` = `null` і `members` порожні на всіх 10 переглянутих Extract-картках (на інших 18 картках ці два поля не перевірялись). **Усі чотири Done-картки мають `dueComplete: true` і `complete: true` — зокрема «Коментарі по пінкам» без `due`**, тож `complete`/`dueComplete` у цьому семплі узгоджені зі списком `Done` навіть без дедлайну (все ще без часової мітки). Часові мітки в `comments`/`checklists` — потенційне майбутнє джерело прогрес-сигналу, але поки нічого не доведено.
+
+Також оновлено один застарілий факт у `managed-agents/README.md` («production Djonik is now v19» → «was v19 at C1 acceptance and is now v20»).
+
+### 26.30 Залишковий gap
+
+1. Production **v20 живий із Skill, який не пройшов acceptance**: він спрацьовує на ретроспективні запити і, як показав Turn 1, Haiku може додати хронологію з `lastActivityAt`. Ризик обмежений ретроспективними запитами (Skill не приєднано до PH-шляху), але він реальний для Telegram-трафіку.
+2. Relay-межа PH з v20 не перевірена наживо (потрібен ход без budget cap; Turn 2 можна повторити лише за новим бюджетом).
+3. Поведінка Skill при порівнянні «review vs health» перевірена лише в один бік (health → specialist, PASS); зворотний бік («review» → не в specialist) — PASS у Turn 1.
+4. Причина провалу Turn 1 не ізольована: це може бути слабке слідування Haiku (як у #28), недостатньо жорсткий текст Skill (немає прямої заборони порядкових/суперлативних тверджень на кшталт «остання/перша/нещодавно закрита», ні заборони переписувати `lastActivityAt` у природній мові, ні заборони підрахунків/інвентаря), або обидва.
+
+### 26.31 Явні підтвердження меж
+
+- **Без збільшення бюджету**; **без retry**; третій хід не відправлявся; друга Session не створювалась.
+- **Жодної несуміжної мутації Agent/Skill:** єдині живі зміни — створення Skill `work-review` і оновлення `skills` production Agent (v19 → v20); specialist, `project-health`, чотири інші Skills, system, model, tools, MCP, roster — не чіпались; жодного нового specialist/Advisor/router/історичної БД/snapshot/webhook.
+- **Жодної зміни runtime-коду**, жодного редагування джерела `work-review`, `claude-lock.json` не змінювався.
+- **Без commit / push / deploy / нової гілки.** **#29 лишається відкритим і canonical NOW.** **#18 без змін.**
+
+## 27. Recovery — rollback unaccepted production work-review attach
+
+> **Вердикт: рівно один bounded живий Agent-update виконано й підтверджено — production відкочено v20 → v21; v21 семантично тотожний прийнятій v19 (відрізняються лише `version` і `updated_at`); `work-review` більше не приєднано до production.** 0 Sessions, $0 inference, 0 `user.message`, 0 Trello/Calendar/Memory. Віддалений Skill `work-review` збережено без змін. Specialist v4 не чіпано. §26 вище збережено без змін по суті.
+
+### 27.1 Причина відкоту
+
+Live acceptance Slice 3 (§26) **не пройдено**, тож production v20 працював із Skill, який не прийнято: Haiku вигадав порядок завершення («остання замкнена»), використав `lastActivityAt` як доказ завершення/порядку, переписав UTC-мітку у «локально виглядаючий» час («21 вересня о 07:09»), припустився помилок у підрахунках/інвентарі; PH-relay не було перевірено (`budget_reached`, $0.32 проти $0.30). Product Owner явно авторизував **один** відкат: production v20 → новий v21, що прибирає **лише** `work-review`, без Sessions/inference/Trello/Calendar/Memory, без видалення/архівації віддаленого Skill і без змін specialist.
+
+### 27.2 Repository reconciliation
+
+- Локальний Slice 3 стартував від `51c0b719e0bc98c7f84e0948f4337755161da176`, а `origin/main` уже просунувся до **`1edecaa4b32acbc8b42ff737edeef2b07c37e4d4`** («docs: sync wave c2 roadmap progress»), який змінив лише `docs/02_DEVELOPMENT_ROADMAP.md` (переписав блок Wave C2: +22/−18) — той самий файл, що я редагував локально.
+- Локальний незакомічений diff: `docs/01`, `docs/02`, `docs/16`, `managed-agents/README.md` (+231/−3), нічого untracked. Стан збігся з очікуваним, тож зупинки не було.
+- **Збереження перед reconcile:** `git diff` → `%TEMP%\djonik-issue29-slice3-before-reconcile.patch` (48 759 байт) плюс повні копії чотирьох файлів у `%TEMP%\djonik-issue29-safety\` (поза репозиторієм).
+- **Метод:** `git stash push --include-untracked -m "issue29-slice3-reconcile"` → `git merge --ff-only origin/main` (fast-forward до `1edecaa`) → `git stash pop`. Без гілки, без commit, без `reset --hard` (після pop виконано лише `git reset -q` — mixed, щоб зняти автоматичне staging; робоче дерево не чіпалось).
+- **Конфлікт:** лише `docs/02`, один hunk (переписаний upstream абзац «Boundaries remain…» проти мого абзацу «Slice status»). Вирішено без вибору «ours/theirs» wholesale: спершу прибрано лише маркери (збережено обидві сторони), потім блок Wave C2 приведено до фактичного стану — **збережено** всю прийняту синхронізацію `1edecaa` (Slice 1, `lastActivityAt`, plan-vs-actual, Slice 2, weekly-journal-застереження, #18, «no later issue», Boundaries), **замінено** три застарілі пункти («production has not changed yet», «NEXT — Slice 3», «Slice 3 must verify…») фактичним результатом Slice 3, відкатом і наступним кроком, а мій абзац «Slice status» вилучено, бо його зміст перенесено в ті ж пункти. Файли `docs/01`, `docs/16`, `managed-agents/README.md` застосувалися чисто.
+- **Результат:** `HEAD` = `origin/main` = `1edecaa4b32acbc8b42ff737edeef2b07c37e4d4`; вся робота Slice 3 (включно з §26) лишилась як незакомічені зміни. Запис `stash@{0}` git залишив після конфліктного pop — це додаткова страховка, я його не видаляв.
+
+### 27.3 Pre-flight production v20 (read-only; усі перевірки PASS)
+
+`agents.retrieve(agent_01WGRHDBjQa3eMhoGJMmQ1dh)`: **version 20**, `updated_at 2026-09-21T10:25:00.306931Z`, deep-equal до збереженого post-attach snapshot; Haiku `claude-haiku-4-5-20251001`/standard; `system` довжина 3 664 (sha256-префікс `03b33a909123bb40`), ідентичний v19; Skills = чотири прийняті (`task-management`, `daily-planning`, `weekly-planning`, `studio-intake`, усі `latest`) **+ `work-review` рівно раз** (п'ята позиція); `project-health` відсутній; `tools`/`mcp_servers` ідентичні v19; Calendar attached, `default enabled:false`; `multiagent` = coordinator, рівно `{agent_01KNiQDzzPjaMU6LLF4mU6uM, v4, type agent}`, без Advisor/self. **Історичну v19 отримано через API** (`agents.retrieve(…, {version: 19})`, `updated_at 2026-09-21T08:01:32.367348Z`) — deep-equal до моєї pre-attach v19-копії; використано як авторитетну базу. Diff v19→v20: лише `skills`, `updated_at`, `version`.
+
+### 27.4 Pre-flight specialist v4
+
+`agent_01KNiQDzzPjaMU6LLF4mU6uM`: v4, `updated_at 2026-09-21T08:00:37.180815Z`, deep-equal до прийнятого snapshot. Також підтверджено, що віддалений Skill `work-review` існує (`skill_01RMRGWbrjW9EHSieymZ2NDV`, latest `skver_01JCf5J73Sik966ZR31u6Rhr`, `updated_at 2026-09-21T10:24:09.416406Z`).
+
+### 27.5 Точний rollback request
+
+Безпосередньо перед update production v20 і baseline v19 знову перевірені як deep-equal до збережених snapshot'ів (дрейфу немає). `client.beta.agents.update("agent_01WGRHDBjQa3eMhoGJMmQ1dh", body)` з тілом **лише** `version` + `skills` (усі інші поля опущено; чотири Skill-записи взято дослівно з API-версії v19):
+
+```json
+{
+  "version": 20,
+  "skills": [
+    { "skill_id": "skill_01WS6JtY1GMu3rGZaKCVR9w1", "type": "custom", "version": "latest" },
+    { "skill_id": "skill_01G9DtQEzPYxgw78riFh8k99", "type": "custom", "version": "latest" },
+    { "skill_id": "skill_01PTmbvLHJj1HuUxvDKhpaiE", "type": "custom", "version": "latest" },
+    { "skill_id": "skill_015c8dtDnWyDfVLwS6NLS7r6", "type": "custom", "version": "latest" }
+  ]
+}
+```
+
+### 27.6 Production v20 → v21
+
+Відповідь: **`version 21`**, `updated_at 2026-09-21T10:51:30.448788Z`. Без 409, без retry. Останній (`latest`) retrieve збігається з `retrieve(…, {version: 21})`.
+
+### 27.7 v19 ↔ v21 — доказ семантичної еквівалентності
+
+Canonical deep-equal усіх полів: відрізняються **лише** `version` і `updated_at`. Skills — рівно чотири, ті самі записи в тому ж порядку; **`work-review` не приєднано; `project-health` не приєднано**. `system`, `model` (Haiku), `tools`, `mcp_servers`, Calendar (attached, disabled), `multiagent` (coordinator → specialist v4, один запис, без Advisor/self), `name`, `description`, `metadata`, `created_at` — ідентичні v19. **PASS.**
+
+### 27.8 v20 ↔ v21 — точний семантичний diff
+
+Відрізняються рівно `version`, `updated_at`, `skills`; дельта `skills`: **`− work-review` (`skill_01RMRGWbrjW9EHSieymZ2NDV`), нічого не додано**. Версія v20 (за `version` param) досі дорівнює збереженому post-attach snapshot (історія цілa).
+
+### 27.9 Віддалений Skill `work-review` збережено
+
+Не видалявся й не архівувався. Після відкату deep-equal до стану до відкату: id `skill_01RMRGWbrjW9EHSieymZ2NDV`, `latest_version_id skver_01JCf5J73Sik966ZR31u6Rhr` (єдина версія), `updated_at 2026-09-21T10:24:09.416406Z`. Нової версії Skill не створювалось. Інші п'ять custom Skills без змін (`project-health@skver_01JLTt…`, `studio-intake@skver_018sJv…`, `weekly-planning@skver_018soR…`, `daily-planning@skver_01TDfM…`, `task-management@skver_012fLb…`).
+
+### 27.10 Specialist v4 unchanged
+
+Після відкату: v4, `updated_at 2026-09-21T08:00:37.180815Z`, deep-equal до pre-flight snapshot. `claude-lock.json` (specialist v4) не змінювався.
+
+### 27.11 Sessions / inference
+
+**0 Sessions, $0 inference, 0 `user.message`.** Жодного платного виклику. Єдина живa мутація — один `agents.update` (v20 → v21); решта — read-only (`agents.retrieve` ×кілька, `skills.retrieve/list`, `skills.versions.list`).
+
+### 27.12 Нуль Trello / Calendar / Memory
+
+Оскільки жодної Session не створювалось, **0 Trello-викликів, 0 Calendar, 0 Memory** (у цьому слайсі не викликався навіть Memory-API).
+
+### 27.13 Docs changed
+
+- `docs/01_CLAUDE_NATIVE_ARCHITECTURE.md` — production тепер v21, rollback-еквівалент v19; `work-review` існує віддалено, але не приєднаний і не прийнятий; Slice 3 FAILED; specialist v4; #18 без змін.
+- `docs/02_DEVELOPMENT_ROADMAP.md` — збережено синхронізацію `1edecaa`; NOW лишається Wave C2 (#29); Slice 1 DONE, Slice 2 DONE, Slice 3 FAILED live acceptance (вимірені збої), відкат, наступний source-only крок.
+- `docs/16_ISSUE_29_WORK_REVIEW_DISCOVERY_REPORT.md` — додано цей §27 (§26 без змін).
+- `managed-agents/README.md` — застаріле «is now v20» → v21 після відкату; specialist v4; `work-review` не в production; #28 acceptance без змін.
+
+Не змінювалось: runtime-код, джерело `work-review`, `src/skills.test.ts`, `claude-lock.json`, інші Skills.
+
+### 27.14 Локальні перевірки
+
+`npm run typecheck` — пройшло, без помилок · `npm test` — **330 tests, 330 pass, 0 fail, 0 cancelled, 0 skipped** · `git diff --check` — exit 0 (лише стандартне LF→CRLF-попередження) · `git rev-parse HEAD` = `git rev-parse origin/main` = `1edecaa4b32acbc8b42ff737edeef2b07c37e4d4`.
+
+### 27.15 Залишковий вимірений gap
+
+1. **Turn 1 провал не усунуто:** вигадування порядку завершення, `lastActivityAt` як доказ завершення/порядку, «натуралізація» UTC-мітки в локально виглядаючий час, помилки підрахунку й майже повний дамп карток, розмита фраза про прогрес. Поточний Skill (`51c0b71`) забороняє це лише загалом і не називає ці шаблони прямо.
+2. **PH-relay на v20 не переперевірено** (`budget_reached`). Оскільки v21 ≡ v19, прийняте в #28 §48 лишається чинним; окремої нової перевірки relay-межі не потрібно, доки production не зміниться.
+3. **Причина не ізольована:** слабке слідування Haiku vs. недостатня жорсткість тексту Skill; один зразок.
+4. **Бюджетна дисципліна:** необов'язковий другий платний хід під жорстким ceiling треба гейтити за **найгіршою** спостереженою вартістю ($0.31 у #28 §46), а не за типовою — `max_list_cost` зупиняє лише нові запити.
+5. Спостереження (не виправлялось): finalizer залежить від порядку `agent.thread_message_received` перед `session.status_idle`; порушується лише при `budget_reached`.
+
+### 27.16 Точна рекомендація наступного bounded source-only hardening
+
+**#29 / наступний слайс — source-only hardening `work-review`. Без платної Session, без мутації production Agent, без sync Skill.** Лише репо: `.claude/skills/work-review/SKILL.md` і `src/skills.test.ts`. Додати прямі правила й семантичні тести (без exact-answer snapshot'ів і без жорсткої фрази):
+
+1. **Жодного порядкового/відносного порядку завершення** — «остання завершена», «перша завершена», «найсвіжіше завершена», «нещодавно закрита», «остання замкнена» — ні зі стану, ні з `lastActivityAt`; допустимо лише «зараз у Done» без порядку/часу.
+2. **`lastActivityAt` — лише сирий доказ:** або цитата `Trello recorded activity at <ISO>` дослівно, або взагалі не згадувати за замовчуванням; ніколи не переписувати в «21 вересня о 07:09» чи інший локально виглядаючий формат (те саме для `due` — сирий ISO або без часу).
+3. **Не наводити підрахунки**, доки вони не потрібні й механічно не збігаються з перерахованим набором (заборонити «три…» перед списком із чотирьох); за замовчуванням не вказувати кількість.
+4. **Дефолтний review — кілька найсильніших фактів**, а не майже всі картки; повний перелік лише на явне прохання.
+5. **Жодних невизначених суджень про прогрес** («невеликий процес», «йде повільно»); лише те, що виводиться зі списку/`dueComplete`.
+6. **Один корисний PM-висновок лише якщо його підтримують докази**; інакше — без висновку.
+
+Додатково в тестах: явна заборона перелічених фраз (regex на заборонені формулювання в *правилах* Skill, а не на відповіді), відсутність гарантії «хронологія допустима», збереження існуючих 28 тестів. **Після цього** (окреме рішення PO, новий бюджет): новий Skill version → повторне приєднання → нова bounded live acceptance з гейтом наступного ходу за найгіршою вартістю. До цього production лишається на v21.
+
+### 27.17 Явні підтвердження
+
+- **Жодної платної Session; $0 inference; жодного retry.**
+- **Жодного видалення/архівації Skill**; жодної нової версії Skill; **жодної мутації specialist**; жодних змін system/model/tools/MCP/roster.
+- **Без commit / push / deploy / нової гілки / `reset --hard`.**
+- **#29 лишається відкритим і canonical NOW.** **#18 без змін.**
