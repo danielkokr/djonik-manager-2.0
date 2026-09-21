@@ -1,4 +1,18 @@
 import Anthropic from "@anthropic-ai/sdk";
+import {
+  TrelloMutationLedger,
+  describeMutationOutcomes,
+  describeMutationTarget,
+  extractCardObject,
+  isConfirmed,
+  isFailed,
+  isNudgeable,
+  isTrelloWriteTool,
+  isUnresolved,
+  isValidUtcDue,
+  nudgeTargetIds,
+  type MutationOutcome,
+} from "./trelloMutationLedger.js";
 
 /**
  * Raw image bytes for one multimodal turn, transported as an inline base64
@@ -349,70 +363,12 @@ const DJONIK_MEMORY_INSTRUCTIONS =
  * reliable (Foundation 7 acceptance blocker: a `trelloWriteCard` call was followed by
  * a success reply with no `agent.mcp_tool_use` read call in between).
  *
- * This inspects the same `agent.mcp_tool_use` / `agent.mcp_tool_result` events the
- * session stream already emits — no custom Trello client, no stored task state, no
- * intent router. It only tracks tool-call *shape*: which write tool ran, the object id
- * it names, and whether a read of the matching type later names that same object id.
- * It never inspects mutated field values (title/desc/due/list) — whether the *content*
- * of a write was correct remains entirely the Skill's/Claude's job. This is identity
- * verification only: did a read of the same object happen, not was the write right.
+ * Issue #31: verification is per mutation. Every `trelloWriteCard` call is tracked by its own
+ * tool-use identity in a `TrelloMutationLedger` (`src/trelloMutationLedger.ts`) and is verified
+ * only by a successful direct `trelloReadCard` of ITS OWN card, started after the write, whose
+ * card object carries the fields the write requested. Same event stream, no custom Trello client,
+ * no stored task state, no intent router.
  */
-const TRELLO_MCP_SERVER_PATTERN = /trello/i;
-const TRELLO_WRITE_TOOL_PATTERN = /^trelloWrite/;
-const TRELLO_READ_TOOL_PATTERN = /^trelloRead/;
-
-function isTrelloWriteTool(serverName: string, toolName: string): boolean {
-  return TRELLO_MCP_SERVER_PATTERN.test(serverName) && TRELLO_WRITE_TOOL_PATTERN.test(toolName);
-}
-
-function isTrelloReadTool(serverName: string, toolName: string): boolean {
-  return TRELLO_MCP_SERVER_PATTERN.test(serverName) && TRELLO_READ_TOOL_PATTERN.test(toolName);
-}
-
-/**
- * For each Trello write tool whose input names an object id, the read tool + input
- * field that must name the *same* id to count as verification. A write tool absent
- * from this map (none currently — only `trelloWriteCard` is enabled per Foundation 7)
- * falls back to the looser "any successful Trello read clears it" behavior, since no
- * identity field is known to check.
- */
-const CARD_OBJECT_ID_VERIFICATION = {
-  writeTool: "trelloWriteCard",
-  writeIdField: "cardId",
-  readTool: "trelloReadCard",
-  readIdFields: ["cardIdOrUrl", "cardId"],
-} as const;
-
-function readStringField(input: Record<string, unknown>, field: string): string | null {
-  const value = input[field];
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-/** The object id a write tool call names, or null if this write tool has no known identity field. */
-function writeObjectId(toolName: string, input: Record<string, unknown>): string | null {
-  if (toolName === CARD_OBJECT_ID_VERIFICATION.writeTool) {
-    return readStringField(input, CARD_OBJECT_ID_VERIFICATION.writeIdField);
-  }
-  return null;
-}
-
-/**
- * Whether a successful read call verifies the given pending write: same write/read
- * tool pairing (e.g. trelloWriteCard verified only by trelloReadCard, never by
- * trelloReadBoard/trelloSearch/etc.) and the read names the exact same object id.
- */
-function readVerifiesWrite(
-  pendingWriteTool: string,
-  pendingObjectId: string,
-  readToolName: string,
-  readInput: Record<string, unknown>,
-): boolean {
-  if (pendingWriteTool !== CARD_OBJECT_ID_VERIFICATION.writeTool) return false;
-  if (readToolName !== CARD_OBJECT_ID_VERIFICATION.readTool) return false;
-  return CARD_OBJECT_ID_VERIFICATION.readIdFields.some(
-    (field) => readStringField(readInput, field) === pendingObjectId,
-  );
-}
 
 /**
  * Deterministic backstop for Issue #23 (post-write due-date wording must match the
@@ -425,53 +381,21 @@ function readVerifiesWrite(
  * rewrites general assistant text, never parses arbitrary prose, and never touches
  * any other field or turn shape.
  */
-const ISO_UTC_DUE_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
-
-/** Bounded (depth-limited) structured lookup for a `due` field in a Trello MCP tool
- *  result's parsed JSON — not a generic object walker, only ever looking for this
- *  one key, and only trusting a value shaped like a Trello UTC due timestamp. */
-function findDueField(value: unknown, depth: number): string | null {
-  if (depth < 0 || value === null || typeof value !== "object") return null;
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findDueField(item, depth - 1);
-      if (found) return found;
-    }
-    return null;
-  }
-  const obj = value as Record<string, unknown>;
-  if (typeof obj.due === "string" && ISO_UTC_DUE_PATTERN.test(obj.due)) return obj.due;
-  for (const key of Object.keys(obj)) {
-    const found = findDueField(obj[key], depth - 1);
-    if (found) return found;
-  }
-  return null;
-}
-
 /**
- * Extracts the verified `due` value from a `trelloReadCard` MCP tool result's
- * content blocks. Only text blocks are inspected; the text is first tried as JSON
- * (the expected shape), then, if that fails, scanned with a narrow `"due":"..."`
- * regex as a tolerant fallback. Returns null (never throws) when no due-shaped
- * value can be found, so the deterministic safeguard cleanly no-ops rather than
- * fabricating a value or crashing the turn.
+ * Extracts the verified `due` value from a `trelloReadCard` MCP tool result's content blocks.
+ *
+ * Issue #31: anchored to the ONE card object the result describes (its own `id`; a bare card or a
+ * single-key `{ card }` wrapper). Only that object's own `due` is ever considered — never a
+ * nested `board`/`list`/other object, never an array element, never a regex scan of raw text —
+ * so a card with `due: null` yields null even when an unrelated nested object carries a `due`.
+ * Returns null (never throws) for any missing/ambiguous/unparseable result so the safeguard
+ * cleanly no-ops rather than fabricating a value.
  */
 export function extractVerifiedDueFromTrelloReadContent(
   content: Array<{ type: string; text?: string }> | undefined,
 ): string | null {
-  if (!content) return null;
-  for (const block of content) {
-    if (block.type !== "text" || typeof block.text !== "string") continue;
-    try {
-      const parsed = findDueField(JSON.parse(block.text), 3);
-      if (parsed) return parsed;
-    } catch {
-      // fall through to the regex fallback below
-    }
-    const match = block.text.match(/"due"\s*:\s*"([^"]+)"/);
-    if (match && ISO_UTC_DUE_PATTERN.test(match[1])) return match[1];
-  }
-  return null;
+  const card = extractCardObject(content);
+  return card !== null && isValidUtcDue(card.due) ? card.due : null;
 }
 
 /** Verified Trello `due`, deterministically converted to Europe/Kyiv using the
@@ -690,12 +614,94 @@ export function finalizeProjectHealthReply(reply: string, observation: ProjectHe
   return selectProjectHealthRelay(observation) ?? reply;
 }
 
-const VERIFICATION_NUDGE_TEXT =
-  "Системна перевірка: у цьому turn був виклик Trello write-інструменту без " +
-  "наступного read-виклику САМЕ ТОГО Ж об'єкта (той самий cardId), що підтверджує " +
-  "результат. Перш ніж відповідати користувачу, зроби окремий Trello read саме того " +
-  "об'єкта, який ти щойно змінив, і повідом користувачу підтверджений результат (або " +
-  "скажи чесно, якщо перевірка показала розбіжність).";
+/**
+ * The single bounded corrective nudge (#8, kept by #31). It asks for direct reads only — never a
+ * replay of the write — and names the exact cards whose mutations are still unverified.
+ */
+export function buildVerificationNudgeText(cardIds: string[]): string {
+  return (
+    "Системна перевірка: у цьому turn є Trello-запис(и), які ще не підтверджені прямим " +
+    "читанням САМЕ ТІЄЇ картки, яку вони змінили, після запису (trelloReadCard, action get). " +
+    "НЕ повторюй запис і не створюй нову картку. Перш ніж відповідати користувачу, зроби окремий " +
+    "trelloReadCard для кожної з цих карток: " +
+    cardIds.join(", ") +
+    ". Потім повідом лише підтверджений результат кожної зміни (або чесно скажи, якщо " +
+    "перевірка показала розбіжність)."
+  );
+}
+
+/**
+ * Thrown when a turn attempted Trello mutations and at least one is still unverified after the one
+ * bounded corrective nudge (#31). The message is deterministic, user-safe and honest about each
+ * mutation (what Trello confirmed, what it did not) — it is derived from tool events, never from
+ * model prose. `modelReply` is the model's own, UNVETTED final text: it may claim success for an
+ * unverified mutation, so callers must not show it as an outcome.
+ */
+export class DjonikUnverifiedMutationError extends Error {
+  readonly outcomes: MutationOutcome[];
+  readonly modelReply: string;
+
+  constructor(outcomes: MutationOutcome[], modelReply: string) {
+    super(
+      "Djonik mutated Trello but did not verify the write with an independent read in this turn.\n" +
+        describeMutationOutcomes(outcomes, describeDueForUser),
+    );
+    this.name = "DjonikUnverifiedMutationError";
+    this.outcomes = outcomes;
+    this.modelReply = modelReply;
+  }
+}
+
+/**
+ * One due line, deterministically from the VERIFIED Trello due only (#23): the requested due is
+ * never stated as fact. A verified due equal to the requested instant is the normal confirmation;
+ * a different one is the explicit mismatch sentence. Also used to render the partial-outcome report.
+ */
+function describeDueForUser(due: { intendedDue: string; verifiedDue: string }): string {
+  const verifiedFacts = computeKyivDueFacts(due.verifiedDue);
+  return verifiedFacts !== null
+    ? buildVerifiedDueConfirmation({ intendedDue: due.intendedDue, verifiedFacts })
+    : `дедлайн у Trello: ${due.verifiedDue}`;
+}
+
+/** Kyiv facts for every effective (non-superseded) confirmed mutation that carried a due-date result. */
+export function dueOutcomesFromMutations(outcomes: MutationOutcome[]): DueWriteOutcome[] {
+  const dueOutcomes: DueWriteOutcome[] = [];
+  for (const outcome of outcomes) {
+    if (!isConfirmed(outcome) || outcome.superseded || !outcome.due) continue;
+    const verifiedFacts = computeKyivDueFacts(outcome.due.verifiedDue);
+    if (verifiedFacts !== null) dueOutcomes.push({ intendedDue: outcome.due.intendedDue, verifiedFacts });
+  }
+  return dueOutcomes;
+}
+
+/**
+ * Final reply for a turn with NO unresolved mutation (#31; the unresolved case throws
+ * `DjonikUnverifiedMutationError` before this).
+ *
+ * - Any `failed` (tool-errored) write: the tool error is authoritative, so the reply is the
+ *   deterministic per-mutation report (`❌` failed, `✅`/`⚠️` confirmed ones) and the model's text
+ *   is NOT used at all — it could claim the failed write succeeded, and telling it apart from an
+ *   honest message would need prose parsing.
+ * - Otherwise ordinary confirmed turns keep the model's reply, except that a confirmed due-date
+ *   write keeps the #23 guarantee: the wrapper owns the whole confirmation (a lone confirmed
+ *   mutation gets the exact #23 sentence — the "differs from what was sent" wording when Trello holds
+ *   another due; several get one deterministic line each), so no model due wording survives.
+ */
+export function finalizeMutationReply(reply: string, outcomes: MutationOutcome[]): string {
+  if (outcomes.some(isFailed)) return describeMutationOutcomes(outcomes, describeDueForUser);
+
+  const effective = outcomes.filter((outcome) => isConfirmed(outcome) && !outcome.superseded);
+  const dueOutcomes = dueOutcomesFromMutations(outcomes);
+  if (dueOutcomes.length === 0) return reply;
+  if (effective.length === 1) return finalizeDueDateReply(reply, dueOutcomes[0]);
+  return effective
+    .map((outcome) => {
+      const line = outcome.due ? describeDueForUser(outcome.due) : "Зміни підтверджено читанням картки.";
+      return `${describeMutationTarget(outcome)}: ${line}`;
+    })
+    .join("\n");
+}
 
 const MAX_VERIFICATION_NUDGES = 1;
 
@@ -766,20 +772,8 @@ export async function connectToDjonik(
    * Scoped to one `send()` call — cleared at the start of each.
    */
   const mcpToolCallsById = new Map<string, { serverName: string; toolName: string; input: Record<string, unknown> }>();
-  /** True from a successful Trello write until a verifying read of the same object is observed. */
-  let unverifiedTrelloWrite = false;
-  /** Which write tool is pending verification, so a read can be checked against the right pairing. */
-  let pendingWriteTool: string | null = null;
-  /** The object id the pending write named, or null when this write tool has no known identity field
-   *  (falls back to "any successful Trello read clears it"). */
-  let pendingWriteObjectId: string | null = null;
-  /** The `due` value the pending write's own input named, if any — never trusted as
-   *  the final answer, only used to know a due-date claim needs deterministic backup. */
-  let pendingWriteDue: string | null = null;
-  /** Set once this turn's pending due-date write is verified by a same-card read whose
-   *  result contains a parseable `due` — at that point the wrapper, not the model,
-   *  owns the turn's final due-date confirmation wording (Issue #23). */
-  let dueOutcomeForTurn: DueWriteOutcome | null = null;
+  /** This turn's per-mutation Trello verification ledger (#31); replaced at the start of every turn. */
+  let ledger = new TrelloMutationLedger();
   let turnTelemetry: DjonikTurnTelemetryCollector | null = null;
   /** Session usage events are cumulative; this is the completed-turn baseline. */
   let previousSessionUsage: DjonikCumulativeUsage | null = null;
@@ -827,6 +821,12 @@ export async function connectToDjonik(
             toolName: event.name,
             input: event.input as Record<string, unknown>,
           });
+          ledger.recordToolUse({
+            id: event.id,
+            serverName: event.mcp_server_name,
+            toolName: event.name,
+            input: event.input as Record<string, unknown>,
+          });
           onTrace?.({
             type: "mcp_tool_use",
             serverName: event.mcp_server_name,
@@ -846,49 +846,13 @@ export async function connectToDjonik(
             });
             turnTelemetry?.recordMcpResult();
           }
-          if (call && !event.is_error) {
-            if (isTrelloWriteTool(call.serverName, call.toolName)) {
-              unverifiedTrelloWrite = true;
-              pendingWriteTool = call.toolName;
-              pendingWriteObjectId = writeObjectId(call.toolName, call.input);
-              pendingWriteDue = readStringField(call.input, "due");
-            } else if (isTrelloReadTool(call.serverName, call.toolName) && unverifiedTrelloWrite) {
-              // Identity known: only a read of the exact same object verifies it. An
-              // unrelated or mismatched-id read leaves the write unverified. No identity
-              // field known for this write tool type (e.g. a card create, before an id
-              // exists): fall back to the looser "any successful Trello read clears it".
-              const identityVerified =
-                pendingWriteObjectId !== null
-                  ? pendingWriteTool !== null &&
-                    readVerifiesWrite(pendingWriteTool, pendingWriteObjectId, call.toolName, call.input)
-                  : true;
-
-              if (identityVerified && pendingWriteDue === null) {
-                // Ordinary write with no due-date change: identity verification alone
-                // is sufficient, exactly as before Issue #23.
-                unverifiedTrelloWrite = false;
-                pendingWriteTool = null;
-                pendingWriteObjectId = null;
-              } else if (identityVerified && pendingWriteDue !== null) {
-                // Issue #23: a due-bearing write additionally requires a parseable
-                // verified `due` from THIS SAME read before the write counts as
-                // verified at all — never the write's own input, never memory, never
-                // an earlier turn. If extraction fails, deliberately leave the write
-                // state untouched (still unverified) so the existing corrective-nudge
-                // / fail-closed mechanism below applies to due-date writes exactly as
-                // it already does to identity — no fabricated exact due confirmation
-                // is ever produced from an unconfirmable read.
-                const verifiedDue = extractVerifiedDueFromTrelloReadContent(event.content);
-                const verifiedFacts = verifiedDue !== null ? computeKyivDueFacts(verifiedDue) : null;
-                if (verifiedDue !== null && verifiedFacts !== null) {
-                  dueOutcomeForTurn = { intendedDue: pendingWriteDue, verifiedFacts };
-                  unverifiedTrelloWrite = false;
-                  pendingWriteTool = null;
-                  pendingWriteObjectId = null;
-                  pendingWriteDue = null;
-                }
-              }
-            }
+          // Every Trello write/read result is correlated to ITS OWN tool call by tool-use id (#31).
+          if (call) {
+            ledger.recordToolResult(
+              event.mcp_tool_use_id,
+              Boolean(event.is_error),
+              event.content as Array<{ type: string; text?: string }> | undefined,
+            );
           }
           break;
         }
@@ -975,11 +939,7 @@ export async function connectToDjonik(
    * still go through one queue.
    */
   async function sendPartsSerial(parts: DjonikTurnPart[]): Promise<string> {
-    unverifiedTrelloWrite = false;
-    pendingWriteTool = null;
-    pendingWriteObjectId = null;
-    pendingWriteDue = null;
-    dueOutcomeForTurn = null;
+    ledger = new TrelloMutationLedger();
     projectHealthTurn = { specialistMessages: [], trelloWriteAttempted: false };
     mcpToolCallsById.clear();
     turnTelemetry = createTurnTelemetryCollector(turnSource, session.id, previousSessionUsage);
@@ -1017,27 +977,32 @@ export async function connectToDjonik(
     try {
       let reply = await runTurn([{ type: "user.message", content }]);
 
-      for (let attempt = 0; unverifiedTrelloWrite && attempt < MAX_VERIFICATION_NUDGES; attempt += 1) {
+      let outcomes = ledger.outcomes();
+      for (let attempt = 0; outcomes.some(isNudgeable) && attempt < MAX_VERIFICATION_NUDGES; attempt += 1) {
         onTrace?.({ type: "verification_nudge_sent", attempt: attempt + 1 });
         turnTelemetry.recordVerificationNudge();
-        reply = await runTurn([{ type: "user.message", content: [{ type: "text", text: VERIFICATION_NUDGE_TEXT }] }]);
+        reply = await runTurn([
+          {
+            type: "user.message",
+            content: [{ type: "text", text: buildVerificationNudgeText(nudgeTargetIds(outcomes)) }],
+          },
+        ]);
+        outcomes = ledger.outcomes();
       }
 
-      if (unverifiedTrelloWrite) {
+      if (outcomes.some(isUnresolved)) {
         onTrace?.({ type: "write_unverified_failure" });
-        throw new Error(
-          "Djonik mutated Trello but did not verify the write with an independent read in this turn.",
-        );
+        throw new DjonikUnverifiedMutationError(outcomes, reply);
       }
 
-      // Issue #23: prompt/Skill guidance alone was tried twice and failed twice on the
-      // same reproducible case, including a weekday-only contradiction check that a
-      // wrong-date-but-right-weekday reply would slip past. For a verified due-date
-      // write, the wrapper now owns the entire final due-date confirmation
-      // deterministically instead of trusting or patching the model's wording.
-      const dueTrace = describeDueOutcomeForTrace(dueOutcomeForTurn);
-      if (dueTrace) onTrace?.({ type: "due_date_reply_finalized", ...dueTrace });
-      reply = finalizeDueDateReply(reply, dueOutcomeForTurn);
+      // Issue #23 (per mutation since #31): prompt/Skill guidance alone was tried twice and failed
+      // twice on the same reproducible case. For a verified due-date write the wrapper — not the
+      // model — owns the whole final due-date confirmation deterministically.
+      for (const dueOutcome of dueOutcomesFromMutations(outcomes)) {
+        const dueTrace = describeDueOutcomeForTrace(dueOutcome);
+        if (dueTrace) onTrace?.({ type: "due_date_reply_finalized", ...dueTrace });
+      }
+      reply = finalizeMutationReply(reply, outcomes);
 
       // Issue #28: after Claude has natively delegated and the specialist has returned exactly one
       // result, the specialist's exact string — not the coordinator's possibly rewritten message —
@@ -1061,9 +1026,8 @@ export async function connectToDjonik(
    * FIFO serialization boundary (#25 live-validation blocker fix). Grouped
    * Telegram dispatches settle on independent timers and can therefore call
    * `send`/`sendOrdered` concurrently on the same handle; `sendPartsSerial`
-   * above and its private closure state (`turnTelemetry`, `pendingWriteTool`,
-   * `pendingWriteObjectId`, `pendingWriteDue`, `dueOutcomeForTurn`,
-   * `unverifiedTrelloWrite`, `mcpToolCallsById`) and the single event-stream
+   * above and its private closure state (`turnTelemetry`, the per-turn Trello mutation
+   * `ledger` (#31), `mcpToolCallsById`) and the single event-stream
    * `iterator` are only safe for one in-flight turn at a time. `enqueue` is a
    * thin queue in front of the unchanged `sendPartsSerial` logic: each call
    * waits for every previously queued call to fully settle (resolve or

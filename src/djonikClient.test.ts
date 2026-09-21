@@ -9,6 +9,7 @@ import {
   buildVerifiedDueConfirmation,
   finalizeDueDateReply,
   DjonikSessionDeadError,
+  DjonikUnverifiedMutationError,
   PROJECT_HEALTH_SPECIALIST_AGENT_ID,
   resolveProjectHealthSpecialistName,
   selectProjectHealthRelay,
@@ -185,6 +186,12 @@ function trelloCardReadContent(due: string): Array<{ type: string; text: string 
   return [{ type: "text", text: JSON.stringify({ id: "card_A", name: "Test card", due }) }];
 }
 
+/** A successful Trello result whose content is ONE card object as JSON (#31) — the shape a
+ *  `trelloWriteCard` result / direct `trelloReadCard` (`get`) result must carry to be trusted. */
+function cardContent(card: Record<string, unknown>): Array<{ type: string; text: string }> {
+  return [{ type: "text", text: JSON.stringify(card) }];
+}
+
 test("turn telemetry emits content-free explicit-source usage delta with deterministic time", () => {
   const telemetry = createTurnTelemetryCollector("telegram", "session_test123", null, () => "2026-09-16T10:00:00.000Z");
   telemetry.recordModelIteration();
@@ -344,10 +351,10 @@ test("a terminal session.error immediately fails the turn", async () => {
 
 test("a Trello write followed by a Trello read in the same turn returns the reply as-is", async () => {
   const { client, sendCalls } = createFakeClient([
-    mcpToolUse("call_1", "trelloWriteCard"),
-    mcpToolResult("call_1"),
-    mcpToolUse("call_2", "trelloReadCard"),
-    mcpToolResult("call_2"),
+    mcpToolUse("call_1", "trelloWriteCard", { action: "create", name: "Card A" }),
+    mcpToolResult("call_1", false, cardContent({ id: "card_A", name: "Card A" })),
+    mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
+    mcpToolResult("call_2", false, cardContent({ id: "card_A", name: "Card A" })),
     AGENT_MESSAGE,
     IDLE,
   ]);
@@ -363,13 +370,13 @@ test("a Trello write followed by a Trello read in the same turn returns the repl
 test("a Trello write with no verifying read triggers exactly one corrective nudge, then succeeds if it verifies", async () => {
   const { client, sendCalls } = createFakeClient([
     // First turn: write only, agent claims success without reading back.
-    mcpToolUse("call_1", "trelloWriteCard"),
+    mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A", name: "Card A" }),
     mcpToolResult("call_1"),
     AGENT_MESSAGE,
     IDLE,
     // Corrective turn: agent verifies with a read, then replies again.
-    mcpToolUse("call_2", "trelloReadCard"),
-    mcpToolResult("call_2"),
+    mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
+    mcpToolResult("call_2", false, cardContent({ id: "card_A", name: "Card A" })),
     { type: "agent.message", content: [{ type: "text", text: "Перевірив: усе гаразд." }] },
     IDLE,
   ]);
@@ -385,7 +392,7 @@ test("a Trello write with no verifying read triggers exactly one corrective nudg
 test("a Trello write that is never verified fails the turn instead of returning a false success", async () => {
   const { client, sendCalls } = createFakeClient([
     // First turn: write only, no read.
-    mcpToolUse("call_1", "trelloWriteCard"),
+    mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A" }),
     mcpToolResult("call_1"),
     AGENT_MESSAGE,
     IDLE,
@@ -400,30 +407,30 @@ test("a Trello write that is never verified fails the turn instead of returning 
   session.close();
 });
 
-test("a failed Trello write (is_error) does not require verification", async () => {
+test("a failed Trello write (is_error) needs no verification, is not nudged, and is reported deterministically (not by the model)", async () => {
   const { client, sendCalls } = createFakeClient([
-    mcpToolUse("call_1", "trelloWriteCard"),
-    mcpToolResult("call_1", true),
-    { type: "agent.message", content: [{ type: "text", text: "Не вдалося створити картку." }] },
+    mcpToolUse("call_1", "trelloWriteCard", { action: "create", name: "Card X" }),
+    mcpToolResult("call_1", true, [{ type: "text", text: "Board  not\nfound" }]),
+    // The model falsely claims success after the tool error.
+    { type: "agent.message", content: [{ type: "text", text: "Готово! Картку створено." }] },
     IDLE,
   ]);
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
 
   const reply = await session.send("Створи картку");
 
-  assert.equal(reply, "Не вдалося створити картку.");
-  assert.equal(sendCalls.length, 1);
+  assert.equal(reply, "❌ Не виконано (помилка інструмента): «Card X» — Board not found");
+  assert.doesNotMatch(reply, /Готово|створено/i, "the model's false success text never reaches the user");
+  assert.equal(sendCalls.length, 1, "a failed write is not nudged, so it cannot be replayed");
   session.close();
 });
-
-// --- Object-identity verification: a read only counts if it names the same card. ---
 
 test("write card A then read card A verifies (same object id) and returns the reply as-is", async () => {
   const { client, sendCalls } = createFakeClient([
     mcpToolUse("call_1", "trelloWriteCard", { cardId: "card_A", desc: "x" }),
     mcpToolResult("call_1"),
     mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
-    mcpToolResult("call_2"),
+    mcpToolResult("call_2", false, cardContent({ id: "card_A", desc: "x" })),
     AGENT_MESSAGE,
     IDLE,
   ]);
@@ -487,18 +494,18 @@ test("write card A then an unrelated trelloSearch does not verify, so the turn f
 // a rejected clear-due write must not demand verification or produce a false success, and
 // an (currently hypothetical) accepted one is verified the same way as any other write.
 
-test("a rejected due-clear write (is_error) does not require verification and reports honestly", async () => {
+test("a rejected due-clear write (is_error) is not nudged and is reported from the tool error, not the model's wording", async () => {
   const { client, sendCalls } = createFakeClient([
     mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A", due: "" }),
-    mcpToolResult("call_1", true),
-    { type: "agent.message", content: [{ type: "text", text: "Не вдалося очистити дедлайн: інструмент не підтримує порожнє значення due." }] },
+    mcpToolResult("call_1", true, [{ type: "text", text: "due must be a non-empty ISO 8601 string" }]),
+    { type: "agent.message", content: [{ type: "text", text: "Дедлайн знято з картки A." }] },
     IDLE,
   ]);
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
 
   const reply = await session.send("Прибери дедлайн з картки A");
 
-  assert.equal(reply, "Не вдалося очистити дедлайн: інструмент не підтримує порожнє значення due.");
+  assert.equal(reply, "❌ Не виконано (помилка інструмента): картка card_A — due must be a non-empty ISO 8601 string");
   assert.equal(sendCalls.length, 1, "no corrective nudge should be sent for a failed write");
   session.close();
 });
@@ -508,7 +515,7 @@ test("a due-clear write verified by a same-card read succeeds like any other wri
     mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A", due: "" }),
     mcpToolResult("call_1"),
     mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
-    mcpToolResult("call_2"),
+    mcpToolResult("call_2", false, cardContent({ id: "card_A", due: null })),
     { type: "agent.message", content: [{ type: "text", text: "Дедлайн знято з картки A." }] },
     IDLE,
   ]);
@@ -876,8 +883,8 @@ test("sendOrdered skips an empty text part (e.g. a medialess fragment with no ca
 
 test("sendOrdered still enforces write-verify and due-date finalization (shares one pipeline with send)", async () => {
   const { client, sendCalls } = createFakeClient([
-    mcpToolUse("call_1", "trelloWriteCard", { action: "create", cardId: "card_A" }),
-    mcpToolResult("call_1"),
+    mcpToolUse("call_1", "trelloWriteCard", { action: "create", name: "Card A" }),
+    mcpToolResult("call_1", false, cardContent({ id: "card_A", name: "Card A" })),
     AGENT_MESSAGE,
     IDLE,
     // Corrective-nudge turn: agent still doesn't verify, so the write ultimately fails closed.
@@ -983,7 +990,7 @@ test("write card A with no read, then read card A after the corrective nudge, ve
     IDLE,
     // Corrective turn: agent reads the correct card this time.
     mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
-    mcpToolResult("call_2"),
+    mcpToolResult("call_2", false, cardContent({ id: "card_A" })),
     { type: "agent.message", content: [{ type: "text", text: "Перевірив card A: усе гаразд." }] },
     IDLE,
   ]);
@@ -1134,8 +1141,8 @@ test("end-to-end: correct weekday but wrong calendar date in the model's reply i
 
 test("end-to-end: verified due equals intended due — normal success wording, no mismatch note", async () => {
   const { client } = createFakeClient([
-    mcpToolUse("call_1", "trelloWriteCard", { action: "create", cardId: "card_A", due: "2026-09-19T19:00:00.000Z" }),
-    mcpToolResult("call_1"),
+    mcpToolUse("call_1", "trelloWriteCard", { action: "create", due: "2026-09-19T19:00:00.000Z" }),
+    mcpToolResult("call_1", false, cardContent({ id: "card_A", due: "2026-09-19T19:00:00.000Z" })),
     mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
     mcpToolResult("call_2", false, trelloCardReadContent("2026-09-19T19:00:00.000Z")),
     { type: "agent.message", content: [{ type: "text", text: "Субота, 19 вересня 2026, 22:00" }] },
@@ -1201,7 +1208,7 @@ test("normal Trello writes without a due-date change are unaffected by the backs
     mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A", name: "Renamed" }),
     mcpToolResult("call_1"),
     mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
-    mcpToolResult("call_2", false, trelloCardReadContent("2026-09-21T21:30:00.000Z")),
+    mcpToolResult("call_2", false, cardContent({ id: "card_A", name: "Renamed", due: "2026-09-21T21:30:00.000Z" })),
     { type: "agent.message", content: [{ type: "text", text: "Назву картки A оновлено." }] },
     IDLE,
   ]);
@@ -1376,7 +1383,7 @@ test("Scenario E: a concurrently queued read-only turn cannot reset an earlier q
   push(mcpToolUse("call_1", "trelloWriteCard", { cardId: "card_A" }));
   push(mcpToolResult("call_1"));
   push(mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }));
-  push(mcpToolResult("call_2"));
+  push(mcpToolResult("call_2", false, cardContent({ id: "card_A" })));
   push({ type: "agent.message", content: [{ type: "text", text: "Готово (turn 1)." }] });
   push({ type: "session.status_idle" });
 
@@ -1501,7 +1508,7 @@ test("Scenario E (inverse order): a queued write+verify turn still verifies corr
   push(mcpToolUse("call_1", "trelloWriteCard", { cardId: "card_A" }));
   push(mcpToolResult("call_1"));
   push(mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }));
-  push(mcpToolResult("call_2"));
+  push(mcpToolResult("call_2", false, cardContent({ id: "card_A" })));
   push({ type: "agent.message", content: [{ type: "text", text: "Готово (turn 2)." }] });
   push({ type: "session.status_idle" });
   assert.equal(await p2, "Готово (turn 2).", "turn 2's own write is still verified correctly after an unrelated turn 1");
@@ -1750,7 +1757,7 @@ test("#28 7: a verified Trello write turn is left to the existing write pipeline
       mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A" }),
       mcpToolResult("call_1"),
       mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
-      mcpToolResult("call_2"),
+      mcpToolResult("call_2", false, cardContent({ id: "card_A" })),
       primaryMessage("Готово, картку оновлено."),
       IDLE,
     ],
@@ -1777,7 +1784,8 @@ test("#28 7b: a failed (is_error) Trello write attempt also keeps the mutation t
   );
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
 
-  assert.strictEqual(await session.send("Онови картку A"), "Не вдалося оновити картку.");
+  // Neither the specialist's string nor the model's text: the mutation turn is answered from the tool outcome (#31).
+  assert.strictEqual(await session.send("Онови картку A"), "❌ Не виконано (помилка інструмента): картка card_A");
   session.close();
 });
 
@@ -1946,5 +1954,807 @@ test("#28: the finalizer does not touch telemetry — model-iteration and tool a
   assert.equal(records.length, 1);
   assert.equal(records[0].modelIterations, 2);
   assert.equal(records[0].toolCalls, 0);
+  session.close();
+});
+
+// ---------------------------------------------------------------------------------------------
+// Issue #31: every Trello mutation is verified against its OWN target and its OWN requested
+// result. These drive the real `connectToDjonik` pipeline with scripted event streams and assert
+// the SAFE outcome (the audit R1/R2/R6 reproductions must no longer report success).
+// ---------------------------------------------------------------------------------------------
+
+const DUE_A = "2026-09-21T21:30:00.000Z"; // Kyiv: вівторок, 22 вересня 2026, 00:30
+const DUE_KYIV_A = "вівторок, 22 вересня 2026, 00:30 за Києвом";
+
+function msg(text: string): unknown {
+  return { type: "agent.message", content: [{ type: "text", text }] };
+}
+
+/** The text of the n-th event batch the client sent to the provider (0 = the user turn). */
+function sentText(sendCalls: unknown[], index: number): string {
+  const call = sendCalls[index] as { events: Array<{ content: Array<{ text?: string }> }> };
+  return call.events[0].content.map((block) => block.text ?? "").join("");
+}
+
+async function connect(events: unknown[], agent?: unknown) {
+  const fake = createFakeClient(events, agent);
+  const session = await connectToDjonik(fake.client, "agent_x", "env_x", "memstore_x", "vlt_x");
+  return { ...fake, session };
+}
+
+async function unverified(promise: Promise<string>): Promise<DjonikUnverifiedMutationError> {
+  try {
+    await promise;
+  } catch (error) {
+    assert.ok(error instanceof DjonikUnverifiedMutationError, `expected DjonikUnverifiedMutationError, got ${String(error)}`);
+    return error;
+  }
+  assert.fail("the turn must fail closed instead of returning the model's reply");
+}
+
+test("#31 R1: create A followed only by an unrelated board read never verifies A", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("w", "trelloWriteCard", { action: "create", name: "A" }),
+    mcpToolResult("w", false, cardContent({ id: "A", name: "A" })),
+    mcpToolUse("r", "trelloReadBoard", { action: "get", boardId: "other" }),
+    mcpToolResult("r", false, cardContent({ id: "other", name: "Other board" })),
+    msg("Created A"),
+    IDLE,
+    // Corrective turn: still only a board read.
+    mcpToolUse("r2", "trelloReadBoard", { action: "get", boardId: "other" }),
+    mcpToolResult("r2", false, cardContent({ id: "other" })),
+    msg("Created A, really"),
+    IDLE,
+  ]);
+
+  const error = await unverified(session.send("Створи картку A"));
+
+  assert.equal(sendCalls.length, 2, "exactly one bounded corrective nudge");
+  assert.match(sentText(sendCalls, 1), /A/, "the nudge names the card to read");
+  assert.match(sentText(sendCalls, 1), /НЕ повторюй запис/, "the nudge must never ask for the write to be replayed");
+  assert.deepEqual(error.outcomes.map((o) => o.status), ["awaiting_read"]);
+  assert.match(error.message, /did not verify the write/);
+  assert.match(error.message, /⚠️ НЕ підтверджено.*«A» \(A\)/);
+  assert.equal(error.modelReply, "Created A, really", "the unvetted model text is exposed only as data, not as the outcome");
+  session.close();
+});
+
+test("#31 R2: writes A and B with a direct read of B only — B verifies, A is reported unresolved", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("a", "trelloWriteCard", { action: "update", cardId: "A", name: "new A" }),
+    mcpToolResult("a", false, cardContent({ id: "A" })),
+    mcpToolUse("b", "trelloWriteCard", { action: "update", cardId: "B", name: "new B" }),
+    mcpToolResult("b", false, cardContent({ id: "B" })),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "B" }),
+    mcpToolResult("r", false, cardContent({ id: "B", name: "new B" })),
+    msg("Updated both"),
+    IDLE,
+    msg("Yes, both are updated"), // corrective turn: no read of A
+    IDLE,
+  ]);
+
+  const error = await unverified(session.send("Онови A і B"));
+
+  assert.equal(sendCalls.length, 2);
+  assert.match(sentText(sendCalls, 1), /\bA\b/);
+  assert.doesNotMatch(sentText(sendCalls, 1), /\bB\b/, "the nudge asks only for the unresolved card, not the verified one");
+  assert.deepEqual(error.outcomes.map((o) => o.status), ["awaiting_read", "verified"]);
+  assert.match(error.message, /⚠️ НЕ підтверджено.*«new A» \(A\)/);
+  assert.match(error.message, /✅ Підтверджено.*«new B» \(B\)/, "the verified part of a partial outcome is preserved");
+  session.close();
+});
+
+test("#31 R2 recovery: the one corrective nudge reads A after B, and both then verify", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("a", "trelloWriteCard", { action: "update", cardId: "A", name: "new A" }),
+    mcpToolResult("a", false, cardContent({ id: "A" })),
+    mcpToolUse("b", "trelloWriteCard", { action: "update", cardId: "B", name: "new B" }),
+    mcpToolResult("b", false, cardContent({ id: "B" })),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "B" }),
+    mcpToolResult("r", false, cardContent({ id: "B", name: "new B" })),
+    msg("Updated both"),
+    IDLE,
+    mcpToolUse("r2", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("r2", false, cardContent({ id: "A", name: "new A" })),
+    msg("Перевірив обидві."),
+    IDLE,
+  ]);
+
+  assert.equal(await session.send("Онови A і B"), "Перевірив обидві.");
+  assert.equal(sendCalls.length, 2);
+  session.close();
+});
+
+test("#31: both writes followed by their own correct direct reads verify independently with no nudge", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("a", "trelloWriteCard", { action: "update", cardId: "A", name: "new A" }),
+    mcpToolResult("a", false, cardContent({ id: "A" })),
+    mcpToolUse("b", "trelloWriteCard", { action: "update", cardId: "B", name: "new B" }),
+    mcpToolResult("b", false, cardContent({ id: "B" })),
+    mcpToolUse("ra", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("ra", false, cardContent({ id: "A", name: "new A" })),
+    mcpToolUse("rb", "trelloReadCard", { action: "get", cardIdOrUrl: "B" }),
+    mcpToolResult("rb", false, cardContent({ id: "B", name: "new B" })),
+    msg("Обидві картки оновлено."),
+    IDLE,
+  ]);
+
+  assert.equal(await session.send("Онови A і B"), "Обидві картки оновлено.");
+  assert.equal(sendCalls.length, 1);
+  session.close();
+});
+
+test("#31: a direct read that happened BEFORE the write does not verify the later write", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("r0", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("r0", false, cardContent({ id: "A", name: "new A" })),
+    mcpToolUse("w", "trelloWriteCard", { action: "update", cardId: "A", name: "new A" }),
+    mcpToolResult("w", false, cardContent({ id: "A" })),
+    msg("Готово."),
+    IDLE,
+    msg("Так, все ок."),
+    IDLE,
+  ]);
+
+  const error = await unverified(session.send("Онови A"));
+  assert.equal(sendCalls.length, 2);
+  assert.deepEqual(error.outcomes.map((o) => o.status), ["awaiting_read"]);
+  session.close();
+});
+
+for (const [label, readEvents] of [
+  [
+    "a direct read of a DIFFERENT card",
+    [
+      mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "B" }),
+      mcpToolResult("r", false, cardContent({ id: "B", name: "new A" })),
+    ],
+  ],
+  [
+    "an errored direct read of the right card",
+    [
+      mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+      mcpToolResult("r", true, cardContent({ id: "A", name: "new A" })),
+    ],
+  ],
+  [
+    "an ambiguous (id-less) direct read result",
+    [
+      mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+      mcpToolResult("r", false, [{ type: "text", text: "Картка виглядає нормально" }]),
+    ],
+  ],
+  [
+    "a trelloSearch that happens to list the card",
+    [
+      mcpToolUse("r", "trelloSearch", { action: "search_cards", query: "A" }),
+      mcpToolResult("r", false, cardContent({ id: "A", name: "new A" })),
+    ],
+  ],
+] as const) {
+  test(`#31: ${label} does not verify the write (one nudge, then fail closed)`, async () => {
+    const { session, sendCalls } = await connect([
+      mcpToolUse("w", "trelloWriteCard", { action: "update", cardId: "A", name: "new A" }),
+      mcpToolResult("w", false, cardContent({ id: "A" })),
+      ...readEvents,
+      msg("Готово."),
+      IDLE,
+      msg("Все ще готово."),
+      IDLE,
+    ]);
+
+    const error = await unverified(session.send("Онови A"));
+    assert.equal(sendCalls.length, 2);
+    assert.deepEqual(error.outcomes.map((o) => o.status), ["awaiting_read"]);
+    session.close();
+  });
+}
+
+test("#31: a create whose result exposes no unambiguous card id stays unverified and cannot be fixed by a nudge", async () => {
+  for (const content of [
+    undefined,
+    [{ type: "text", text: "Card created" }],
+    cardContent({ name: "A" }),
+    [
+      { type: "text", text: JSON.stringify({ id: "A" }) },
+      { type: "text", text: JSON.stringify({ id: "B" }) },
+    ],
+  ]) {
+    const { session, sendCalls } = await connect([
+      mcpToolUse("w", "trelloWriteCard", { action: "create", name: "A" }),
+      mcpToolResult("w", false, content),
+      // Even a perfect-looking read afterwards cannot retroactively identify the created card.
+      mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+      mcpToolResult("r", false, cardContent({ id: "A", name: "A" })),
+      msg("Створено A"),
+      IDLE,
+    ]);
+
+    const error = await unverified(session.send("Створи A"));
+    assert.equal(sendCalls.length, 1, "no nudge: another read cannot identify an unidentified create");
+    assert.deepEqual(error.outcomes.map((o) => o.status), ["target_unknown"]);
+    assert.match(error.message, /немає ID картки/);
+    session.close();
+  }
+});
+
+test("#31: create result id A followed by a direct read of A verifies and returns the reply as-is", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("w", "trelloWriteCard", { action: "create", name: "Нова картка", desc: "опис", listId: "L1" }),
+    mcpToolResult("w", false, cardContent({ id: "A", name: "Нова картка" })),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("r", false, cardContent({ id: "A", name: "Нова картка", desc: "опис", list: { id: "L1", name: "Backlog" } })),
+    msg("Створено «Нова картка» у Backlog."),
+    IDLE,
+  ]);
+
+  assert.equal(await session.send("Створи картку"), "Створено «Нова картка» у Backlog.");
+  assert.equal(sendCalls.length, 1);
+  session.close();
+});
+
+test("#31 postconditions: a verified read whose requested field differs is NOT reported as success", async () => {
+  const { session } = await connect([
+    mcpToolUse("w", "trelloWriteCard", { action: "update", cardId: "A", listId: "DONE" }),
+    mcpToolResult("w", false, cardContent({ id: "A" })),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("r", false, cardContent({ id: "A", list: { id: "BACKLOG", name: "Backlog" } })),
+    msg("Переніс у Done."),
+    IDLE,
+    mcpToolUse("r2", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("r2", false, cardContent({ id: "A", list: { id: "BACKLOG", name: "Backlog" } })),
+    msg("Переніс у Done, точно."),
+    IDLE,
+  ]);
+
+  const error = await unverified(session.send("Перенеси A у Done"));
+  assert.deepEqual(error.outcomes.map((o) => o.status), ["field_mismatch"]);
+  assert.match(error.message, /Trello після запису показує інші значення: список/);
+  session.close();
+});
+
+test("#31 move: a same-card read showing the requested list verifies", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("w", "trelloWriteCard", { action: "update", cardId: "A", listId: "DONE" }),
+    mcpToolResult("w", false, cardContent({ id: "A" })),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("r", false, cardContent({ id: "A", list: { id: "DONE", name: "Done" } })),
+    msg("Переніс у Done."),
+    IDLE,
+  ]);
+  assert.equal(await session.send("Перенеси A у Done"), "Переніс у Done.");
+  assert.equal(sendCalls.length, 1);
+  session.close();
+});
+
+test("#31 R6: card due:null with a nested unrelated board.due is never confirmed with the board's due", async () => {
+  const boardDue = "2026-09-25T10:00:00.000Z";
+  assert.equal(
+    extractVerifiedDueFromTrelloReadContent(cardContent({ id: "cardA", due: null, board: { id: "b", due: boardDue } })),
+    null,
+    "extraction is anchored to the verified card object",
+  );
+  assert.equal(
+    extractVerifiedDueFromTrelloReadContent(cardContent({ id: "cardA", board: { id: "b", due: boardDue } })),
+    null,
+    "a missing card due is not filled from a nested object either",
+  );
+
+  const { session, sendCalls } = await connect([
+    mcpToolUse("w", "trelloWriteCard", { action: "update", cardId: "cardA", due: DUE_A }),
+    mcpToolResult("w", false, cardContent({ id: "cardA" })),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "cardA" }),
+    mcpToolResult("r", false, cardContent({ id: "cardA", due: null, board: { id: "b", due: boardDue } })),
+    msg("Дедлайн виставлено."),
+    IDLE,
+    mcpToolUse("r2", "trelloReadCard", { action: "get", cardIdOrUrl: "cardA" }),
+    mcpToolResult("r2", false, cardContent({ id: "cardA", due: null, board: { id: "b", due: boardDue } })),
+    msg("Дедлайн виставлено, точно."),
+    IDLE,
+  ]);
+
+  const error = await unverified(session.send("Постав дедлайн"));
+  assert.equal(sendCalls.length, 2);
+  assert.deepEqual(error.outcomes.map((o) => o.status), ["field_mismatch"]);
+  assert.doesNotMatch(error.message, /25 вересня/, "the board's due must never be presented as the card's");
+  session.close();
+});
+
+test("#31: sequential writes to the SAME card resolve from one final read of the latest value", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("w1", "trelloWriteCard", { action: "update", cardId: "A", name: "Перша" }),
+    mcpToolResult("w1", false, cardContent({ id: "A" })),
+    mcpToolUse("w2", "trelloWriteCard", { action: "update", cardId: "A", name: "Друга" }),
+    mcpToolResult("w2", false, cardContent({ id: "A" })),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("r", false, cardContent({ id: "A", name: "Друга" })),
+    msg("Назву змінено на «Друга»."),
+    IDLE,
+  ]);
+  assert.equal(await session.send("Перейменуй A двічі"), "Назву змінено на «Друга».");
+  assert.equal(sendCalls.length, 1);
+  session.close();
+});
+
+test("#31: sequential writes to the same card fail closed when the final read shows a stale value", async () => {
+  const { session } = await connect([
+    mcpToolUse("w1", "trelloWriteCard", { action: "update", cardId: "A", name: "Перша" }),
+    mcpToolResult("w1", false, cardContent({ id: "A" })),
+    mcpToolUse("w2", "trelloWriteCard", { action: "update", cardId: "A", name: "Друга" }),
+    mcpToolResult("w2", false, cardContent({ id: "A" })),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("r", false, cardContent({ id: "A", name: "Перша" })),
+    msg("Змінено."),
+    IDLE,
+    mcpToolUse("r2", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("r2", false, cardContent({ id: "A", name: "Перша" })),
+    msg("Змінено."),
+    IDLE,
+  ]);
+  const error = await unverified(session.send("Перейменуй A двічі"));
+  assert.ok(error.outcomes.every((o) => o.status === "field_mismatch"));
+  session.close();
+});
+
+test("#31 partial failure: a tool-errored write plus a verified write return a deterministic mixed report, not model text", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("a", "trelloWriteCard", { action: "create", name: "Alpha" }),
+    mcpToolResult("a", true),
+    mcpToolUse("b", "trelloWriteCard", { action: "update", cardId: "B", name: "Bravo" }),
+    mcpToolResult("b", false, cardContent({ id: "B" })),
+    mcpToolUse("rb", "trelloReadCard", { action: "get", cardIdOrUrl: "B" }),
+    mcpToolResult("rb", false, cardContent({ id: "B", name: "Bravo" })),
+    msg("Створив Alpha і оновив Bravo."),
+    IDLE,
+  ]);
+
+  const reply = await session.send("Створи Alpha і онови Bravo");
+
+  assert.equal(sendCalls.length, 1, "a failed write is not retried or nudged");
+  assert.equal(
+    reply,
+    ["❌ Не виконано (помилка інструмента): «Alpha»", "✅ Підтверджено читанням картки: «Bravo» (B)"].join("\n"),
+  );
+  assert.doesNotMatch(reply, /Створив Alpha/, "the model's claim that Alpha was created never reaches the user");
+  session.close();
+});
+
+test("#31 partial failure: failed A + verified B + unverified C fails closed with all three reported", async () => {
+  const { session } = await connect([
+    mcpToolUse("a", "trelloWriteCard", { action: "create", name: "Alpha" }),
+    mcpToolResult("a", true),
+    mcpToolUse("b", "trelloWriteCard", { action: "update", cardId: "B", name: "Bravo" }),
+    mcpToolResult("b", false, cardContent({ id: "B" })),
+    mcpToolUse("c", "trelloWriteCard", { action: "update", cardId: "C", name: "Charlie" }),
+    mcpToolResult("c", false, cardContent({ id: "C" })),
+    mcpToolUse("rb", "trelloReadCard", { action: "get", cardIdOrUrl: "B" }),
+    mcpToolResult("rb", false, cardContent({ id: "B", name: "Bravo" })),
+    msg("Усе зроблено."),
+    IDLE,
+    msg("Так, усе."),
+    IDLE,
+  ]);
+  const error = await unverified(session.send("Alpha, Bravo, Charlie"));
+  assert.deepEqual(error.outcomes.map((o) => o.status), ["failed", "verified", "awaiting_read"]);
+  assert.match(error.message, /❌.*«Alpha»/);
+  assert.match(error.message, /✅.*«Bravo»/);
+  assert.match(error.message, /⚠️.*«Charlie»/);
+  session.close();
+});
+
+test("#31: a write with no result event is unresolved (whether it applied is unknown) and is not nudged into a replay", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("w", "trelloWriteCard", { action: "update", cardId: "A", name: "n" }),
+    msg("Готово."),
+    IDLE,
+  ]);
+  const error = await unverified(session.send("Онови A"));
+  assert.equal(sendCalls.length, 1);
+  assert.deepEqual(error.outcomes.map((o) => o.status), ["no_result"]);
+  session.close();
+});
+
+test("#31: a write replayed during the corrective nudge is a NEW tracked mutation and never launders the original", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("w", "trelloWriteCard", { action: "create", name: "A" }),
+    mcpToolResult("w", false, cardContent({ id: "A" })),
+    msg("Створено."),
+    IDLE,
+    // Misbehaving corrective turn: creates a duplicate instead of reading A.
+    mcpToolUse("w2", "trelloWriteCard", { action: "create", name: "A" }),
+    mcpToolResult("w2", false, cardContent({ id: "A2" })),
+    mcpToolUse("r2", "trelloReadCard", { action: "get", cardIdOrUrl: "A2" }),
+    mcpToolResult("r2", false, cardContent({ id: "A2", name: "A" })),
+    msg("Перевірено."),
+    IDLE,
+  ]);
+  const error = await unverified(session.send("Створи A"));
+  assert.equal(sendCalls.length, 2, "still only one nudge");
+  assert.deepEqual(error.outcomes.map((o) => o.status), ["awaiting_read", "verified"]);
+  session.close();
+});
+
+test("#31 #23: a verified due write still owns the whole confirmation (single mutation, mismatch reporting preserved)", async () => {
+  const same = await connect([
+    mcpToolUse("w", "trelloWriteCard", { action: "update", cardId: "A", due: DUE_A }),
+    mcpToolResult("w", false, cardContent({ id: "A" })),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("r", false, cardContent({ id: "A", due: DUE_A, board: { due: "2026-01-01T00:00:00.000Z" } })),
+    msg("Понеділок, 22 вересня"),
+    IDLE,
+  ]);
+  assert.equal(await same.session.send("Дедлайн A"), `Готово. Trello підтвердив дедлайн: ${DUE_KYIV_A}.`);
+  same.session.close();
+
+  const differs = await connect([
+    mcpToolUse("w", "trelloWriteCard", { action: "update", cardId: "A", due: "2026-09-22T00:00:00.000Z" }),
+    mcpToolResult("w", false, cardContent({ id: "A" })),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("r", false, cardContent({ id: "A", due: DUE_A })),
+    msg("Готово"),
+    IDLE,
+  ]);
+  assert.equal(
+    await differs.session.send("Дедлайн A"),
+    `Картку оновлено, але Trello підтвердив дедлайн: ${DUE_KYIV_A}. Це відрізняється від значення, яке було відправлено.`,
+  );
+  differs.session.close();
+});
+
+test("#31 #23: several verified mutations with due dates get one deterministic line each — no model wording survives", async () => {
+  const { session } = await connect([
+    mcpToolUse("a", "trelloWriteCard", { action: "update", cardId: "A", name: "Alpha", due: DUE_A }),
+    mcpToolResult("a", false, cardContent({ id: "A" })),
+    mcpToolUse("b", "trelloWriteCard", { action: "update", cardId: "B", name: "Bravo", due: "2026-09-19T19:00:00.000Z" }),
+    mcpToolResult("b", false, cardContent({ id: "B" })),
+    mcpToolUse("ra", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("ra", false, cardContent({ id: "A", name: "Alpha", due: DUE_A })),
+    mcpToolUse("rb", "trelloReadCard", { action: "get", cardIdOrUrl: "B" }),
+    mcpToolResult("rb", false, cardContent({ id: "B", name: "Bravo", due: "2026-09-19T19:00:00.000Z" })),
+    msg("Alpha — понеділок, Bravo — неділя"),
+    IDLE,
+  ]);
+  const reply = await session.send("Постав дедлайни");
+  assert.equal(
+    reply,
+    [
+      `«Alpha» (A): Готово. Trello підтвердив дедлайн: ${DUE_KYIV_A}.`,
+      "«Bravo» (B): Готово. Trello підтвердив дедлайн: субота, 19 вересня 2026, 22:00 за Києвом.",
+    ].join("\n"),
+  );
+  session.close();
+});
+
+test("#31: a verified due write next to an unrelated failed write is reported deterministically for both", async () => {
+  const { session } = await connect([
+    mcpToolUse("a", "trelloWriteCard", { action: "update", cardId: "A", due: DUE_A }),
+    mcpToolResult("a", false, cardContent({ id: "A" })),
+    mcpToolUse("x", "trelloWriteCard", { action: "create", name: "Zed" }),
+    mcpToolResult("x", true),
+    mcpToolUse("ra", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("ra", false, cardContent({ id: "A", due: DUE_A })),
+    msg("Усе гаразд, Zed теж створено"),
+    IDLE,
+  ]);
+  const reply = await session.send("Дедлайн A і створи Zed");
+  assert.equal(
+    reply,
+    [`✅ картка A: Готово. Trello підтвердив дедлайн: ${DUE_KYIV_A}.`, "❌ Не виконано (помилка інструмента): «Zed»"].join("\n"),
+  );
+  session.close();
+});
+
+test("#31: Project Health read-only path is unaffected — Trello reads plus one exact specialist result still relay exactly", async () => {
+  const { session, sendCalls } = await connect(
+    [
+      threadCreated(),
+      mcpToolUse("s", "trelloSearch", { action: "search_boards", query: "Extract" }),
+      mcpToolResult("s", false, cardContent({ id: "board", name: "Extract" })),
+      mcpToolUse("r", "trelloReadCard", { action: "list_by_board", boardIdOrUrl: "board" }),
+      mcpToolResult("r", false, cardContent({ nodes: [] })),
+      specialistMessage("SPECIALIST EXACT"),
+      primaryMessage("coordinator rewrite"),
+      IDLE,
+    ],
+    projectHealthSessionAgent(),
+  );
+  assert.strictEqual(await session.send("Що зараз по Extract?"), "SPECIALIST EXACT");
+  assert.equal(sendCalls.length, 1, "read-only turns never trigger a verification nudge");
+  session.close();
+});
+
+test("#31 FIFO: an unverified turn does not leak its ledger into the next queued turn, and the session stays usable", async () => {
+  const { client, sendCalls, push } = createStreamedFakeClient();
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const p1 = session.send("Онови A");
+  const p2 = session.send("Онови B");
+  const outcome1 = p1.then(
+    () => "resolved",
+    (error: unknown) => error,
+  );
+
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 1);
+  // Turn 1: write A, never read A — even after the corrective nudge.
+  push(mcpToolUse("w1", "trelloWriteCard", { action: "update", cardId: "A", name: "new A" }));
+  push(mcpToolResult("w1", false, cardContent({ id: "A" })));
+  push(msg("Готово A."));
+  push({ type: "session.status_idle" });
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 2, "turn 1's own single nudge, before turn 2 may start");
+  push(msg("Так, A готово."));
+  push({ type: "session.status_idle" });
+  assert.ok((await outcome1) instanceof DjonikUnverifiedMutationError);
+
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 3, "the queued turn 2 starts only after turn 1 fully settled");
+  // Turn 2: a clean, fully verified write of a DIFFERENT card. A's stale requirement must not apply.
+  push(mcpToolUse("w2", "trelloWriteCard", { action: "update", cardId: "B", name: "new B" }));
+  push(mcpToolResult("w2", false, cardContent({ id: "B" })));
+  push(mcpToolUse("r2", "trelloReadCard", { action: "get", cardIdOrUrl: "B" }));
+  push(mcpToolResult("r2", false, cardContent({ id: "B", name: "new B" })));
+  push(msg("B готово."));
+  push({ type: "session.status_idle" });
+  assert.equal(await p2, "B готово.");
+  assert.equal(sendCalls.length, 3, "no nudge for the clean second turn");
+
+  session.close();
+});
+
+// ---------------------------------------------------------------------------------------------
+// #31 follow-up review: (1) a tool-errored mutation must never reach the user as model-authored
+// success; (2) the #23 intended-vs-verified due mismatch is an explicit, terminal, deterministic
+// outcome — never nudged/replayed, never stating the requested due as fact.
+// ---------------------------------------------------------------------------------------------
+
+const FALSE_SUCCESS = "Готово! Усе виконано успішно.";
+
+for (const [label, input] of [
+  ["create", { action: "create", name: "Нова" }],
+  ["update", { action: "update", cardId: "A", name: "Нова" }],
+  ["move", { action: "update", cardId: "A", listId: "DONE" }],
+] as const) {
+  test(`#31 failed ${label}: a single errored write + a model that claims success → the user only sees the failure`, async () => {
+    const { session, sendCalls } = await connect([
+      mcpToolUse("w", "trelloWriteCard", input),
+      mcpToolResult("w", true, [{ type: "text", text: "Trello API 400" }]),
+      msg(FALSE_SUCCESS),
+      IDLE,
+    ]);
+
+    const reply = await session.send("Зроби це");
+
+    assert.match(reply, /^❌ Не виконано \(помилка інструмента\): /);
+    assert.match(reply, /Trello API 400/, "the tool's own error text is surfaced");
+    assert.doesNotMatch(reply, /Готово|успішно/, "no model-authored success text");
+    assert.equal(sendCalls.length, 1, "a failed write is never nudged, so it can never be replayed");
+    session.close();
+  });
+}
+
+test("#31 failed write: a trivial model reply is irrelevant to the failure report", async () => {
+  const { session } = await connect([
+    mcpToolUse("w", "trelloWriteCard", { action: "update", cardId: "A", name: "n" }),
+    mcpToolResult("w", true),
+    msg("."),
+    IDLE,
+  ]);
+  assert.equal(await session.send("Онови A"), "❌ Не виконано (помилка інструмента): «n» (A)");
+  session.close();
+});
+
+test("#31 failed + verified: only the deterministic report reaches the user; a model that says both succeeded is not used", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("a", "trelloWriteCard", { action: "update", cardId: "A", name: "Alpha" }),
+    mcpToolResult("a", true, [{ type: "text", text: "card locked" }]),
+    mcpToolUse("b", "trelloWriteCard", { action: "update", cardId: "B", name: "Bravo" }),
+    mcpToolResult("b", false, cardContent({ id: "B" })),
+    mcpToolUse("rb", "trelloReadCard", { action: "get", cardIdOrUrl: "B" }),
+    mcpToolResult("rb", false, cardContent({ id: "B", name: "Bravo" })),
+    msg("Обидві картки оновлено!"),
+    IDLE,
+  ]);
+  const reply = await session.send("Онови A і B");
+  assert.equal(
+    reply,
+    [
+      "❌ Не виконано (помилка інструмента): «Alpha» (A) — card locked",
+      "✅ Підтверджено читанням картки: «Bravo» (B)",
+    ].join("\n"),
+  );
+  assert.equal(sendCalls.length, 1);
+  session.close();
+});
+
+test("#31 failed + unresolved: the turn fails closed; the report names the failed write and the nudge only asks about the unresolved card", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("a", "trelloWriteCard", { action: "update", cardId: "A", name: "Alpha" }),
+    mcpToolResult("a", true, [{ type: "text", text: "card locked" }]),
+    mcpToolUse("c", "trelloWriteCard", { action: "update", cardId: "C", name: "Charlie" }),
+    mcpToolResult("c", false, cardContent({ id: "C" })),
+    msg("Обидві оновлено!"),
+    IDLE,
+    msg("Так, обидві."), // corrective turn: C is still not read
+    IDLE,
+  ]);
+
+  const error = await unverified(session.send("Онови A і C"));
+
+  assert.equal(sendCalls.length, 2, "exactly one nudge");
+  assert.match(sentText(sendCalls, 1), /\bC\b/);
+  assert.doesNotMatch(sentText(sendCalls, 1), /\bA\b/, "the nudge never asks about (or for a retry of) the failed write");
+  assert.deepEqual(error.outcomes.map((o) => o.status), ["failed", "awaiting_read"]);
+  assert.match(error.message, /❌ Не виконано \(помилка інструмента\): «Alpha» \(A\) — card locked/);
+  assert.match(error.message, /⚠️ НЕ підтверджено: «Charlie» \(C\)/);
+  assert.doesNotMatch(error.message, /Обидві|Так, обидві/, "the model's text is not part of the message");
+  session.close();
+});
+
+test("#31 failed write: a write REPLAYED during the corrective nudge is a new mutation; the original failure still stands in the report", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("a", "trelloWriteCard", { action: "create", name: "Alpha" }),
+    mcpToolResult("a", true, [{ type: "text", text: "temporary error" }]),
+    mcpToolUse("c", "trelloWriteCard", { action: "update", cardId: "C", name: "Charlie" }),
+    mcpToolResult("c", false, cardContent({ id: "C" })),
+    msg("Готово."),
+    IDLE,
+    // Misbehaving corrective turn: replays the failed create (succeeding this time) and reads C.
+    mcpToolUse("a2", "trelloWriteCard", { action: "create", name: "Alpha" }),
+    mcpToolResult("a2", false, cardContent({ id: "A2", name: "Alpha" })),
+    mcpToolUse("rc", "trelloReadCard", { action: "get", cardIdOrUrl: "C" }),
+    mcpToolResult("rc", false, cardContent({ id: "C", name: "Charlie" })),
+    mcpToolUse("ra2", "trelloReadCard", { action: "get", cardIdOrUrl: "A2" }),
+    mcpToolResult("ra2", false, cardContent({ id: "A2", name: "Alpha" })),
+    msg("Перевірено."),
+    IDLE,
+  ]);
+  const reply = await session.send("Створи Alpha, онови Charlie");
+  assert.equal(sendCalls.length, 2, "still only one nudge");
+  // The replay is tracked as its own verified mutation; the ORIGINAL failure is never erased or laundered.
+  assert.equal(
+    reply,
+    [
+      "❌ Не виконано (помилка інструмента): «Alpha» — temporary error",
+      "✅ Підтверджено читанням картки: «Charlie» (C)",
+      "✅ Підтверджено читанням картки: «Alpha» (A2)",
+    ].join("\n"),
+  );
+  session.close();
+});
+
+test("#31 failed write with no tool error text still reports a failure and never success", async () => {
+  const { session } = await connect([
+    mcpToolUse("w", "trelloWriteCard", { action: "create", name: "Alpha" }),
+    mcpToolResult("w", true),
+    msg(FALSE_SUCCESS),
+    IDLE,
+  ]);
+  assert.equal(await session.send("Створи Alpha"), "❌ Не виконано (помилка інструмента): «Alpha»");
+  session.close();
+});
+
+test("#31 failed write: an over-long tool error is bounded", async () => {
+  const { session } = await connect([
+    mcpToolUse("w", "trelloWriteCard", { action: "create", name: "Alpha" }),
+    mcpToolResult("w", true, [{ type: "text", text: "x".repeat(1000) }]),
+    msg(FALSE_SUCCESS),
+    IDLE,
+  ]);
+  const reply = await session.send("Створи Alpha");
+  assert.ok(reply.length < 300, `bounded, was ${reply.length}`);
+  assert.match(reply, /…$/);
+  session.close();
+});
+
+test("#31 #23 due mismatch: Trello holds a different due — the reply states ONLY the verified due, one read, no nudge, no replay", async () => {
+  const traces: DjonikTraceEvent[] = [];
+  const fake = createFakeClient([
+    mcpToolUse("w", "trelloWriteCard", { action: "update", cardId: "A", due: "2026-09-22T00:00:00.000Z" }),
+    mcpToolResult("w", false, cardContent({ id: "A" })),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("r", false, cardContent({ id: "A", due: DUE_A })),
+    msg("Готово, дедлайн 22 вересня о 03:00 за Києвом"),
+    IDLE,
+  ]);
+  const session = await connectToDjonik(fake.client, "agent_x", "env_x", "memstore_x", "vlt_x", (event) => traces.push(event));
+
+  const reply = await session.send("Постав дедлайн A");
+
+  assert.equal(
+    reply,
+    `Картку оновлено, але Trello підтвердив дедлайн: ${DUE_KYIV_A}. Це відрізняється від значення, яке було відправлено.`,
+  );
+  assert.doesNotMatch(reply, /03:00/, "neither the requested nor the model's due is asserted");
+  assert.equal(fake.sendCalls.length, 1, "a differing due is terminal: no corrective nudge, so no replay");
+  assert.equal(traces.filter((e) => e.type === "verification_nudge_sent").length, 0);
+  assert.deepEqual(
+    traces.filter((e) => e.type === "due_date_reply_finalized"),
+    [{ type: "due_date_reply_finalized", verifiedDue: DUE_A, kyivDate: "2026-09-22", weekdayEn: "Tuesday", mismatch: true }],
+  );
+  session.close();
+});
+
+test("#31 #23 due mismatch next to a failed write: report shows the verified due for one and the failure for the other", async () => {
+  const { session } = await connect([
+    mcpToolUse("a", "trelloWriteCard", { action: "update", cardId: "A", name: "Alpha", due: "2026-09-22T00:00:00.000Z" }),
+    mcpToolResult("a", false, cardContent({ id: "A" })),
+    mcpToolUse("x", "trelloWriteCard", { action: "create", name: "Zed" }),
+    mcpToolResult("x", true),
+    mcpToolUse("ra", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("ra", false, cardContent({ id: "A", name: "Alpha", due: DUE_A })),
+    msg("Усе зроблено як просили"),
+    IDLE,
+  ]);
+  const reply = await session.send("Alpha і Zed");
+  assert.equal(
+    reply,
+    [
+      `⚠️ «Alpha» (A): Картку оновлено, але Trello підтвердив дедлайн: ${DUE_KYIV_A}. Це відрізняється від значення, яке було відправлено.`,
+      "❌ Не виконано (помилка інструмента): «Zed»",
+    ].join("\n"),
+  );
+  session.close();
+});
+
+test("#31 #23 due mismatch alongside an unresolved mutation: fails closed, and the report still states only the verified due", async () => {
+  const { session } = await connect([
+    mcpToolUse("a", "trelloWriteCard", { action: "update", cardId: "A", due: "2026-09-22T00:00:00.000Z" }),
+    mcpToolResult("a", false, cardContent({ id: "A" })),
+    mcpToolUse("c", "trelloWriteCard", { action: "update", cardId: "C", name: "Charlie" }),
+    mcpToolResult("c", false, cardContent({ id: "C" })),
+    mcpToolUse("ra", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("ra", false, cardContent({ id: "A", due: DUE_A })),
+    msg("Усе гаразд"),
+    IDLE,
+    msg("Так"),
+    IDLE,
+  ]);
+  const error = await unverified(session.send("A і C"));
+  assert.deepEqual(error.outcomes.map((o) => o.status), ["due_differs", "awaiting_read"]);
+  assert.match(error.message, new RegExp(`⚠️ картка A: Картку оновлено, але Trello підтвердив дедлайн: ${DUE_KYIV_A}`));
+  assert.match(error.message, /⚠️ НЕ підтверджено: «Charlie» \(C\)/);
+  session.close();
+});
+
+test("#31 #23 due mismatch: several mutations — a differing due gets its own deterministic mismatch line", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("a", "trelloWriteCard", { action: "update", cardId: "A", name: "Alpha", due: "2026-09-22T00:00:00.000Z" }),
+    mcpToolResult("a", false, cardContent({ id: "A" })),
+    mcpToolUse("b", "trelloWriteCard", { action: "update", cardId: "B", name: "Bravo", due: "2026-09-19T19:00:00.000Z" }),
+    mcpToolResult("b", false, cardContent({ id: "B" })),
+    mcpToolUse("ra", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("ra", false, cardContent({ id: "A", name: "Alpha", due: DUE_A })),
+    mcpToolUse("rb", "trelloReadCard", { action: "get", cardIdOrUrl: "B" }),
+    mcpToolResult("rb", false, cardContent({ id: "B", name: "Bravo", due: "2026-09-19T19:00:00.000Z" })),
+    msg("Обидва дедлайни виставлено як просили"),
+    IDLE,
+  ]);
+  const reply = await session.send("Дедлайни");
+  assert.equal(
+    reply,
+    [
+      `«Alpha» (A): Картку оновлено, але Trello підтвердив дедлайн: ${DUE_KYIV_A}. Це відрізняється від значення, яке було відправлено.`,
+      "«Bravo» (B): Готово. Trello підтвердив дедлайн: субота, 19 вересня 2026, 22:00 за Києвом.",
+    ].join("\n"),
+  );
+  assert.equal(sendCalls.length, 1);
+  session.close();
+});
+
+test("#31 #23 due: an explicit card due:null after a set-due write is NOT a differing-due outcome — it is unresolved and fails closed", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("w", "trelloWriteCard", { action: "update", cardId: "A", due: DUE_A }),
+    mcpToolResult("w", false, cardContent({ id: "A" })),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "A" }),
+    mcpToolResult("r", false, cardContent({ id: "A", due: null })),
+    msg("Дедлайн виставлено."),
+    IDLE,
+    msg("Так."),
+    IDLE,
+  ]);
+  const error = await unverified(session.send("Дедлайн A"));
+  assert.equal(sendCalls.length, 2, "a null due can still be a stale read, so it gets the one nudge before failing closed");
+  assert.deepEqual(error.outcomes.map((o) => o.status), ["field_mismatch"]);
   session.close();
 });
