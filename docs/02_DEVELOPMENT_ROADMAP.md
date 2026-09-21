@@ -348,24 +348,28 @@ Measured live validation changed the implementation direction:
 
 Canonical bounded issue: #29 (open). `docs/03_TARGET_CAPABILITIES.md` §8 — Work history and reviews.
 
-Bounded goal: **discover what historical evidence the current Trello reads actually expose, then support evidence-based work reviews without inventing chronology or adding history infrastructure prematurely.**
+Bounded goal: **support honest evidence-based work reviews from the history/current-state evidence the existing Trello surface actually exposes, without inventing chronology or adding history infrastructure prematurely.**
 
-Boundaries, as defined by the #29 issue (not expanded here):
+Current accepted progress:
 
-- discovery comes first: determine exactly what the CURRENT live Trello read surface can prove about historical work (completion, movement between lists, reopen, start/creation/update timestamps, archived cards, action/history data) rather than assuming standard Trello API fields exist in the MCP surface;
-- `lastActivityAt` alone is not proof of completion, list movement, progress, reopen, or who worked on a card; history the surface cannot prove is reported as unavailable, not reconstructed from weak signals;
-- reviews are compact and evidence-first — verified outcomes, meaningful changes, one retrospective PM takeaway — with no productivity score and no fake chronology;
-- plan-vs-actual only when an accepted plan/commitment (durable context) and fresh external evidence for the outcome are both reliably available; durable Memory is never proof that work was completed, moved or reopened;
-- read-only with zero Trello writes; transient retrospective conclusions are not persisted to Memory;
-- decision order: existing Managed Agent/Session behavior → existing Trello MCP read surface → Memory for stable/accepted context only → one bounded Skill only if discovery justifies it → the smallest deterministic safeguard only if a measured correctness gap remains;
-- no event/history DB, Trello mirror, persistent activity log, analytics service, scheduler/cron, proactive notifications, vector DB/RAG, custom Messages loop, phrase/intent router, new specialist agent, Calendar or Trello writes;
-- the accepted #18 same-turn fresh-read limitation is unchanged;
-- no paid live validation in the first implementation/discovery pass; after Product Lead review, the spend/session guardrail is declared before inference (default starting guardrail $0.30 / 2 paid Sessions / zero Trello mutations);
-- the first-pass deliverable is a dedicated implementation report for Product Lead review, using the next available docs report number.
+- **Slice 1 — discovery: DONE / accepted**, committed at `cdb132e1cf08b9f8eeb825675db9dc766c5ab184` and recorded in `docs/16_ISSUE_29_WORK_REVIEW_DISCOVERY_REPORT.md`. The current Trello MCP supports useful **current-state retrospective** (current list/status, Done workflow state, closed/archive state, due/dueComplete where freshly read), but it does **not** expose reliable completion timestamps, list-movement history, reopen history, actor history, or an Activity & History primitive.
+- `lastActivityAt` remains a weak activity timestamp only. It is **not** evidence of completion, movement, reopen, progress, staleness, actor identity, or membership in a requested time window.
+- Plan-vs-actual is only partially supported: durable Memory may supply an explicitly accepted plan/commitment, while fresh Trello supplies the **current actual state**; without historical transition evidence, Djonik must not claim that an item was completed during a specific period.
+- **Slice 2 — source-only `work-review` Skill: DONE / accepted**, committed at `51c0b719e0bc98c7f84e0948f4337755161da176`. Canonical source: `.claude/skills/work-review/SKILL.md`; deterministic source tests are in `src/skills.test.ts`; local suite passed **330/330**. The Skill explicitly prevents fake chronology, narrows `lastActivityAt`, keeps reviews read-only, treats Memory as plan/context only, and leaves current health/risk/blocking judgement to the accepted Project Health path.
+- **Production has not changed yet for #29**: Djonik remains production **v19 / Haiku**, Project Health remains delegated to specialist **v4 / Sonnet**, and the `work-review` Skill is **not yet synced/attached to production**.
+- **NEXT bounded slice — Slice 3:** sync/upload the reviewed `work-review` Skill, attach exactly that Skill to the existing production Haiku coordinator (expected production **v19 → v20**, with system/model/tools/MCP/multiagent roster otherwise unchanged), then run bounded live acceptance under the Product Owner-approved guardrail: **≤ $0.30 total list cost / ≤ 2 paid Managed Sessions / 0 Trello mutations / 0 Calendar calls / 0 Memory writes**.
+- Slice 3 must verify both sides of the routing boundary: a work-review/history question is handled honestly by the coordinator + `work-review` without fabricated chronology, while a current health/risk/blocker question still delegates natively to the accepted Project Health specialist v4 and preserves the deterministic specialist-reply boundary.
+- A weekly journal/checkpoint or other persisted history mechanism is **not part of the current #29 implementation by default**. It may be considered only after live acceptance demonstrates a measured product gap that the bounded current-state review cannot satisfy; any persistent snapshot/journal/history mechanism requires a separate bounded architecture decision rather than being added implicitly here.
+- The accepted #18 same-turn fresh-read limitation is unchanged.
+- No later issue is promoted while #29 remains open.
 
-First bounded slice: discovery only — what the current Djonik + Trello surface can and cannot prove about historical work, recorded in `docs/16_ISSUE_29_WORK_REVIEW_DISCOVERY_REPORT.md` (evidence map + architecture recommendation; pending Product Lead review). No Skill, runtime, Agent or Memory change is part of that slice.
+Boundaries remain those of GitHub issue #29:
 
-No later issue is promoted here. Proactive follow-up lifecycle and other later Wave C/D items remain later slices.
+- read-only work review; zero Trello writes by default;
+- no fake completion/movement/reopen chronology;
+- no event/history DB, Trello mirror, snapshot store, webhook history pipeline, scheduler/cron, proactive notification system, vector DB/RAG, custom Messages loop, phrase/intent router, Calendar integration, or new specialist agent without a separate measured decision;
+- current health/risk/waiting/blocking interpretation remains owned by the accepted Project Health specialist path;
+- transient retrospective conclusions are not persisted to durable Memory as operational truth.
 
 ## Capability waves after reliability/cost closeout
 
