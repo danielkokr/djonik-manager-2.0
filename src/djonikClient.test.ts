@@ -9,6 +9,11 @@ import {
   buildVerifiedDueConfirmation,
   finalizeDueDateReply,
   DjonikSessionDeadError,
+  PROJECT_HEALTH_SPECIALIST_AGENT_ID,
+  resolveProjectHealthSpecialistName,
+  selectProjectHealthRelay,
+  finalizeProjectHealthReply,
+  type DjonikTraceEvent,
   type DjonikTurnTelemetry,
 } from "./djonikClient.js";
 
@@ -17,8 +22,11 @@ import {
  * `events` is the scripted sequence the fake stream yields for the one
  * `send()` call each test makes; `createCalls` records every
  * `beta.sessions.create` invocation for assertions on session wiring.
+ * `sessionAgent`, when given, is returned as the create response's resolved
+ * `session.agent` (#28: the coordinator roster snapshot); omitted, the response
+ * carries only an id, exactly as before.
  */
-function createFakeClient(events: unknown[]): { client: Anthropic; createCalls: unknown[]; sendCalls: unknown[] } {
+function createFakeClient(events: unknown[], sessionAgent?: unknown): { client: Anthropic; createCalls: unknown[]; sendCalls: unknown[] } {
   const createCalls: unknown[] = [];
   const sendCalls: unknown[] = [];
 
@@ -40,7 +48,7 @@ function createFakeClient(events: unknown[]): { client: Anthropic; createCalls: 
       sessions: {
         create: async (params: unknown) => {
           createCalls.push(params);
-          return { id: "session_test123" };
+          return sessionAgent === undefined ? { id: "session_test123" } : { id: "session_test123", agent: sessionAgent };
         },
         events: {
           stream: async () => stream,
@@ -67,7 +75,7 @@ function createFakeClient(events: unknown[]): { client: Anthropic; createCalls: 
  * point while a turn is deliberately held open — the same shape as two real
  * Managed Agent turns racing on the wire.
  */
-function createStreamedFakeClient(): { client: Anthropic; createCalls: unknown[]; sendCalls: unknown[]; push: (event: unknown) => void } {
+function createStreamedFakeClient(sessionAgent?: unknown): { client: Anthropic; createCalls: unknown[]; sendCalls: unknown[]; push: (event: unknown) => void } {
   const createCalls: unknown[] = [];
   const sendCalls: unknown[] = [];
   const queue: unknown[] = [];
@@ -101,7 +109,7 @@ function createStreamedFakeClient(): { client: Anthropic; createCalls: unknown[]
       sessions: {
         create: async (params: unknown) => {
           createCalls.push(params);
-          return { id: "session_test123" };
+          return sessionAgent === undefined ? { id: "session_test123" } : { id: "session_test123", agent: sessionAgent };
         },
         events: {
           stream: async () => stream,
@@ -1526,5 +1534,417 @@ test("Scenario F (#23 regression): deterministic Kyiv due-date finalization is u
   push({ type: "session.status_idle" });
   assert.equal(await p2, "Привіт!");
 
+  session.close();
+});
+
+// ---------------------------------------------------------------------------------------------
+// Issue #28: deterministic Project Health relay finalizer (reply boundary).
+//
+// Claude still decides whether to delegate; these tests script the *events* of a turn that has
+// already been natively delegated and prove only transport integrity: a proven, single, exactly
+// relayable specialist result becomes the reply, everything else is left exactly as before.
+// ---------------------------------------------------------------------------------------------
+
+const PH_NAME = "Djonik Project Health Specialist";
+const PH_THREAD = "sthr_ph_1";
+
+/** A resolved `session.agent` whose coordinator roster is exactly the canonical specialist. */
+function projectHealthSessionAgent(overrides: Record<string, unknown> = {}): unknown {
+  return {
+    id: "agent_prod",
+    version: 19,
+    multiagent: {
+      type: "coordinator",
+      agents: [{ type: "agent", id: PROJECT_HEALTH_SPECIALIST_AGENT_ID, version: 4, name: PH_NAME, ...overrides }],
+    },
+  };
+}
+
+function threadCreated(agentName = PH_NAME, threadId = PH_THREAD): unknown {
+  return { type: "session.thread_created", id: `evt_created_${threadId}`, agent_name: agentName, session_thread_id: threadId };
+}
+
+function specialistMessage(text: string, fromAgentName: string | null = PH_NAME, fromThreadId = PH_THREAD): unknown {
+  return {
+    type: "agent.thread_message_received",
+    id: `evt_received_${Math.random().toString(36).slice(2)}`,
+    content: [{ type: "text", text }],
+    from_session_thread_id: fromThreadId,
+    ...(fromAgentName === null ? {} : { from_agent_name: fromAgentName }),
+  };
+}
+
+function primaryMessage(text: string): unknown {
+  return { type: "agent.message", content: [{ type: "text", text }] };
+}
+
+const THREAD_IDLE = { type: "session.thread_status_idle", agent_name: "Джонік", session_thread_id: "sthr_primary", stop_reason: { type: "end_turn" } };
+
+test("resolveProjectHealthSpecialistName: only a one-entry coordinator roster of the canonical specialist proves it", () => {
+  assert.equal(resolveProjectHealthSpecialistName(projectHealthSessionAgent()), PH_NAME);
+  // Anything else fails closed, including a bare Session with no roster at all.
+  assert.equal(resolveProjectHealthSpecialistName(undefined), null);
+  assert.equal(resolveProjectHealthSpecialistName({ id: "agent_prod", multiagent: null }), null);
+  assert.equal(resolveProjectHealthSpecialistName(projectHealthSessionAgent({ id: "agent_someone_else" })), null);
+  assert.equal(resolveProjectHealthSpecialistName(projectHealthSessionAgent({ type: "advisor" })), null);
+  assert.equal(resolveProjectHealthSpecialistName(projectHealthSessionAgent({ name: "" })), null);
+  assert.equal(
+    resolveProjectHealthSpecialistName({
+      multiagent: {
+        type: "coordinator",
+        agents: [
+          { type: "agent", id: PROJECT_HEALTH_SPECIALIST_AGENT_ID, name: PH_NAME },
+          { type: "agent", id: "agent_second", name: "Second" },
+        ],
+      },
+    }),
+    null,
+    "a roster with more than one child cannot prove which child is which",
+  );
+});
+
+test("selectProjectHealthRelay / finalizeProjectHealthReply: pure decision rules", () => {
+  const one = { specialistMessages: ["X"], trelloWriteAttempted: false };
+  assert.equal(selectProjectHealthRelay(one), "X");
+  assert.equal(finalizeProjectHealthReply("rewrite", one), "X");
+  assert.equal(finalizeProjectHealthReply("rewrite", { specialistMessages: [], trelloWriteAttempted: false }), "rewrite");
+  assert.equal(finalizeProjectHealthReply("rewrite", { specialistMessages: ["X", "Y"], trelloWriteAttempted: false }), "rewrite");
+  assert.equal(finalizeProjectHealthReply("rewrite", { specialistMessages: [null], trelloWriteAttempted: false }), "rewrite");
+  assert.equal(finalizeProjectHealthReply("rewrite", { specialistMessages: ["X"], trelloWriteAttempted: true }), "rewrite");
+});
+
+test("#28 1: an ordinary non-delegated turn returns the coordinator reply exactly", async () => {
+  const { client } = createFakeClient([primaryMessage("ordinary"), IDLE], projectHealthSessionAgent());
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  assert.equal(await session.send("Привіт"), "ordinary");
+  session.close();
+});
+
+test("#28 2: a proven Project Health result replaces the coordinator's rewrite with the exact child string", async () => {
+  const traces: DjonikTraceEvent[] = [];
+  const { client } = createFakeClient(
+    [threadCreated(), specialistMessage("SPECIALIST EXACT"), primaryMessage("HAIKU REWRITE"), IDLE],
+    projectHealthSessionAgent(),
+  );
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x", (event) => traces.push(event));
+
+  const reply = await session.send("Що зараз по Extract?");
+
+  assert.equal(reply, "SPECIALIST EXACT");
+  assert.deepEqual(
+    traces.filter((event) => event.type === "project_health_reply_finalized"),
+    [{ type: "project_health_reply_finalized", replacedCoordinatorReply: true }],
+    "the trace is content-free: it carries no specialist or user text",
+  );
+  session.close();
+});
+
+test("#28 3: the specialist string is returned with no trim, normalization or reformatting", async () => {
+  const exact = "\n  **Стан:**\r\n- «Брендбук» — 2026-09-25T15:00:00.000Z; ¯\\_(ツ)_/¯  \t \n\n(кінець)  \n";
+  const { client } = createFakeClient(
+    [threadCreated(), specialistMessage(exact), primaryMessage("сумарія"), IDLE],
+    projectHealthSessionAgent(),
+  );
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const reply = await session.send("Що зараз по Extract?");
+
+  assert.strictEqual(reply, exact);
+  session.close();
+});
+
+test("#28 4: an already-exact coordinator relay returns that same string, once, with no duplication", async () => {
+  const traces: DjonikTraceEvent[] = [];
+  const { client } = createFakeClient(
+    [threadCreated(), specialistMessage("X"), primaryMessage("X"), IDLE],
+    projectHealthSessionAgent(),
+  );
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x", (event) => traces.push(event));
+
+  assert.strictEqual(await session.send("Що зараз по Extract?"), "X");
+  assert.deepEqual(
+    traces.filter((event) => event.type === "project_health_reply_finalized"),
+    [{ type: "project_health_reply_finalized", replacedCoordinatorReply: false }],
+  );
+  session.close();
+});
+
+test("#28 5: without proven Project Health provenance the coordinator reply stays authoritative (no generic subagent interception)", async () => {
+  const cases: Array<{ label: string; agent: unknown; events: unknown[] }> = [
+    { label: "no resolved roster on the Session", agent: undefined, events: [threadCreated(), specialistMessage("CHILD"), primaryMessage("PRIMARY"), IDLE] },
+    {
+      label: "roster's only child is some other agent",
+      agent: projectHealthSessionAgent({ id: "agent_someone_else" }),
+      events: [threadCreated(), specialistMessage("CHILD"), primaryMessage("PRIMARY"), IDLE],
+    },
+    {
+      label: "child thread was created under a different agent name",
+      agent: projectHealthSessionAgent(),
+      events: [threadCreated("Some Other Agent"), specialistMessage("CHILD", "Some Other Agent"), primaryMessage("PRIMARY"), IDLE],
+    },
+    {
+      label: "message from a thread this Session never created for the specialist",
+      agent: projectHealthSessionAgent(),
+      events: [threadCreated(), specialistMessage("CHILD", PH_NAME, "sthr_unknown"), primaryMessage("PRIMARY"), IDLE],
+    },
+    {
+      label: "message names a different callable agent",
+      agent: projectHealthSessionAgent(),
+      events: [threadCreated(), specialistMessage("CHILD", "Some Other Agent"), primaryMessage("PRIMARY"), IDLE],
+    },
+    {
+      label: "message carries no callable-agent name (received from the primary)",
+      agent: projectHealthSessionAgent(),
+      events: [threadCreated(), specialistMessage("CHILD", null), primaryMessage("PRIMARY"), IDLE],
+    },
+    { label: "message arrives with no thread ever created", agent: projectHealthSessionAgent(), events: [specialistMessage("CHILD"), primaryMessage("PRIMARY"), IDLE] },
+  ];
+  for (const { label, agent, events } of cases) {
+    const { client } = createFakeClient(events, agent);
+    const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+    assert.strictEqual(await session.send("Що зараз по Extract?"), "PRIMARY", label);
+    session.close();
+  }
+});
+
+test("#28 5b: a child message that is not a plain non-empty string is never relayed as exact", async () => {
+  const notPlain: unknown[] = [
+    { type: "agent.thread_message_received", content: [{ type: "text", text: "A" }, { type: "image", source: {} }], from_session_thread_id: PH_THREAD, from_agent_name: PH_NAME },
+    { type: "agent.thread_message_received", content: [{ type: "text", text: "" }], from_session_thread_id: PH_THREAD, from_agent_name: PH_NAME },
+    { type: "agent.thread_message_received", content: [], from_session_thread_id: PH_THREAD, from_agent_name: PH_NAME },
+  ];
+  for (const message of notPlain) {
+    const { client } = createFakeClient([threadCreated(), message, primaryMessage("PRIMARY"), IDLE], projectHealthSessionAgent());
+    const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+    assert.strictEqual(await session.send("Що зараз по Extract?"), "PRIMARY");
+    session.close();
+  }
+});
+
+test("#28 6: no child result leaves the ordinary path unchanged, including the empty-reply failure", async () => {
+  const { client } = createFakeClient([threadCreated(), primaryMessage("PRIMARY"), IDLE], projectHealthSessionAgent());
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+  assert.strictEqual(await session.send("Що зараз по Extract?"), "PRIMARY");
+  session.close();
+
+  const empty = createFakeClient([IDLE], projectHealthSessionAgent());
+  const emptySession = await connectToDjonik(empty.client, "agent_x", "env_x", "memstore_x", "vlt_x");
+  await assert.rejects(emptySession.send("Що зараз по Extract?"), /no text reply/);
+  emptySession.close();
+});
+
+test("#28 6b: an exact specialist result with no coordinator message of its own still completes the turn", async () => {
+  const { client } = createFakeClient([threadCreated(), specialistMessage("ONLY THE SPECIALIST"), IDLE], projectHealthSessionAgent());
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  assert.strictEqual(await session.send("Що зараз по Extract?"), "ONLY THE SPECIALIST");
+  session.close();
+});
+
+test("#28 7: a verified Trello write turn is left to the existing write pipeline even if a specialist result was received", async () => {
+  const { client, sendCalls } = createFakeClient(
+    [
+      threadCreated(),
+      specialistMessage("SPECIALIST EXACT"),
+      mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A" }),
+      mcpToolResult("call_1"),
+      mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
+      mcpToolResult("call_2"),
+      primaryMessage("Готово, картку оновлено."),
+      IDLE,
+    ],
+    projectHealthSessionAgent(),
+  );
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  assert.strictEqual(await session.send("Проаналізуй Extract і онови картку A"), "Готово, картку оновлено.");
+  assert.equal(sendCalls.length, 1);
+  session.close();
+});
+
+test("#28 7b: a failed (is_error) Trello write attempt also keeps the mutation turn out of the finalizer", async () => {
+  const { client } = createFakeClient(
+    [
+      threadCreated(),
+      specialistMessage("SPECIALIST EXACT"),
+      mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A" }),
+      mcpToolResult("call_1", true),
+      primaryMessage("Не вдалося оновити картку."),
+      IDLE,
+    ],
+    projectHealthSessionAgent(),
+  );
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  assert.strictEqual(await session.send("Онови картку A"), "Не вдалося оновити картку.");
+  session.close();
+});
+
+test("#28 7c: an unverified Trello write still fails the turn (verification is not bypassed by a specialist result)", async () => {
+  const { client } = createFakeClient(
+    [
+      threadCreated(),
+      specialistMessage("SPECIALIST EXACT"),
+      mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A" }),
+      mcpToolResult("call_1"),
+      primaryMessage("Готово."),
+      IDLE,
+      primaryMessage("Все ще готово."),
+      IDLE,
+    ],
+    projectHealthSessionAgent(),
+  );
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await assert.rejects(session.send("Онови картку A"), /did not verify the write/);
+  session.close();
+});
+
+test("#28 8: the Issue #23 due-date finalizer keeps owning a verified due-date write turn", async () => {
+  const { client } = createFakeClient(
+    [
+      threadCreated(),
+      specialistMessage("SPECIALIST EXACT"),
+      mcpToolUse("call_1", "trelloWriteCard", { action: "update", cardId: "card_A", due: "2026-09-21T21:30:00.000Z" }),
+      mcpToolResult("call_1"),
+      mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }),
+      mcpToolResult("call_2", false, trelloCardReadContent("2026-09-21T21:30:00.000Z")),
+      primaryMessage("Понеділок, 22 вересня 2026, 00:30"),
+      IDLE,
+    ],
+    projectHealthSessionAgent(),
+  );
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  assert.equal(
+    await session.send("Онови дедлайн картки A на 22 вересня 00:30 за Києвом"),
+    "Готово. Trello підтвердив дедлайн: вівторок, 22 вересня 2026, 00:30 за Києвом.",
+  );
+  session.close();
+});
+
+test("#28 10: several specialist results in one turn are never guessed between — the coordinator reply is kept", async () => {
+  const oneThread = createFakeClient(
+    [threadCreated(), specialistMessage("FIRST"), specialistMessage("SECOND"), primaryMessage("PRIMARY"), IDLE],
+    projectHealthSessionAgent(),
+  );
+  const s1 = await connectToDjonik(oneThread.client, "agent_x", "env_x", "memstore_x", "vlt_x");
+  assert.strictEqual(await s1.send("Що зараз по Extract?"), "PRIMARY");
+  s1.close();
+
+  const twoThreads = createFakeClient(
+    [
+      threadCreated(PH_NAME, "sthr_a"),
+      threadCreated(PH_NAME, "sthr_b"),
+      specialistMessage("FIRST", PH_NAME, "sthr_a"),
+      specialistMessage("SECOND", PH_NAME, "sthr_b"),
+      primaryMessage("PRIMARY"),
+      IDLE,
+    ],
+    projectHealthSessionAgent(),
+  );
+  const s2 = await connectToDjonik(twoThreads.client, "agent_x", "env_x", "memstore_x", "vlt_x");
+  assert.strictEqual(await s2.send("Що зараз по Extract?"), "PRIMARY");
+  s2.close();
+});
+
+test("#28 11: the decision is made on authoritative session.status_idle, not a transient thread idle", async () => {
+  const { client, push } = createStreamedFakeClient(projectHealthSessionAgent());
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  let settled: string | null = null;
+  const turn = session.send("Що зараз по Extract?").then((reply) => {
+    settled = reply;
+    return reply;
+  });
+
+  push(threadCreated());
+  push(THREAD_IDLE); // the coordinator's own thread going idle mid-turn
+  push(primaryMessage("INTERIM COORDINATOR TEXT"));
+  push(specialistMessage("SPECIALIST EXACT"));
+  push({ type: "session.thread_status_idle", agent_name: PH_NAME, session_thread_id: PH_THREAD, stop_reason: { type: "end_turn" } });
+  await flushMicrotasks();
+  assert.equal(settled, null, "thread-level idle events must not complete the turn");
+
+  push(primaryMessage("HAIKU REWRITE"));
+  push(THREAD_IDLE);
+  await flushMicrotasks();
+  assert.equal(settled, null, "still no authoritative session.status_idle");
+
+  push(IDLE);
+  assert.strictEqual(await turn, "SPECIALIST EXACT");
+  session.close();
+});
+
+test("#28 12: thread proof lives for the Session, but each turn's result is its own (no cross-turn leakage)", async () => {
+  const { client, push } = createStreamedFakeClient(projectHealthSessionAgent());
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const t1 = session.send("Що зараз по Extract?");
+  push(threadCreated());
+  push(specialistMessage("EXACT ONE"));
+  push(primaryMessage("REWRITE ONE"));
+  push(IDLE);
+  assert.strictEqual(await t1, "EXACT ONE");
+
+  // Turn 2: the existing child thread is messaged again — no new session.thread_created.
+  const t2 = session.send("А тепер по Seqthera?");
+  push(specialistMessage("EXACT TWO"));
+  push(primaryMessage("REWRITE TWO"));
+  push(IDLE);
+  assert.strictEqual(await t2, "EXACT TWO");
+
+  // Turn 3: no specialist involvement at all — turn 1/2 results must not leak in.
+  const t3 = session.send("Дякую");
+  push(primaryMessage("Будь ласка"));
+  push(IDLE);
+  assert.strictEqual(await t3, "Будь ласка");
+  session.close();
+});
+
+test("#28 9: FIFO serialization still attributes each queued turn's own specialist result to its own caller", async () => {
+  const { client, sendCalls, push } = createStreamedFakeClient(projectHealthSessionAgent());
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  const p1 = session.send("Що зараз по Extract?");
+  const p2 = session.send("Що зараз по Seqthera?");
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 1, "turn 2 must not start before turn 1 settles");
+
+  push(threadCreated());
+  push(specialistMessage("EXACT ONE"));
+  push(primaryMessage("REWRITE ONE"));
+  push(IDLE);
+  assert.strictEqual(await p1, "EXACT ONE");
+
+  await flushMicrotasks();
+  assert.equal(sendCalls.length, 2);
+  push(specialistMessage("EXACT TWO"));
+  push(primaryMessage("REWRITE TWO"));
+  push(IDLE);
+  assert.strictEqual(await p2, "EXACT TWO");
+  session.close();
+});
+
+test("#28: the finalizer does not touch telemetry — model-iteration and tool accounting is unchanged with a specialist result", async () => {
+  const records: DjonikTurnTelemetry[] = [];
+  const { client } = createFakeClient(
+    [
+      threadCreated(),
+      { type: "span.model_request_end" },
+      specialistMessage("SPECIALIST EXACT"),
+      { type: "span.model_request_end" },
+      primaryMessage("HAIKU REWRITE"),
+      IDLE,
+    ],
+    projectHealthSessionAgent(),
+  );
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x", undefined, (t) => records.push(t));
+
+  assert.strictEqual(await session.send("Що зараз по Extract?"), "SPECIALIST EXACT");
+  assert.equal(records.length, 1);
+  assert.equal(records[0].modelIterations, 2);
+  assert.equal(records[0].toolCalls, 0);
   session.close();
 });

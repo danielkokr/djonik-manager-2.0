@@ -3666,3 +3666,152 @@ Items 12 (hard fail) and, end to end, 7 and 9 fail because of a single defect: *
 - **Issue #28 not closed in this slice** — and not commented on or updated; remains open.
 - **#18** (same-turn fresh-read platform limitation) unchanged.
 - No runtime code, Telegram adapter, router, middleware, custom loop, roadmap edit, next-issue promotion, commit, push, deploy or branch. The Session was driven by throwaway scripts kept outside the repository; no script or log from this run was added to it.
+
+## 47. Wave C1 deterministic Project Health relay finalizer
+
+> **Scope:** implementation + deterministic tests only, at accepted main `68a317cde485f1d392477f9c7ffb5f9cbf5a61d4` (`docs: record final production v19 health smoke`; `HEAD == origin/main`, working tree clean before editing). Runtime change in `src/djonikClient.ts`, tests in `src/djonikClient.test.ts`. **No Session, no inference, no `user.message`, no Agent/Skill/specialist/production/validation-coordinator change, no Trello/Calendar/Memory call, no commit/push/deploy.** The specialist (v4) and the production coordinator prompt (v19) are deliberately untouched.
+
+### 47.1 §46 measured failure
+
+One real production-v19 Session (§46, `sesn_01Gt2KrLoZf6FrMaRP6jqGib`, $0.31) proved: v19 resolved, roster → specialist v4, native delegation with a clean task, silent wait, fresh Trello, a factual compact specialist answer (no technical note, no counts, no actor, one next step), exactly one child → coordinator message, zero Trello/Calendar/Memory writes, authoritative end-turn. It failed one hard bar item: after receiving that correct answer, production Haiku **rewrote it wholesale** — a Markdown report with headings and bullets, an added countdown ("4 дні"), an upgraded unsupported risk ("вже мав би бути в роботі"), urgency ("негайно") and a third step — so `coordinatorFinal === specialistFinal` was false (514 vs 461 characters, first difference at index 10).
+
+### 47.2 Architecture decision
+
+Claude keeps everything that is judgement: understanding the request, deciding whether Project Health is delegated, native multi-agent delegation, the specialist's reasoning and its Trello evidence gathering. Application code does **not** decide Project Health from user wording: no phrase matcher, intent router, regex on user text, keyword detection, custom Messages loop, duplicated PM reasoning, or parsing of specialist prose. The only new thing is a deterministic **transport boundary after** Claude has already delegated and the specialist has already returned its result:
+
+user → production Haiku → native Managed Agents delegation → Project Health specialist → exact child result → **deterministic reply boundary (thin Session client)** → Telegram.
+
+### 47.3 Why prompt-only relay is now insufficient
+
+Three live samples of the same prompt, same specialist behaviour, three different coordinator outcomes: §42 (validation coordinator v5) relayed byte-identically; §44 (production v18) dropped a trailing paragraph; §46 (production v19, clean specialist v4 output) rewrote everything. Two rounds of prompt hardening (v5 transport contract, then specialist v4 giving the coordinator nothing to trim) did not make the relay reliable. The relay contract is a strict-equality property of two strings, which is exactly what a deterministic boundary can guarantee and a prompt cannot.
+
+### 47.4 SDK / event provenance discovery (`@anthropic-ai/sdk` v0.125.0 types + the recorded §46 event shapes)
+
+- `sessions.create()` returns a `Session` whose `agent` is a resolved snapshot (`BetaManagedAgentsSessionAgent`), including `multiagent: BetaManagedAgentsSessionMultiagentCoordinator | null` whose `agents[]` carry each roster member's **full definition**: `id`, `name`, `version`, `type` (`'agent'` or an `advisor` entry), model, skills, tools. The §46 resolved Session (recorded from `sessions.retrieve`, the same `Session` type) showed exactly one entry: `{id agent_01KNiQDzzPjaMU6LLF4mU6uM, version 4, type agent, name "Djonik Project Health Specialist"}`. `connectToDjonik` already holds the `sessions.create` response of that same type, so no extra API call is needed — with one caveat recorded honestly: the §46 evidence I have was captured from `retrieve`, not from the `create` response itself (which this no-Session slice cannot exercise), so the create response carrying the same populated `agent.multiagent` is inferred from the shared SDK type, not observed. If it were ever absent, the finalizer would fail closed to the existing behavior (§47.8), and the live validation will show it directly through the `project_health_reply_finalized` trace.
+- `session.thread_created` (primary stream): `{agent_name, session_thread_id, …}` — names the callable agent the new thread runs and gives its public `sthr_` id. (§46: `agent_name "Djonik Project Health Specialist"`, `session_thread_id sthr_01Vm7dNUGpghUfNEae82m6Sb`.)
+- `agent.thread_message_received` (primary stream): `{from_session_thread_id, from_agent_name?, content[]}` — `from_session_thread_id` is the sender thread; `from_agent_name` is the callable agent's name and is documented **absent when received from the primary agent**. (§46: `from_agent_name "Djonik Project Health Specialist"`, `from_session_thread_id sthr_01Vm7d…`.)
+- `agent.thread_message_sent` and the child thread's own events are not on the primary stream and are not used.
+- The events carry a callable-agent **name**, not an agent **id**. Provenance is therefore the chain: Session roster (exactly one child, whose `id` is the canonical specialist and whose `name` is N) → `session.thread_created` with `agent_name === N` proves thread T is that child → `agent.thread_message_received` with `from_agent_name === N` and `from_session_thread_id ∈ {threads created for N}` is that child's result. This is explicit event/thread provenance plus the resolved Session snapshot; it needs no user-content parsing and no runtime API call. **Provenance can be established deterministically, so no STOP was needed.**
+
+### 47.5 Exact activation rule
+
+The specialist's exact string replaces the turn's reply if and only if **all** hold:
+
+1. the resolved `session.agent.multiagent` is a coordinator with **exactly one** roster entry, that entry is a plain agent (not an Advisor), its `id` is `PROJECT_HEALTH_SPECIALIST_AGENT_ID` (`agent_01KNiQDzzPjaMU6LLF4mU6uM`), and it has a name (`resolveProjectHealthSpecialistName`);
+2. during the turn, exactly one `agent.thread_message_received` arrives from a thread that this Session created (via `session.thread_created`) for that name, carrying that same `from_agent_name`;
+3. that message's content is a plain non-empty string — only `text` blocks, joined verbatim exactly as `agent.message` text is joined (any image/document/redacted block, or no text, makes it unrelayable);
+4. no Trello write tool was attempted this turn (successful or not);
+5. the turn reaches the authoritative `session.status_idle` (the decision is made in `sendPartsSerial` after `runTurn` returns on that event, never on a `session.thread_status_idle`).
+
+The returned string is the child content itself: no trim, no normalization, no translation, no Markdown or date handling, no model call. Version is deliberately not part of the rule (only the agent id), so a later specialist repin does not silently disable the safeguard.
+
+### 47.6 Why this is not an intent router
+
+It reads no user text at any point and has no notion of "Project Health" as a topic. It does not decide whether delegation happens (Claude does, natively); it never calls the API to classify a child; it never inspects the specialist's prose (risk, Waiting, Blocked, dates, cards, recommendations are all opaque). It keys purely on official identity data: which roster the Session was created with and which callable agent's thread a message came from. A turn in which Claude did not delegate is byte-for-byte the ordinary path. It is a delivery rule for a result that Claude's own delegation produced, not a classifier of what Daniel asked.
+
+### 47.7 Mixed-action boundary
+
+Deliberately **not** "every subagent always wins". The finalizer is bounded to the read-only Project Health review: if this turn attempted any Trello write tool (`agent.mcp_tool_use` whose server matches `/trello/i` and name `/^trelloWrite/`, successful or failed), the specialist string is **not** substituted, and the existing verified-write pipeline (same-card verification, corrective nudge, fail-closed) and the Issue #23 deterministic due-date finalizer remain authoritative and unchanged. Mixed analysis+mutation composition is **not redesigned here** and is outside this narrow finalizer: such a turn returns exactly what it returned before this slice (the coordinator's verified reply, possibly the #23 confirmation). Calendar is disabled in production, and Memory writes are not user-visible actions, so neither is treated as a mutation trigger.
+
+### 47.8 Fail-closed behavior
+
+Any missing or ambiguous proof leaves the existing behavior completely untouched:
+
+- no resolved roster, a roster with ≠ 1 entry, an Advisor entry, a different agent id, or a nameless entry → finalizer disabled for the Session;
+- a thread created under another name, a message from an unknown thread, a message naming another agent, or one with no `from_agent_name` → not a candidate;
+- a non-plain / empty child message → not a candidate (never "exact");
+- **more than one** proven specialist result in a turn (one thread or several) → no guessing which is "the" answer; the coordinator reply is kept (existing behavior) — chosen over throwing so a legitimate ordinary reply is never destroyed by an unexpected second message;
+- no specialist result → ordinary path, including the existing "no text reply" failure when the coordinator also said nothing;
+- any Trello write attempt → §47.7.
+
+One deliberate additive behavior: if exactly one exactly-relayable specialist result exists but the coordinator produced **no** `agent.message` of its own, the turn now completes with the specialist string instead of throwing "no text reply" (the guarantee is the exact specialist string at authoritative idle, whatever the coordinator did).
+
+### 47.9 Runtime implementation (`src/djonikClient.ts`)
+
+- New exports: `PROJECT_HEALTH_SPECIALIST_AGENT_ID`, `resolveProjectHealthSpecialistName(agent)`, `ProjectHealthRelayObservation`, `selectProjectHealthRelay(observation)`, `finalizeProjectHealthReply(reply, observation)`; private `exactSpecialistMessageText(content)`. The functions are small, pure, and unit-testable; they follow the pattern already used by the #23 finalizer (`finalizeDueDateReply`).
+- `connectToDjonik`: resolves the specialist name once from `session.agent`; keeps a **Session-lifetime** `Set` of thread ids created for it (a later turn may message an existing child thread with no new `session.thread_created`); keeps a **per-turn** observation (`specialistMessages`, `trelloWriteAttempted`), reset at the start of every `sendPartsSerial`.
+- `runTurn` (event handling only): new `session.thread_created` and `agent.thread_message_received` cases; the existing `agent.mcp_tool_use` case also records a Trello-write attempt; the `session.status_idle` case no longer throws "no text reply" when an exactly-relayable specialist result exists.
+- `sendPartsSerial`: after the existing write-verification and #23 due-date finalization, `selectProjectHealthRelay` decides; if non-null the reply is that exact string.
+- Optional content-free trace `project_health_reply_finalized { replacedCoordinatorReply: boolean }` (no user or specialist text); no telemetry-schema change.
+- `src/telegramDispatch.ts` and the adapter are **unchanged**: `send()/sendOrdered()` still returns one string and `telegramDispatch.ts` still sends it once, so the fix is at the Session reply boundary as designed. Nothing here claims the adapter forwards raw intermediate `agent.message` events.
+- No managed-agent source, Skill, `claude-lock.json`, env or deployment change.
+
+### 47.10 Tests added (`src/djonikClient.test.ts`, 19 new)
+
+Existing helpers extended, not duplicated: `createFakeClient` / `createStreamedFakeClient` gained an optional `sessionAgent` (returned as the create response's resolved `session.agent`); omitted, they behave exactly as before. New tests, all scripted-event and behavioral (no large snapshot):
+
+1. `resolveProjectHealthSpecialistName`: canonical one-entry roster proves; undefined/`null` roster, wrong id, Advisor entry, empty name, and a two-entry roster all return null.
+2. `selectProjectHealthRelay`/`finalizeProjectHealthReply` pure rules (one message wins; none / two / unrelayable / write-attempted keep the reply).
+3. **#28 1** ordinary non-delegated turn returns `"ordinary"` exactly.
+4. **#28 2** thread created + child `"SPECIALIST EXACT"` + later primary `"HAIKU REWRITE"` + idle → returns `"SPECIALIST EXACT"`; trace is content-free (`replacedCoordinatorReply: true`).
+5. **#28 3** a specialist string with leading/trailing newlines and whitespace, CRLF, NBSP/tab, Markdown, a date and punctuation → `strictEqual` to the child content.
+6. **#28 4** already-exact relay → the same string once (`replacedCoordinatorReply: false`).
+7. **#28 5** seven no-provenance cases (no roster; roster's only child is another agent; thread created under another name; message from an unknown thread; message naming another agent; message with no `from_agent_name`; message with no thread ever created) → coordinator reply stays authoritative.
+8. **#28 5b** child message with an image block, empty text, or empty content → never relayed as exact.
+9. **#28 6 / 6b** no child result → ordinary behavior incl. the existing "no text reply" rejection; exact specialist result with no coordinator message → completes with the specialist string.
+10. **#28 7 / 7b / 7c** verified Trello write + specialist result → coordinator's verified reply, no extra nudge; failed (`is_error`) write attempt → also excluded; unverified write → still rejects "did not verify the write" (verification is not bypassed).
+11. **#28 8** verified due-date write + specialist result → the #23 deterministic confirmation is unchanged.
+12. **#28 10** several specialist results (one thread, and two threads) → no guessing, coordinator reply kept.
+13. **#28 11** on a manually-driven stream, a thread-level idle (primary and specialist) and interim coordinator text do **not** complete or decide the turn; only `session.status_idle` does, then the exact child string is returned.
+14. **#28 12** session-lifetime thread proof but per-turn results: turn 2 (existing thread, no new `session.thread_created`) finalizes; turn 3 (no delegation) is not contaminated by earlier results.
+15. **#28 9** FIFO: two concurrently requested turns keep their own specialist results attributed to their own callers; turn 2's provider send still waits for turn 1.
+16. Telemetry accounting (model iterations, tool calls) is unchanged with a specialist result.
+
+One assertion first failed because of my own test helper (a JS default parameter silently turned an explicit `undefined` "no agent name" back into the specialist's name); it was a test-helper bug, not a runtime defect, and was fixed by making "absent" an explicit `null`. No production code changed for it.
+
+### 47.11 Ordinary-flow regressions
+
+All 75 pre-existing `djonikClient.test.ts` tests pass unchanged (ordinary text/image/document/grouped/ordered turns, telemetry, session wiring incl. memory store/vault at creation, error handling). A Session without a roster (every pre-existing test double) disables the finalizer, so no ordinary flow can be affected. Task-management, planning, studio intake, multimodal intake, Telegram grouping, session recovery and telemetry code paths were not modified.
+
+### 47.12 Write-verification regression
+
+The pre-existing verify-after-write tests (write→read verifies; write with no read → one nudge → verifies; never verified → fails closed; failed write needs no verification; same-card identity vs different card vs unrelated search; due-clear) all pass unchanged; §47.10 items 10 add the specialist-plus-write variants (verified, failed, unverified) proving the finalizer neither bypasses nor changes the pipeline.
+
+### 47.13 Due-date-finalizer regression
+
+All pre-existing Issue #23 tests (`computeKyivDueFacts`, extraction, `buildVerifiedDueConfirmation`, `finalizeDueDateReply`, the end-to-end rollover/mismatch/missing-due cases, FIFO pressure) pass unchanged; §47.10 item 11 proves a due-date write turn keeps the deterministic Kyiv confirmation even when a specialist result was received.
+
+### 47.14 FIFO regression
+
+All pre-existing Scenario A–I / #27 FIFO-serialization tests pass unchanged; §47.10 item 15 adds the specialist-result variant.
+
+### 47.15 Files changed
+
+- `src/djonikClient.ts` (+~129 lines: the finalizer functions, the roster/thread wiring, event cases, and one trace variant)
+- `src/djonikClient.test.ts` (helper extension + 19 new tests)
+- `docs/01_CLAUDE_NATIVE_ARCHITECTURE.md` (§9 paragraph: current truth)
+- `docs/02_DEVELOPMENT_ROADMAP.md` (Wave C1 current-state bullets; canonical NOW unchanged, #28)
+- `docs/15_ISSUE_28_IMPLEMENTATION_REPORT.md` (this §47)
+
+`managed-agents/README.md` was not edited (outside this slice's boundary); its statement that a final production smoke is still required remains accurate.
+
+### 47.16 Typecheck
+
+`npm run typecheck` (`tsc --noEmit`): clean, no errors.
+
+### 47.17 Tests
+
+Focused first: `src/djonikClient.test.ts` — 94 tests, 94 pass (75 pre-existing + 19 new). Full `npm test`: **302 tests, 302 pass, 0 fail** (283 before this slice + 19).
+
+### 47.18 `git diff --check`
+
+Exit 0, no whitespace errors (only the pre-existing LF→CRLF working-copy notices).
+
+### 47.19 `git status --short`
+
+```
+ M docs/01_CLAUDE_NATIVE_ARCHITECTURE.md
+ M docs/02_DEVELOPMENT_ROADMAP.md
+ M docs/15_ISSUE_28_IMPLEMENTATION_REPORT.md
+ M src/djonikClient.test.ts
+ M src/djonikClient.ts
+```
+
+### 47.20 Explicitly not done / remaining gate
+
+- **0 Sessions**, **$0 inference**, no `user.message`.
+- **0 Agent mutation** (production stays v19, specialist v4, validation coordinator v5 — none was even retrieved for mutation) and **0 Skill mutation**.
+- **0 Trello**, **0 Calendar**, **0 Memory write** calls.
+- No deploy, no commit/push/branch, no issue close or comment, no next-issue promotion; `docs/02`'s canonical NOW stays #28.
+- The finalizer is **not live-validated**: that a real production Session's event stream carries exactly the fields the SDK types and the §46 recording show is established only by the recorded §46 shapes and the type definitions, and that the `sessions.create` response (as opposed to `sessions.retrieve`, which is what §46 recorded) carries the populated roster entry with the specialist `name` is inferred from the shared SDK type and unobserved (§47.4). If either assumption were wrong the failure mode is safe — the finalizer stays inactive and the coordinator reply is returned exactly as before — but the safeguard would then not deliver the exact relay; the live validation is what settles it.
+- **One bounded live production validation of this safeguard is the only remaining gate before Issue #28 can close** (a fresh Session resolving production v19/specialist v4, graded against the same strict-equality bar). The validation coordinator stays unarchived until then. #18 (same-turn fresh-read platform limitation) is unchanged.

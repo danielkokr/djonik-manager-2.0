@@ -316,7 +316,10 @@ export type DjonikTraceEvent =
   | { type: "mcp_tool_result"; serverName: string; toolName: string; isError: boolean }
   | { type: "verification_nudge_sent"; attempt: number }
   | { type: "write_unverified_failure" }
-  | { type: "due_date_reply_finalized"; verifiedDue: string; kyivDate: string; weekdayEn: string; mismatch: boolean };
+  | { type: "due_date_reply_finalized"; verifiedDue: string; kyivDate: string; weekdayEn: string; mismatch: boolean }
+  /** Content-free (#28): the exact Project Health specialist result became the turn's reply.
+   *  `replacedCoordinatorReply` is false when the coordinator had already relayed it exactly. */
+  | { type: "project_health_reply_finalized"; replacedCoordinatorReply: boolean };
 
 /**
  * Session-specific guidance shown to the agent alongside the memory store's
@@ -605,6 +608,88 @@ export function describeDueOutcomeForTrace(
   };
 }
 
+/**
+ * Issue #28 deterministic relay finalizer for the read-only Project Health path.
+ *
+ * Measured, not assumed: three live production-style smokes showed prompt-only
+ * control cannot make the Haiku coordinator relay the specialist's answer exactly
+ * (§42 happened to pass, §44 dropped a paragraph, §46 rewrote a clean specialist
+ * answer wholesale, adding an unsupported risk, a countdown and extra steps). The
+ * specialist's own result is already the accepted PM answer, so once Claude has
+ * natively delegated and the specialist has replied, this transport boundary — not
+ * the coordinator model — decides which string reaches the caller.
+ *
+ * This is NOT an intent router. It never reads user text, never decides whether
+ * Project Health should be delegated (Claude does that natively), and never parses
+ * or interprets the specialist's prose. It only acts on official Session/event
+ * provenance: the resolved Session's coordinator roster (exactly one child, and that
+ * child is the canonical specialist agent id) plus the `session.thread_created` /
+ * `agent.thread_message_received` events that name that same callable agent. It never
+ * calls the API to classify a child; everything it needs is already in the create
+ * response and the event stream.
+ *
+ * Fail-closed: any missing/ambiguous proof leaves the coordinator reply untouched
+ * (existing behavior). Mixed-action boundary: a turn that attempted any Trello write
+ * is left entirely to the existing verified-write / #23 due-date pipeline.
+ */
+export const PROJECT_HEALTH_SPECIALIST_AGENT_ID = "agent_01KNiQDzzPjaMU6LLF4mU6uM";
+
+/**
+ * The callable-agent name (as it appears in thread events) of the canonical Project
+ * Health specialist, or null when the resolved Session does not prove it. Requires a
+ * coordinator roster with exactly ONE entry, that entry being a plain agent (not an
+ * Advisor) whose id is the canonical specialist. Structurally typed and lenient so a
+ * Session without a roster (e.g. an older production version) simply disables the
+ * finalizer.
+ */
+export function resolveProjectHealthSpecialistName(agent: unknown): string | null {
+  const multiagent = (agent as { multiagent?: { type?: string; agents?: unknown } | null } | null | undefined)?.multiagent;
+  if (!multiagent || multiagent.type !== "coordinator" || !Array.isArray(multiagent.agents)) return null;
+  if (multiagent.agents.length !== 1) return null;
+  const entry = multiagent.agents[0] as { type?: string; id?: string; name?: string } | null;
+  if (!entry || entry.type !== "agent" || entry.id !== PROJECT_HEALTH_SPECIALIST_AGENT_ID) return null;
+  return typeof entry.name === "string" && entry.name.length > 0 ? entry.name : null;
+}
+
+/** Exact text of one child→coordinator message: its text blocks joined verbatim (the same
+ *  way `agent.message` text is assembled). Null when the message is not a plain non-empty
+ *  string — any non-text block, or no text at all — so it can never be relayed "exactly". */
+function exactSpecialistMessageText(content: Array<{ type: string; text?: string }>): string | null {
+  if (!Array.isArray(content) || content.length === 0) return null;
+  let text = "";
+  for (const block of content) {
+    if (block.type !== "text" || typeof block.text !== "string") return null;
+    text += block.text;
+  }
+  return text.length > 0 ? text : null;
+}
+
+/** What one turn observed about the delegated Project Health result — transport facts only. */
+export interface ProjectHealthRelayObservation {
+  /** One entry per proven specialist→coordinator message this turn (null = not relayable exactly). */
+  specialistMessages: Array<string | null>;
+  /** A Trello write tool was attempted this turn (successful or not) — a mutation/mixed turn. */
+  trelloWriteAttempted: boolean;
+}
+
+/**
+ * The exact specialist string that must be this turn's reply, or null to leave the
+ * coordinator's reply untouched. Exactly one proven, exactly-relayable specialist
+ * message and no attempted Trello write. Zero messages, several messages (no guessing
+ * which one is "the" answer), an unrelayable message, or a mutation turn all yield null.
+ */
+export function selectProjectHealthRelay(observation: ProjectHealthRelayObservation): string | null {
+  if (observation.trelloWriteAttempted) return null;
+  if (observation.specialistMessages.length !== 1) return null;
+  return observation.specialistMessages[0];
+}
+
+/** Returns the specialist's exact string when it must own the reply, else `reply` unchanged.
+ *  No trim, normalization, or any other transformation of either string. */
+export function finalizeProjectHealthReply(reply: string, observation: ProjectHealthRelayObservation): string {
+  return selectProjectHealthRelay(observation) ?? reply;
+}
+
 const VERIFICATION_NUDGE_TEXT =
   "Системна перевірка: у цьому turn був виклик Trello write-інструменту без " +
   "наступного read-виклику САМЕ ТОГО Ж об'єкта (той самий cardId), що підтверджує " +
@@ -666,6 +751,15 @@ export async function connectToDjonik(
   const stream = await client.beta.sessions.events.stream(session.id);
   const iterator = stream[Symbol.asyncIterator]();
 
+  /** Callable-agent name of the canonical Project Health specialist, proven from the resolved
+   *  Session's coordinator roster at creation (#28); null disables the relay finalizer. */
+  const projectHealthSpecialistName = resolveProjectHealthSpecialistName(session.agent);
+  /** Threads this Session created for that specialist. Session-lifetime, not per turn: a later
+   *  turn may message an existing child thread without a new `session.thread_created`. */
+  const projectHealthThreadIds = new Set<string>();
+  /** This turn's Project Health transport facts; reset at the start of every turn. */
+  let projectHealthTurn: ProjectHealthRelayObservation = { specialistMessages: [], trelloWriteAttempted: false };
+
   /**
    * Correlates `agent.mcp_tool_result` events back to the tool call that produced
    * them (results only carry `mcp_tool_use_id`, not the tool name/server/input).
@@ -708,7 +802,26 @@ export async function connectToDjonik(
             .map((block) => block.text)
             .join("");
           break;
+        case "session.thread_created":
+          if (projectHealthSpecialistName !== null && event.agent_name === projectHealthSpecialistName) {
+            projectHealthThreadIds.add(event.session_thread_id);
+          }
+          break;
+        case "agent.thread_message_received":
+          // Only a message from a thread this Session created for the canonical specialist,
+          // carrying that same callable-agent name, is ever a Project Health candidate.
+          if (
+            projectHealthSpecialistName !== null &&
+            event.from_agent_name === projectHealthSpecialistName &&
+            projectHealthThreadIds.has(event.from_session_thread_id)
+          ) {
+            projectHealthTurn.specialistMessages.push(exactSpecialistMessageText(event.content));
+          }
+          break;
         case "agent.mcp_tool_use":
+          if (isTrelloWriteTool(event.mcp_server_name, event.name)) {
+            projectHealthTurn.trelloWriteAttempted = true;
+          }
           mcpToolCallsById.set(event.id, {
             serverName: event.mcp_server_name,
             toolName: event.name,
@@ -804,7 +917,9 @@ export async function connectToDjonik(
         case "session.status_terminated":
           throw new DjonikSessionDeadError("Djonik session terminated unexpectedly.");
         case "session.status_idle":
-          if (!reply) {
+          // A turn with an exactly-relayable specialist result is complete even if the
+          // coordinator produced no message of its own (#28); `sendPartsSerial` finalizes it.
+          if (!reply && selectProjectHealthRelay(projectHealthTurn) === null) {
             throw new Error("Djonik produced no text reply for this turn.");
           }
           return reply;
@@ -865,6 +980,7 @@ export async function connectToDjonik(
     pendingWriteObjectId = null;
     pendingWriteDue = null;
     dueOutcomeForTurn = null;
+    projectHealthTurn = { specialistMessages: [], trelloWriteAttempted: false };
     mcpToolCallsById.clear();
     turnTelemetry = createTurnTelemetryCollector(turnSource, session.id, previousSessionUsage);
 
@@ -922,6 +1038,15 @@ export async function connectToDjonik(
       const dueTrace = describeDueOutcomeForTrace(dueOutcomeForTurn);
       if (dueTrace) onTrace?.({ type: "due_date_reply_finalized", ...dueTrace });
       reply = finalizeDueDateReply(reply, dueOutcomeForTurn);
+
+      // Issue #28: after Claude has natively delegated and the specialist has returned exactly one
+      // result, the specialist's exact string — not the coordinator's possibly rewritten message —
+      // is the reply. Never touches a turn that attempted a Trello write (handled above).
+      const projectHealthRelay = selectProjectHealthRelay(projectHealthTurn);
+      if (projectHealthRelay !== null) {
+        onTrace?.({ type: "project_health_reply_finalized", replacedCoordinatorReply: reply !== projectHealthRelay });
+        reply = projectHealthRelay;
+      }
 
       return reply;
     } finally {
