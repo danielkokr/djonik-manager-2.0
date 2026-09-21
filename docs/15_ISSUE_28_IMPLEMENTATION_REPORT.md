@@ -4010,3 +4010,82 @@ What this acceptance establishes: the committed §47 safeguard runs correctly on
 - **Issue #28 NOT closed in this slice** — and not commented on or updated; it remains open.
 - **#18** (same-turn fresh-read platform limitation) unchanged.
 - No source-code edit, Telegram change, router, middleware, custom loop, roadmap edit, next-issue promotion, commit, push, deploy or branch. The scratch proxy and runner live outside the repository and are not committed; no script or log from this run was added to it.
+
+## 49. Wave C1 final closeout — validation coordinator archive
+
+> **Scope:** one live lifecycle mutation only — archive the temporary validation coordinator `agent_01GFCLFYq6uLRHG8vMCrAgeK` — plus canonical doc sync. 0 Sessions, $0 inference, no `user.message`, no Trello/Calendar/Memory call, no production/specialist/Skill/model/tool/MCP mutation, no source/config/lockfile change, no commit/push/deploy, no GitHub close/comment.
+
+### 49.1 Product Owner closeout authorization
+
+Issue #28's live acceptance (§48) is complete and accepted. This slice authorizes exactly one live resource mutation: archive `agent_01GFCLFYq6uLRHG8vMCrAgeK` (expected v5, unarchived, temporary validation-only coordinator still pinning historical specialist v3). Not authorized and not performed: Session creation, inference, `user.message`, Trello/Calendar/Memory calls, production or specialist mutation, Skill/model/tool/MCP mutation, deployment, commit, push, GitHub close/comment, next-issue creation.
+
+### 49.2 Accepted main
+
+`0a952fc4bb0b4490b516a744a9eaf251e809be01` — `docs: record project health final acceptance`. Working tree clean, `HEAD == origin/main`. Canonical NOW (from `docs/02_DEVELOPMENT_ROADMAP.md` only): Wave C1 (#28). Issue #28 is open with only the 2026-09-19 Product Owner architecture-decision comment.
+
+### 49.3 §48 PASS is the final live acceptance
+
+§48 (one fresh production-v19 Session `sesn_016kcfFheL7cYd4w5y2N1qsr`, $0.21, through the real repository `connectToDjonik()`) passed all 15 locked bar items, including the primary criterion `runtimeReturnedReply === specialistFinal` (747 = 747 characters), create-response roster provenance, native delegation to specialist v4, fresh Trello evidence, exactly one child → coordinator message, zero Trello/Calendar/Memory writes, the persisted `session.status_idle` (`end_turn`), and cost within the cap. Recorded caveat carried forward unchanged: Haiku relayed exactly in that sample, so the safeguard's rewrite-substitution branch was covered by unit tests rather than a live rewrite. This closeout does not re-litigate or add any validation.
+
+### 49.4 Production v19 pre-flight (zero inference, `agents.retrieve`)
+
+`agent_01WGRHDBjQa3eMhoGJMmQ1dh`: `version 19`, `updated_at 2026-09-21T08:01:32.367348Z`, `claude-haiku-4-5-20251001`, `multiagent` = coordinator with exactly one entry `{agent_01KNiQDzzPjaMU6LLF4mU6uM, v4}`; the whole object deep-equal (key-order-insensitive) to the §48 post-run snapshot, i.e. the accepted production configuration unchanged.
+
+### 49.5 Specialist v4 pre-flight
+
+`agent_01KNiQDzzPjaMU6LLF4mU6uM`: `version 4`, `updated_at 2026-09-21T08:00:37.180815Z`, `claude-sonnet-5`, `effort high`; the whole object deep-equal to the §48 post-run snapshot (accepted configuration unchanged).
+
+### 49.6 Validation coordinator v5 pre-flight
+
+`agent_01GFCLFYq6uLRHG8vMCrAgeK`: `version 5`, `updated_at 2026-09-20T17:47:22.141060Z`, **`archived_at null`**, `multiagent` = coordinator pinning historical specialist **v3** only; the whole object deep-equal to its §48 post-run snapshot. All six pre-flight checks passed; no drift on production or specialist, and the coordinator was not already archived (so the idempotent no-op branch was not taken).
+
+### 49.7 Official SDK/API archival method
+
+Inspected the installed `@anthropic-ai/sdk` v0.125.0 Managed Agents surface (`resources/beta/agents/agents.d.ts`): the official lifecycle operation for an existing Agent is `client.beta.agents.archive(agentID, params?, options?)` (documented "Archive Agent"; returns the `BetaManagedAgentsAgent`; the only optional params are `betas` and `workspace_id`, which were not needed). There is a separate `delete` concept nowhere used here, and `agents.update`/`create` were not used. The documented roster rule "Referenced agents … must not be archived" governs agents that are *referenced by a coordinator roster*; nothing references the validation coordinator (production references only the specialist), so archiving it cannot affect production.
+
+### 49.8 Exact archive operation
+
+A single call: `client.beta.agents.archive("agent_01GFCLFYq6uLRHG8vMCrAgeK")` — no params, no body. The script was guarded by a one-shot lock and by a pre-flight that stops before mutation on any production/specialist drift or an unexpected coordinator state. The Agent was not deleted, not recreated, and none of its `system`, `model`, Skills, tools, MCP, roster or metadata was updated.
+
+### 49.9 Exact `archived_at` result
+
+Archive response and the subsequent `agents.retrieve` agree: **`archived_at: 2026-09-21T09:34:06.906497Z`** (was `null`). The archive response also reported `updated_at 2026-09-21T09:34:06.906497Z`, while a later `agents.retrieve` still showed the configuration `updated_at 2026-09-20T17:47:22.141060Z`, `version 5`. Both are recorded as observed; archival did not create a new version.
+
+### 49.10 Post-archive production unchanged proof
+
+`agents.retrieve` after archival: still **v19**, `updated_at 2026-09-21T08:01:32.367348Z`, `archived_at null`; the entire object deep-equal to the §49.4 pre-flight snapshot (same `system`, Haiku, four Skills, tools, MCP, roster → specialist v4).
+
+### 49.11 Post-archive specialist unchanged proof
+
+Still **v4**, `updated_at 2026-09-21T08:00:37.180815Z`, `archived_at null`; the entire object deep-equal to the §49.5 pre-flight snapshot.
+
+### 49.12 Validation coordinator otherwise unchanged proof
+
+Same id `agent_01GFCLFYq6uLRHG8vMCrAgeK`, still `version 5`. Field-by-field comparison of the retrieved object before vs after: the **only** changed top-level field is `archived_at` (`null → 2026-09-21T09:34:06.906497Z`); `system`, `model`, `skills`, `tools`, `mcp_servers` and `multiagent` (still exactly one entry, specialist **v3**) are identical, and excluding `archived_at`/`updated_at` the whole object is identical. It is retained only as historical validation infrastructure and is not part of production.
+
+### 49.13 Canonical docs sync
+
+- `docs/01_CLAUDE_NATIVE_ARCHITECTURE.md` (§9, minimal): §48 final live acceptance PASSED; production remains v19/Haiku and the specialist v4/Sonnet; native delegation remains the architecture; the deterministic reply-boundary safeguard is live-validated and is not an intent router; the exact specialist string is preserved for the bounded read-only Project Health path; validation coordinator archived; no Advisor; #18 unchanged; Wave C1 implementation and acceptance complete. Historical diagnostics were not rewritten.
+- `docs/02_DEVELOPMENT_ROADMAP.md` (Wave C1 block): the "implemented locally / not yet live-validated" and "one live validation remains" bullets are superseded by §48 PASS, the accepted production v19 + specialist v4 + safeguard, the archived validation coordinator, and "Wave C1 implementation and live acceptance are COMPLETE — only repository/GitHub administrative closeout remains; #28 is ready to close after this closeout commit lands". Canonical NOW stays **#28** in this local slice (the GitHub issue is intentionally not closed until the Product Owner reviews and commits these docs). No next issue is selected or promoted; `docs/03` capability order is not execution order.
+- `managed-agents/README.md`: production v19 pins specialist v4; specialist v4 accepted/live; validation coordinator archived and retained only as historical infrastructure, not part of production; no further production smoke is pending.
+- No source, test, config, Skill or lockfile change.
+
+### 49.14–49.19 Zero-impact proof
+
+- **0 Sessions** (no `sessions.create`, no Session-scoped call).
+- **$0 inference**; no `user.message`.
+- **0 Trello calls**, **0 Calendar calls**, **0 Memory calls** (no MCP server contacted; no Memory Store call).
+- **No production, specialist or Skill mutation**; no model/tool/MCP change; no new Agent, no Advisor.
+- The only calls: `agents.retrieve` ×3 before, one `agents.archive`, `agents.retrieve` ×3 after.
+
+### 49.20 Issue #28 readiness
+
+Wave C1's implementation and live acceptance are complete. **Issue #28 is ready for Product Owner commit/push of these docs and GitHub closure.** This slice did not commit, push, close or comment on the issue.
+
+### 49.21 Next Wave C issue
+
+Intentionally **not selected or promoted** here (no roadmap promotion, no new GitHub issue). `docs/03`'s capability order is not an execution order; the next Wave C item is a separate Product Owner decision.
+
+### 49.22 #18
+
+The accepted #18 same-turn fresh-read platform limitation is unchanged and remains an accepted platform limitation.
