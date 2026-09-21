@@ -284,7 +284,7 @@ test("integration (#25 live-validation blocker): two independent groups settling
   assert.equal(sendCalls.length, 1, "only group 1's turn should have reached the provider so far");
 
   push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 1" }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   await sleep(10);
 
   assert.equal(sentMessages.length, 1);
@@ -292,7 +292,7 @@ test("integration (#25 live-validation blocker): two independent groups settling
   assert.equal(sendCalls.length, 2, "group 2's turn starts its own provider send only after group 1 fully finished");
 
   push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 2" }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   await sleep(10);
 
   assert.equal(sentMessages.length, 2);

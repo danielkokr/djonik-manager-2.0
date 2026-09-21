@@ -9,11 +9,10 @@ import {
   buildVerifiedDueConfirmation,
   finalizeDueDateReply,
   DjonikSessionDeadError,
+  DjonikSpecialistUnverifiedError,
   DjonikUnverifiedMutationError,
   PROJECT_HEALTH_SPECIALIST_AGENT_ID,
   resolveProjectHealthSpecialistName,
-  selectProjectHealthRelay,
-  finalizeProjectHealthReply,
   type DjonikTraceEvent,
   type DjonikTurnTelemetry,
 } from "./djonikClient.js";
@@ -148,7 +147,7 @@ const MEMORY_INSTRUCTIONS =
   "presented as still active.";
 
 const AGENT_MESSAGE = { type: "agent.message", content: [{ type: "text", text: "Готово." }] };
-const IDLE = { type: "session.status_idle" };
+const IDLE = { type: "session.status_idle", stop_reason: { type: "end_turn" } };
 
 function retryingError(message = "MCP server 'trello' initialize failed: retrying"): unknown {
   return { type: "session.error", error: { message, retry_status: { type: "retrying" } } };
@@ -1275,7 +1274,7 @@ test("Scenario A: two concurrent send() calls are FIFO-serialized — turn 2's p
   assert.equal(sendCalls.length, 1, "turn 2 must not reach the provider before turn 1 has even started resolving");
 
   push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 1" }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   const reply1 = await p1;
   assert.equal(reply1, "Відповідь 1", "reply must stay attributed to the caller that sent turn 1");
 
@@ -1283,7 +1282,7 @@ test("Scenario A: two concurrent send() calls are FIFO-serialized — turn 2's p
   assert.equal(sendCalls.length, 2, "turn 2 starts its own provider send only once turn 1 has fully settled");
 
   push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 2" }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   const reply2 = await p2;
   assert.equal(reply2, "Відповідь 2", "reply must stay attributed to the caller that sent turn 2, not swapped with turn 1");
 
@@ -1300,14 +1299,14 @@ test("Scenario B: a failed first queued turn does not poison the queue — the s
   assert.equal(sendCalls.length, 1);
 
   // Ordinary (non-terminal) turn failure: session ends idle with no assistant text.
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   await assert.rejects(() => p1, /no text reply/);
 
   await flushMicrotasks();
   assert.equal(sendCalls.length, 2, "the second queued turn must still start after the first one failed");
 
   push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 2" }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   assert.equal(await p2, "Відповідь 2");
 
   session.close();
@@ -1352,11 +1351,11 @@ test("Scenario D: two concurrently requested turns produce two independent telem
   push(mcpToolUse("call_1", "trelloSearch"));
   push(mcpToolResult("call_1"));
   push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 1" }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   await p1;
 
   push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 2" }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   await p2;
 
   assert.equal(telemetry.length, 2);
@@ -1385,14 +1384,14 @@ test("Scenario E: a concurrently queued read-only turn cannot reset an earlier q
   push(mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }));
   push(mcpToolResult("call_2", false, cardContent({ id: "card_A" })));
   push({ type: "agent.message", content: [{ type: "text", text: "Готово (turn 1)." }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
 
   assert.equal(await p1, "Готово (turn 1).", "turn 1 succeeds purely from its own verification");
 
   await flushMicrotasks();
   assert.equal(sendCalls.length, 2, "turn 2 only starts once turn 1's own verification has fully settled");
   push({ type: "agent.message", content: [{ type: "text", text: "Сонячно." }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   assert.equal(await p2, "Сонячно.", "turn 2's reply remains its own, unaffected by turn 1's write");
 
   session.close();
@@ -1415,14 +1414,14 @@ test("Scenario F (#27): send() and sendOrdered() interleaved on one handle FIFO-
   assert.equal(sendCalls.length, 1, "sendOrdered's provider turn must not start before send()'s turn has even begun resolving — proves one shared queue, not two independent ones");
 
   push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 1" }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   assert.equal(await p1, "Відповідь 1");
 
   await flushMicrotasks();
   assert.equal(sendCalls.length, 2, "sendOrdered's own provider turn starts only once send()'s turn has fully settled");
 
   push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 2" }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   assert.equal(await p2, "Відповідь 2", "sendOrdered's reply stays attributed to its own call, not swapped with send()'s");
 
   session.close();
@@ -1442,14 +1441,14 @@ test("Scenario G (#27): the reverse order — sendOrdered() first, then send() �
   assert.equal(sendCalls.length, 1, "send()'s provider turn must not start before sendOrdered()'s turn has even begun resolving");
 
   push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 1" }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   assert.equal(await p1, "Відповідь 1");
 
   await flushMicrotasks();
   assert.equal(sendCalls.length, 2, "send()'s turn starts only once sendOrdered()'s turn has fully settled");
 
   push({ type: "agent.message", content: [{ type: "text", text: "Відповідь 2" }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   assert.equal(await p2, "Відповідь 2");
 
   session.close();
@@ -1467,7 +1466,7 @@ test("Scenario H (#27): sendOrdered() shares the exact same event-stream iterato
   const p = session.sendOrdered([{ type: "text", text: "чи бачиш цей event?" }]);
   await flushMicrotasks();
   push({ type: "agent.message", content: [{ type: "text", text: "Так, бачу." }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
 
   assert.equal(await p, "Так, бачу.", "sendOrdered consumed events from the same single stream iterator send() uses");
   session.close();
@@ -1502,7 +1501,7 @@ test("Scenario E (inverse order): a queued write+verify turn still verifies corr
 
   await flushMicrotasks();
   push({ type: "agent.message", content: [{ type: "text", text: "Привіт!" }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   assert.equal(await p1, "Привіт!");
 
   push(mcpToolUse("call_1", "trelloWriteCard", { cardId: "card_A" }));
@@ -1510,7 +1509,7 @@ test("Scenario E (inverse order): a queued write+verify turn still verifies corr
   push(mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }));
   push(mcpToolResult("call_2", false, cardContent({ id: "card_A" })));
   push({ type: "agent.message", content: [{ type: "text", text: "Готово (turn 2)." }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   assert.equal(await p2, "Готово (turn 2).", "turn 2's own write is still verified correctly after an unrelated turn 1");
 
   session.close();
@@ -1529,7 +1528,7 @@ test("Scenario F (#23 regression): deterministic Kyiv due-date finalization is u
   push(mcpToolUse("call_2", "trelloReadCard", { cardIdOrUrl: "card_A" }));
   push(mcpToolResult("call_2", false, trelloCardReadContent("2026-09-21T21:30:00.000Z")));
   push({ type: "agent.message", content: [{ type: "text", text: "Понеділок, 22 вересня 2026, 00:30" }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
 
   assert.equal(
     await p1,
@@ -1538,7 +1537,7 @@ test("Scenario F (#23 regression): deterministic Kyiv due-date finalization is u
   );
 
   push({ type: "agent.message", content: [{ type: "text", text: "Привіт!" }] });
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   assert.equal(await p2, "Привіт!");
 
   session.close();
@@ -1554,6 +1553,22 @@ test("Scenario F (#23 regression): deterministic Kyiv due-date finalization is u
 
 const PH_NAME = "Djonik Project Health Specialist";
 const PH_THREAD = "sthr_ph_1";
+
+/** Start of the fixed notice shown when coordinator text is withheld beside a verified specialist result (#32). */
+const WITHHELD_NOTICE = "ℹ️ Джонік також сформував власний текст";
+
+/** Asserts the turn fails visibly because the specialist-backed result could not be established (#32). */
+async function assertSpecialistUnverified(promise: Promise<string>, reason: string, label = ""): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    assert.ok(error instanceof DjonikSpecialistUnverifiedError, `${label} expected DjonikSpecialistUnverifiedError, got ${String(error)}`);
+    assert.equal(error.reason, reason, label);
+    assert.match(error.message, /НЕ підтверджено/, label);
+    return error;
+  }
+  assert.fail(`${label} expected the turn to fail visibly`);
+}
 
 /** A resolved `session.agent` whose coordinator roster is exactly the canonical specialist. */
 function projectHealthSessionAgent(overrides: Record<string, unknown> = {}): unknown {
@@ -1581,6 +1596,17 @@ function specialistMessage(text: string, fromAgentName: string | null = PH_NAME,
   };
 }
 
+/** The coordinator's task/follow-up to a child (official `agent.thread_message_sent` on the primary stream). */
+function threadMessageSent(threadId = PH_THREAD, agentName = PH_NAME): unknown {
+  return {
+    type: "agent.thread_message_sent",
+    id: `evt_sent_${Math.random().toString(36).slice(2)}`,
+    content: [{ type: "text", text: "delegated task" }],
+    to_session_thread_id: threadId,
+    to_agent_name: agentName,
+  };
+}
+
 function primaryMessage(text: string): unknown {
   return { type: "agent.message", content: [{ type: "text", text }] };
 }
@@ -1595,30 +1621,35 @@ test("resolveProjectHealthSpecialistName: only a one-entry coordinator roster of
   assert.equal(resolveProjectHealthSpecialistName(projectHealthSessionAgent({ id: "agent_someone_else" })), null);
   assert.equal(resolveProjectHealthSpecialistName(projectHealthSessionAgent({ type: "advisor" })), null);
   assert.equal(resolveProjectHealthSpecialistName(projectHealthSessionAgent({ name: "" })), null);
+  // #32/R7: an unrelated second roster entry no longer disables the safeguard, in either order.
+  const unrelated = { type: "agent", id: "agent_second", name: "Second" };
+  const canonical = { type: "agent", id: PROJECT_HEALTH_SPECIALIST_AGENT_ID, name: PH_NAME };
+  assert.equal(resolveProjectHealthSpecialistName({ multiagent: { type: "coordinator", agents: [canonical, unrelated] } }), PH_NAME);
+  assert.equal(resolveProjectHealthSpecialistName({ multiagent: { type: "coordinator", agents: [unrelated, canonical] } }), PH_NAME);
   assert.equal(
-    resolveProjectHealthSpecialistName({
-      multiagent: {
-        type: "coordinator",
-        agents: [
-          { type: "agent", id: PROJECT_HEALTH_SPECIALIST_AGENT_ID, name: PH_NAME },
-          { type: "agent", id: "agent_second", name: "Second" },
-        ],
-      },
-    }),
+    resolveProjectHealthSpecialistName({ multiagent: { type: "coordinator", agents: [canonical, { type: "advisor", model: "x" }] } }),
+    PH_NAME,
+    "an Advisor entry beside the canonical specialist is unrelated too",
+  );
+  // ...while ambiguity still fails closed.
+  assert.equal(
+    resolveProjectHealthSpecialistName({ multiagent: { type: "coordinator", agents: [canonical, { ...canonical }] } }),
     null,
-    "a roster with more than one child cannot prove which child is which",
+    "a duplicated canonical entry is ambiguous",
+  );
+  assert.equal(
+    resolveProjectHealthSpecialistName({ multiagent: { type: "coordinator", agents: [canonical, { ...unrelated, name: PH_NAME }] } }),
+    null,
+    "another entry answering to the same callable name would make thread events ambiguous",
+  );
+  assert.equal(
+    resolveProjectHealthSpecialistName({ multiagent: { type: "coordinator", agents: [unrelated] } }),
+    null,
+    "no canonical entry: nothing is proven, however many other entries exist",
   );
 });
 
-test("selectProjectHealthRelay / finalizeProjectHealthReply: pure decision rules", () => {
-  const one = { specialistMessages: ["X"], trelloWriteAttempted: false };
-  assert.equal(selectProjectHealthRelay(one), "X");
-  assert.equal(finalizeProjectHealthReply("rewrite", one), "X");
-  assert.equal(finalizeProjectHealthReply("rewrite", { specialistMessages: [], trelloWriteAttempted: false }), "rewrite");
-  assert.equal(finalizeProjectHealthReply("rewrite", { specialistMessages: ["X", "Y"], trelloWriteAttempted: false }), "rewrite");
-  assert.equal(finalizeProjectHealthReply("rewrite", { specialistMessages: [null], trelloWriteAttempted: false }), "rewrite");
-  assert.equal(finalizeProjectHealthReply("rewrite", { specialistMessages: ["X"], trelloWriteAttempted: true }), "rewrite");
-});
+// The pure specialist decision/composition rules now live in src/turnCorrelation.test.ts (#32).
 
 test("#28 1: an ordinary non-delegated turn returns the coordinator reply exactly", async () => {
   const { client } = createFakeClient([primaryMessage("ordinary"), IDLE], projectHealthSessionAgent());
@@ -1628,7 +1659,7 @@ test("#28 1: an ordinary non-delegated turn returns the coordinator reply exactl
   session.close();
 });
 
-test("#28 2: a proven Project Health result replaces the coordinator's rewrite with the exact child string", async () => {
+test("#28 2 (#32): a proven Project Health result stays the authoritative answer; the coordinator's differing text is withheld VISIBLY", async () => {
   const traces: DjonikTraceEvent[] = [];
   const { client } = createFakeClient(
     [threadCreated(), specialistMessage("SPECIALIST EXACT"), primaryMessage("HAIKU REWRITE"), IDLE],
@@ -1638,10 +1669,12 @@ test("#28 2: a proven Project Health result replaces the coordinator's rewrite w
 
   const reply = await session.send("Що зараз по Extract?");
 
-  assert.equal(reply, "SPECIALIST EXACT");
+  assert.ok(reply.startsWith("SPECIALIST EXACT"), "the exact specialist string is the answer");
+  assert.ok(!reply.includes("HAIKU REWRITE"), "Haiku's rewrite can never appear beside it as another Project Health answer (#28)");
+  assert.ok(reply.includes(WITHHELD_NOTICE), "but the withholding is never silent (#32)");
   assert.deepEqual(
-    traces.filter((event) => event.type === "project_health_reply_finalized"),
-    [{ type: "project_health_reply_finalized", replacedCoordinatorReply: true }],
+    traces.filter((event) => event.type === "specialist_reply_composed"),
+    [{ type: "specialist_reply_composed", mode: "coordinator_withheld" }],
     "the trace is content-free: it carries no specialist or user text",
   );
   session.close();
@@ -1657,7 +1690,10 @@ test("#28 3: the specialist string is returned with no trim, normalization or re
 
   const reply = await session.send("Що зараз по Extract?");
 
-  assert.strictEqual(reply, exact);
+  assert.ok(reply.startsWith(exact), "no trim, normalization or reformatting of the specialist string");
+  assert.strictEqual(reply.slice(0, exact.length), exact);
+  assert.ok(!reply.includes("сумарія"));
+  assert.ok(reply.includes(WITHHELD_NOTICE));
   session.close();
 });
 
@@ -1671,13 +1707,13 @@ test("#28 4: an already-exact coordinator relay returns that same string, once, 
 
   assert.strictEqual(await session.send("Що зараз по Extract?"), "X");
   assert.deepEqual(
-    traces.filter((event) => event.type === "project_health_reply_finalized"),
-    [{ type: "project_health_reply_finalized", replacedCoordinatorReply: false }],
+    traces.filter((event) => event.type === "specialist_reply_composed"),
+    [{ type: "specialist_reply_composed", mode: "exact" }],
   );
   session.close();
 });
 
-test("#28 5: without proven Project Health provenance the coordinator reply stays authoritative (no generic subagent interception)", async () => {
+test("#28 5: without proven canonical engagement the coordinator reply stays authoritative (no generic subagent interception)", async () => {
   const cases: Array<{ label: string; agent: unknown; events: unknown[] }> = [
     { label: "no resolved roster on the Session", agent: undefined, events: [threadCreated(), specialistMessage("CHILD"), primaryMessage("PRIMARY"), IDLE] },
     {
@@ -1690,22 +1726,7 @@ test("#28 5: without proven Project Health provenance the coordinator reply stay
       agent: projectHealthSessionAgent(),
       events: [threadCreated("Some Other Agent"), specialistMessage("CHILD", "Some Other Agent"), primaryMessage("PRIMARY"), IDLE],
     },
-    {
-      label: "message from a thread this Session never created for the specialist",
-      agent: projectHealthSessionAgent(),
-      events: [threadCreated(), specialistMessage("CHILD", PH_NAME, "sthr_unknown"), primaryMessage("PRIMARY"), IDLE],
-    },
-    {
-      label: "message names a different callable agent",
-      agent: projectHealthSessionAgent(),
-      events: [threadCreated(), specialistMessage("CHILD", "Some Other Agent"), primaryMessage("PRIMARY"), IDLE],
-    },
-    {
-      label: "message carries no callable-agent name (received from the primary)",
-      agent: projectHealthSessionAgent(),
-      events: [threadCreated(), specialistMessage("CHILD", null), primaryMessage("PRIMARY"), IDLE],
-    },
-    { label: "message arrives with no thread ever created", agent: projectHealthSessionAgent(), events: [specialistMessage("CHILD"), primaryMessage("PRIMARY"), IDLE] },
+    { label: "message arrives with no canonical delegation engaged at all", agent: projectHealthSessionAgent(), events: [specialistMessage("CHILD"), primaryMessage("PRIMARY"), IDLE] },
   ];
   for (const { label, agent, events } of cases) {
     const { client } = createFakeClient(events, agent);
@@ -1715,7 +1736,31 @@ test("#28 5: without proven Project Health provenance the coordinator reply stay
   }
 });
 
-test("#28 5b: a child message that is not a plain non-empty string is never relayed as exact", async () => {
+test("#28 5a (#32): once the canonical delegation IS engaged, an unattributable result fails visibly instead of falling back to coordinator prose", async () => {
+  const cases: Array<{ label: string; events: unknown[] }> = [
+    {
+      label: "message from a thread this Session never created for the specialist",
+      events: [threadCreated(), specialistMessage("CHILD", PH_NAME, "sthr_unknown"), primaryMessage("PRIMARY"), IDLE],
+    },
+    {
+      label: "message from the canonical thread naming a different callable agent",
+      events: [threadCreated(), specialistMessage("CHILD", "Some Other Agent"), primaryMessage("PRIMARY"), IDLE],
+    },
+    {
+      label: "message from the canonical thread carrying no callable-agent name",
+      events: [threadCreated(), specialistMessage("CHILD", null), primaryMessage("PRIMARY"), IDLE],
+    },
+  ];
+  for (const { label, events } of cases) {
+    const { client } = createFakeClient(events, projectHealthSessionAgent());
+    const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+    const error = await assertSpecialistUnverified(session.send("Що зараз по Extract?"), "unrecognized_result", label);
+    assert.ok(!error.message.includes("PRIMARY"), label);
+    session.close();
+  }
+});
+
+test("#28 5b (#32): a canonical child message that is not a plain non-empty string fails visibly, never relayed as exact", async () => {
   const notPlain: unknown[] = [
     { type: "agent.thread_message_received", content: [{ type: "text", text: "A" }, { type: "image", source: {} }], from_session_thread_id: PH_THREAD, from_agent_name: PH_NAME },
     { type: "agent.thread_message_received", content: [{ type: "text", text: "" }], from_session_thread_id: PH_THREAD, from_agent_name: PH_NAME },
@@ -1724,15 +1769,17 @@ test("#28 5b: a child message that is not a plain non-empty string is never rela
   for (const message of notPlain) {
     const { client } = createFakeClient([threadCreated(), message, primaryMessage("PRIMARY"), IDLE], projectHealthSessionAgent());
     const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
-    assert.strictEqual(await session.send("Що зараз по Extract?"), "PRIMARY");
+    const error = await assertSpecialistUnverified(session.send("Що зараз по Extract?"), "not_exact_text");
+    assert.ok(!error.message.includes("PRIMARY"));
     session.close();
   }
 });
 
-test("#28 6: no child result leaves the ordinary path unchanged, including the empty-reply failure", async () => {
+test("#28 6 (#32): an engaged delegation with no child result fails visibly; an empty non-delegated turn keeps the empty-reply failure", async () => {
   const { client } = createFakeClient([threadCreated(), primaryMessage("PRIMARY"), IDLE], projectHealthSessionAgent());
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
-  assert.strictEqual(await session.send("Що зараз по Extract?"), "PRIMARY");
+  const error = await assertSpecialistUnverified(session.send("Що зараз по Extract?"), "missing_result");
+  assert.ok(!error.message.includes("PRIMARY"), "the coordinator's unverified Project Health prose is not shown");
   session.close();
 
   const empty = createFakeClient([IDLE], projectHealthSessionAgent());
@@ -1765,7 +1812,11 @@ test("#28 7: a verified Trello write turn is left to the existing write pipeline
   );
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
 
-  assert.strictEqual(await session.send("Проаналізуй Extract і онови картку A"), "Готово, картку оновлено.");
+  const reply = await session.send("Проаналізуй Extract і онови картку A");
+  assert.match(reply, /^✅ Підтверджено читанням картки/, "the mutation outcome is system-owned and leads (#31)");
+  assert.ok(reply.includes("SPECIALIST EXACT"), "the read-only specialist result is preserved beside it (#32)");
+  assert.ok(!reply.includes("Готово, картку оновлено."), "model text is never shown beside a verified specialist result");
+  assert.ok(reply.includes(WITHHELD_NOTICE));
   assert.equal(sendCalls.length, 1);
   session.close();
 });
@@ -1784,8 +1835,12 @@ test("#28 7b: a failed (is_error) Trello write attempt also keeps the mutation t
   );
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
 
-  // Neither the specialist's string nor the model's text: the mutation turn is answered from the tool outcome (#31).
-  assert.strictEqual(await session.send("Онови картку A"), "❌ Не виконано (помилка інструмента): картка card_A");
+  // The model's text never reaches the user: the mutation outcome is the tool outcome (#31); the verified,
+  // read-only specialist result is preserved verbatim after it (#32).
+  const reply = await session.send("Онови картку A");
+  assert.ok(reply.startsWith("❌ Не виконано (помилка інструмента): картка card_A"));
+  assert.ok(!reply.includes("Не вдалося оновити картку."), "model prose is still not used for a failed write");
+  assert.ok(reply.includes("SPECIALIST EXACT"));
   session.close();
 });
 
@@ -1825,20 +1880,23 @@ test("#28 8: the Issue #23 due-date finalizer keeps owning a verified due-date w
   );
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
 
-  assert.equal(
-    await session.send("Онови дедлайн картки A на 22 вересня 00:30 за Києвом"),
-    "Готово. Trello підтвердив дедлайн: вівторок, 22 вересня 2026, 00:30 за Києвом.",
+  const reply = await session.send("Онови дедлайн картки A на 22 вересня 00:30 за Києвом");
+  assert.ok(
+    reply.startsWith("Готово. Trello підтвердив дедлайн: вівторок, 22 вересня 2026, 00:30 за Києвом."),
+    "the #23 sentence still leads and never carries the model's wrong weekday",
   );
+  assert.ok(!reply.includes("Понеділок, 22 вересня"));
+  assert.ok(reply.includes("SPECIALIST EXACT"));
   session.close();
 });
 
-test("#28 10: several specialist results in one turn are never guessed between — the coordinator reply is kept", async () => {
+test("#28 10 (#32): several specialist results / threads in one turn are never guessed between — the turn fails visibly", async () => {
   const oneThread = createFakeClient(
     [threadCreated(), specialistMessage("FIRST"), specialistMessage("SECOND"), primaryMessage("PRIMARY"), IDLE],
     projectHealthSessionAgent(),
   );
   const s1 = await connectToDjonik(oneThread.client, "agent_x", "env_x", "memstore_x", "vlt_x");
-  assert.strictEqual(await s1.send("Що зараз по Extract?"), "PRIMARY");
+  await assertSpecialistUnverified(s1.send("Що зараз по Extract?"), "duplicate_results");
   s1.close();
 
   const twoThreads = createFakeClient(
@@ -1853,7 +1911,7 @@ test("#28 10: several specialist results in one turn are never guessed between �
     projectHealthSessionAgent(),
   );
   const s2 = await connectToDjonik(twoThreads.client, "agent_x", "env_x", "memstore_x", "vlt_x");
-  assert.strictEqual(await s2.send("Що зараз по Extract?"), "PRIMARY");
+  await assertSpecialistUnverified(s2.send("Що зараз по Extract?"), "multiple_threads");
   s2.close();
 });
 
@@ -1881,7 +1939,10 @@ test("#28 11: the decision is made on authoritative session.status_idle, not a t
   assert.equal(settled, null, "still no authoritative session.status_idle");
 
   push(IDLE);
-  assert.strictEqual(await turn, "SPECIALIST EXACT");
+  const reply = await turn;
+  assert.ok(reply.startsWith("SPECIALIST EXACT"));
+  assert.ok(!reply.includes("HAIKU REWRITE") && !reply.includes("INTERIM COORDINATOR TEXT"));
+  assert.ok(reply.includes(WITHHELD_NOTICE));
   session.close();
 });
 
@@ -1894,14 +1955,18 @@ test("#28 12: thread proof lives for the Session, but each turn's result is its 
   push(specialistMessage("EXACT ONE"));
   push(primaryMessage("REWRITE ONE"));
   push(IDLE);
-  assert.strictEqual(await t1, "EXACT ONE");
+  const r1 = await t1;
+  assert.ok(r1.startsWith("EXACT ONE") && !r1.includes("REWRITE ONE") && r1.includes(WITHHELD_NOTICE));
 
-  // Turn 2: the existing child thread is messaged again — no new session.thread_created.
+  // Turn 2: the existing child thread is messaged again — no new session.thread_created, but the
+  // coordinator's own agent.thread_message_sent to it is this turn's delegation evidence (#32).
   const t2 = session.send("А тепер по Seqthera?");
+  push(threadMessageSent());
   push(specialistMessage("EXACT TWO"));
   push(primaryMessage("REWRITE TWO"));
   push(IDLE);
-  assert.strictEqual(await t2, "EXACT TWO");
+  const r2 = await t2;
+  assert.ok(r2.startsWith("EXACT TWO") && !r2.includes("REWRITE TWO") && !r2.includes("EXACT ONE"));
 
   // Turn 3: no specialist involvement at all — turn 1/2 results must not leak in.
   const t3 = session.send("Дякую");
@@ -1924,14 +1989,17 @@ test("#28 9: FIFO serialization still attributes each queued turn's own speciali
   push(specialistMessage("EXACT ONE"));
   push(primaryMessage("REWRITE ONE"));
   push(IDLE);
-  assert.strictEqual(await p1, "EXACT ONE");
+  const r1 = await p1;
+  assert.ok(r1.startsWith("EXACT ONE") && !r1.includes("EXACT TWO"));
 
   await flushMicrotasks();
   assert.equal(sendCalls.length, 2);
+  push(threadMessageSent());
   push(specialistMessage("EXACT TWO"));
   push(primaryMessage("REWRITE TWO"));
   push(IDLE);
-  assert.strictEqual(await p2, "EXACT TWO");
+  const r2 = await p2;
+  assert.ok(r2.startsWith("EXACT TWO") && !r2.includes("EXACT ONE"));
   session.close();
 });
 
@@ -1950,7 +2018,7 @@ test("#28: the finalizer does not touch telemetry — model-iteration and tool a
   );
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x", undefined, (t) => records.push(t));
 
-  assert.strictEqual(await session.send("Що зараз по Extract?"), "SPECIALIST EXACT");
+  assert.ok((await session.send("Що зараз по Extract?")).startsWith("SPECIALIST EXACT"));
   assert.equal(records.length, 1);
   assert.equal(records[0].modelIterations, 2);
   assert.equal(records[0].toolCalls, 0);
@@ -2458,7 +2526,8 @@ test("#31: Project Health read-only path is unaffected — Trello reads plus one
     ],
     projectHealthSessionAgent(),
   );
-  assert.strictEqual(await session.send("Що зараз по Extract?"), "SPECIALIST EXACT");
+  const reply = await session.send("Що зараз по Extract?");
+  assert.ok(reply.startsWith("SPECIALIST EXACT") && !reply.includes("coordinator rewrite") && reply.includes(WITHHELD_NOTICE));
   assert.equal(sendCalls.length, 1, "read-only turns never trigger a verification nudge");
   session.close();
 });
@@ -2480,11 +2549,11 @@ test("#31 FIFO: an unverified turn does not leak its ledger into the next queued
   push(mcpToolUse("w1", "trelloWriteCard", { action: "update", cardId: "A", name: "new A" }));
   push(mcpToolResult("w1", false, cardContent({ id: "A" })));
   push(msg("Готово A."));
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   await flushMicrotasks();
   assert.equal(sendCalls.length, 2, "turn 1's own single nudge, before turn 2 may start");
   push(msg("Так, A готово."));
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   assert.ok((await outcome1) instanceof DjonikUnverifiedMutationError);
 
   await flushMicrotasks();
@@ -2495,7 +2564,7 @@ test("#31 FIFO: an unverified turn does not leak its ledger into the next queued
   push(mcpToolUse("r2", "trelloReadCard", { action: "get", cardIdOrUrl: "B" }));
   push(mcpToolResult("r2", false, cardContent({ id: "B", name: "new B" })));
   push(msg("B готово."));
-  push({ type: "session.status_idle" });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
   assert.equal(await p2, "B готово.");
   assert.equal(sendCalls.length, 3, "no nudge for the clean second turn");
 

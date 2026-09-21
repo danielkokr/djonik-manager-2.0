@@ -7,12 +7,25 @@ import {
   isConfirmed,
   isFailed,
   isNudgeable,
-  isTrelloWriteTool,
   isUnresolved,
   isValidUtcDue,
   nudgeTargetIds,
   type MutationOutcome,
 } from "./trelloMutationLedger.js";
+import {
+  DjonikSpecialistUnverifiedError,
+  DjonikTurnIncompleteError,
+  SpecialistTurnProvenance,
+  classifyStopReason,
+  composeWithSpecialist,
+  specialistBlockForError,
+  specialistUnverifiedNotice,
+  type IncompleteStopKind,
+  type SpecialistCompositionMode,
+  type SpecialistUnverifiedReason,
+} from "./turnCorrelation.js";
+
+export { DjonikSpecialistUnverifiedError, DjonikTurnIncompleteError } from "./turnCorrelation.js";
 
 /**
  * Raw image bytes for one multimodal turn, transported as an inline base64
@@ -331,9 +344,18 @@ export type DjonikTraceEvent =
   | { type: "verification_nudge_sent"; attempt: number }
   | { type: "write_unverified_failure" }
   | { type: "due_date_reply_finalized"; verifiedDue: string; kyivDate: string; weekdayEn: string; mismatch: boolean }
-  /** Content-free (#28): the exact Project Health specialist result became the turn's reply.
-   *  `replacedCoordinatorReply` is false when the coordinator had already relayed it exactly. */
-  | { type: "project_health_reply_finalized"; replacedCoordinatorReply: boolean };
+  /** Content-free (#28, composition contract since #32): a VERIFIED Project Health specialist result
+   *  was preserved in the turn's reply. `mode` says how it met the rest of the reply. */
+  | { type: "specialist_reply_composed"; mode: SpecialistCompositionMode }
+  /** Content-free (#32): the turn saw a specialist result it could not call verified, so nothing
+   *  was substituted and the coordinator's reply stayed authoritative. */
+  | { type: "specialist_result_unverified"; reason: SpecialistUnverifiedReason }
+  /** Content-free (#32): the turn ended without an authoritative `end_turn`; nothing was resumed/replayed. */
+  | { type: "turn_incomplete"; stopKind: IncompleteStopKind }
+  /** Content-free (#32): events that provably (or, without an anchor, conservatively) belonged to an
+   *  earlier turn were ignored. `preAnchorEvents` predate this turn's own `user.message` echo;
+   *  `lateSpecialistResults` are canonical specialist results with no in-turn engagement. */
+  | { type: "late_events_quarantined"; preAnchorEvents: number; lateSpecialistResults: number };
 
 /**
  * Session-specific guidance shown to the agent alongside the memory store's
@@ -533,85 +555,54 @@ export function describeDueOutcomeForTrace(
 }
 
 /**
- * Issue #28 deterministic relay finalizer for the read-only Project Health path.
+ * Issue #28 deterministic relay boundary for the read-only Project Health path, reshaped by #32.
  *
- * Measured, not assumed: three live production-style smokes showed prompt-only
- * control cannot make the Haiku coordinator relay the specialist's answer exactly
- * (§42 happened to pass, §44 dropped a paragraph, §46 rewrote a clean specialist
- * answer wholesale, adding an unsupported risk, a countdown and extra steps). The
- * specialist's own result is already the accepted PM answer, so once Claude has
- * natively delegated and the specialist has replied, this transport boundary — not
- * the coordinator model — decides which string reaches the caller.
+ * Measured, not assumed: three live production-style smokes showed prompt-only control cannot make
+ * the Haiku coordinator relay the specialist's answer exactly (§42 happened to pass, §44 dropped a
+ * paragraph, §46 rewrote a clean specialist answer wholesale). The specialist's own result is the
+ * accepted PM answer, so once Claude has natively delegated and the canonical specialist replied,
+ * this transport boundary — not the coordinator model — guarantees that exact string reaches the
+ * caller.
  *
- * This is NOT an intent router. It never reads user text, never decides whether
- * Project Health should be delegated (Claude does that natively), and never parses
- * or interprets the specialist's prose. It only acts on official Session/event
- * provenance: the resolved Session's coordinator roster (exactly one child, and that
- * child is the canonical specialist agent id) plus the `session.thread_created` /
- * `agent.thread_message_received` events that name that same callable agent. It never
- * calls the API to classify a child; everything it needs is already in the create
- * response and the event stream.
+ * #32 kept that authority and made its limits explicit. Nothing in the official event surface links a
+ * coordinator `agent.message` to the child result it may derive from, so the transport cannot tell a
+ * coordinator REWRITE of the specialist (the #28 failure) from independently requested coordinator
+ * output. Rather than guess with an intent/prose parser, a VERIFIED specialist result stays the
+ * authoritative Project Health answer, byte for byte; any other coordinator text is withheld behind a
+ * visible notice (`composeWithSpecialist`, `src/turnCorrelation.ts`). And when a canonical delegation
+ * was engaged but its result cannot be established (missing, duplicate, several threads, stray,
+ * non-text, stopped child) the turn fails visibly (`DjonikSpecialistUnverifiedError`) instead of
+ * falling back to coordinator Project Health prose.
  *
- * Fail-closed: any missing/ambiguous proof leaves the coordinator reply untouched
- * (existing behavior). Mixed-action boundary: a turn that attempted any Trello write
- * is left entirely to the existing verified-write / #23 due-date pipeline.
+ * This is NOT an intent router. It never reads user text, never decides whether Project Health
+ * should be delegated (Claude does that natively), and never parses or interprets prose. It acts
+ * only on official Session/event provenance: the resolved Session's coordinator roster (which
+ * identifies the canonical specialist independently of unrelated entries) plus the thread events
+ * `SpecialistTurnProvenance` correlates to the CURRENT turn.
  */
 export const PROJECT_HEALTH_SPECIALIST_AGENT_ID = "agent_01KNiQDzzPjaMU6LLF4mU6uM";
 
 /**
- * The callable-agent name (as it appears in thread events) of the canonical Project
- * Health specialist, or null when the resolved Session does not prove it. Requires a
- * coordinator roster with exactly ONE entry, that entry being a plain agent (not an
- * Advisor) whose id is the canonical specialist. Structurally typed and lenient so a
- * Session without a roster (e.g. an older production version) simply disables the
- * finalizer.
+ * The callable-agent name (as it appears in thread events) of the canonical Project Health
+ * specialist, or null when the resolved Session does not prove it unambiguously.
+ *
+ * Independent of unrelated roster entries (#32/R7): the coordinator roster may carry other agents,
+ * and a future/unrelated entry must not disable the protection. What is required is exactly ONE
+ * plain-agent entry (not an Advisor) with the canonical specialist id and a non-empty name that no
+ * OTHER entry shares — a duplicate canonical id, or another entry answering to the same callable
+ * name, would make thread events ambiguous and fails closed. Structurally typed and lenient so a
+ * Session without a roster (e.g. an older production version) simply disables the safeguard.
  */
 export function resolveProjectHealthSpecialistName(agent: unknown): string | null {
   const multiagent = (agent as { multiagent?: { type?: string; agents?: unknown } | null } | null | undefined)?.multiagent;
   if (!multiagent || multiagent.type !== "coordinator" || !Array.isArray(multiagent.agents)) return null;
-  if (multiagent.agents.length !== 1) return null;
-  const entry = multiagent.agents[0] as { type?: string; id?: string; name?: string } | null;
-  if (!entry || entry.type !== "agent" || entry.id !== PROJECT_HEALTH_SPECIALIST_AGENT_ID) return null;
-  return typeof entry.name === "string" && entry.name.length > 0 ? entry.name : null;
-}
-
-/** Exact text of one child→coordinator message: its text blocks joined verbatim (the same
- *  way `agent.message` text is assembled). Null when the message is not a plain non-empty
- *  string — any non-text block, or no text at all — so it can never be relayed "exactly". */
-function exactSpecialistMessageText(content: Array<{ type: string; text?: string }>): string | null {
-  if (!Array.isArray(content) || content.length === 0) return null;
-  let text = "";
-  for (const block of content) {
-    if (block.type !== "text" || typeof block.text !== "string") return null;
-    text += block.text;
-  }
-  return text.length > 0 ? text : null;
-}
-
-/** What one turn observed about the delegated Project Health result — transport facts only. */
-export interface ProjectHealthRelayObservation {
-  /** One entry per proven specialist→coordinator message this turn (null = not relayable exactly). */
-  specialistMessages: Array<string | null>;
-  /** A Trello write tool was attempted this turn (successful or not) — a mutation/mixed turn. */
-  trelloWriteAttempted: boolean;
-}
-
-/**
- * The exact specialist string that must be this turn's reply, or null to leave the
- * coordinator's reply untouched. Exactly one proven, exactly-relayable specialist
- * message and no attempted Trello write. Zero messages, several messages (no guessing
- * which one is "the" answer), an unrelayable message, or a mutation turn all yield null.
- */
-export function selectProjectHealthRelay(observation: ProjectHealthRelayObservation): string | null {
-  if (observation.trelloWriteAttempted) return null;
-  if (observation.specialistMessages.length !== 1) return null;
-  return observation.specialistMessages[0];
-}
-
-/** Returns the specialist's exact string when it must own the reply, else `reply` unchanged.
- *  No trim, normalization, or any other transformation of either string. */
-export function finalizeProjectHealthReply(reply: string, observation: ProjectHealthRelayObservation): string {
-  return selectProjectHealthRelay(observation) ?? reply;
+  const entries = multiagent.agents as Array<{ type?: string; id?: string; name?: string } | null>;
+  const canonical = entries.filter((entry) => entry?.type === "agent" && entry.id === PROJECT_HEALTH_SPECIALIST_AGENT_ID);
+  if (canonical.length !== 1) return null;
+  const name = canonical[0]?.name;
+  if (typeof name !== "string" || name.length === 0) return null;
+  const sameName = entries.filter((entry) => entry?.name === name);
+  return sameName.length === 1 ? name : null;
 }
 
 /**
@@ -641,10 +632,14 @@ export class DjonikUnverifiedMutationError extends Error {
   readonly outcomes: MutationOutcome[];
   readonly modelReply: string;
 
-  constructor(outcomes: MutationOutcome[], modelReply: string) {
+  /** `specialistSection` (#32) is a deterministic, prebuilt block about the same turn's Project Health
+   *  delegation — the VERIFIED result (read-only content that cannot claim a mutation, preserved
+   *  verbatim) or the notice that it could not be established — appended after the mutation report. */
+  constructor(outcomes: MutationOutcome[], modelReply: string, specialistSection: string | null = null) {
     super(
       "Djonik mutated Trello but did not verify the write with an independent read in this turn.\n" +
-        describeMutationOutcomes(outcomes, describeDueForUser),
+        describeMutationOutcomes(outcomes, describeDueForUser) +
+        (specialistSection === null ? "" : specialistSection),
     );
     this.name = "DjonikUnverifiedMutationError";
     this.outcomes = outcomes;
@@ -683,18 +678,20 @@ export function dueOutcomesFromMutations(outcomes: MutationOutcome[]): DueWriteO
  *   deterministic per-mutation report (`❌` failed, `✅`/`⚠️` confirmed ones) and the model's text
  *   is NOT used at all — it could claim the failed write succeeded, and telling it apart from an
  *   honest message would need prose parsing.
+ * - `reply === null` (#32: a turn holding a VERIFIED specialist result, where the model's free text
+ *   is never shown) yields the deterministic per-mutation report instead of model text.
  * - Otherwise ordinary confirmed turns keep the model's reply, except that a confirmed due-date
  *   write keeps the #23 guarantee: the wrapper owns the whole confirmation (a lone confirmed
  *   mutation gets the exact #23 sentence — the "differs from what was sent" wording when Trello holds
  *   another due; several get one deterministic line each), so no model due wording survives.
  */
-export function finalizeMutationReply(reply: string, outcomes: MutationOutcome[]): string {
+export function finalizeMutationReply(reply: string | null, outcomes: MutationOutcome[]): string {
   if (outcomes.some(isFailed)) return describeMutationOutcomes(outcomes, describeDueForUser);
 
   const effective = outcomes.filter((outcome) => isConfirmed(outcome) && !outcome.superseded);
   const dueOutcomes = dueOutcomesFromMutations(outcomes);
-  if (dueOutcomes.length === 0) return reply;
-  if (effective.length === 1) return finalizeDueDateReply(reply, dueOutcomes[0]);
+  if (dueOutcomes.length === 0) return reply ?? describeMutationOutcomes(outcomes, describeDueForUser);
+  if (effective.length === 1) return finalizeDueDateReply(reply ?? "", dueOutcomes[0]);
   return effective
     .map((outcome) => {
       const line = outcome.due ? describeDueForUser(outcome.due) : "Зміни підтверджено читанням картки.";
@@ -711,6 +708,30 @@ type SendableContentBlock =
   | { type: "document"; source: { type: "base64"; media_type: string; data: string }; title?: string };
 
 type SendableEvent = { type: "user.message"; content: SendableContentBlock[] };
+
+/** How one submitted `user.message` ended (#32). Only `end_turn` is a completed turn. */
+type TurnEnd =
+  | { completed: true; reply: string }
+  | { completed: false; stopKind: IncompleteStopKind; partialReply: string };
+
+/** Event types that are session-level facts rather than an earlier turn's late tail, so they are
+ *  still honoured before this turn's own `user.message` anchor: terminal failures must never be
+ *  swallowed and the cumulative usage snapshot must never lose cost. */
+const PRE_ANCHOR_PASSTHROUGH: ReadonlySet<string> = new Set([
+  "session.error",
+  "session.status_terminated",
+  "session.deleted",
+  "session.usage",
+]);
+
+/** The id of the single `user.message` the provider accepted (official `events.send` response
+ *  `data[0].id`), or null when the response carries none (then no per-turn anchor is available). */
+function submittedUserEventId(response: unknown): string | null {
+  const data = (response as { data?: unknown } | null | undefined)?.data;
+  if (!Array.isArray(data) || data.length !== 1) return null;
+  const id = (data[0] as { id?: unknown } | null)?.id;
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
 
 /**
  * Connects to the already-existing Djonik Managed Agent (Claude Console is
@@ -758,13 +779,18 @@ export async function connectToDjonik(
   const iterator = stream[Symbol.asyncIterator]();
 
   /** Callable-agent name of the canonical Project Health specialist, proven from the resolved
-   *  Session's coordinator roster at creation (#28); null disables the relay finalizer. */
+   *  Session's coordinator roster at creation (#28/#32); null disables the specialist safeguard. */
   const projectHealthSpecialistName = resolveProjectHealthSpecialistName(session.agent);
-  /** Threads this Session created for that specialist. Session-lifetime, not per turn: a later
-   *  turn may message an existing child thread without a new `session.thread_created`. */
-  const projectHealthThreadIds = new Set<string>();
-  /** This turn's Project Health transport facts; reset at the start of every turn. */
-  let projectHealthTurn: ProjectHealthRelayObservation = { specialistMessages: [], trelloWriteAttempted: false };
+  /** Specialist thread/result provenance (#32). Thread identity is Session-lifetime (threads are
+   *  persistent); which results belong to a turn is decided per turn from that turn's own events. */
+  const specialist = new SpecialistTurnProvenance(projectHealthSpecialistName);
+  /** Whether this Session's stream has ever echoed a `user.message` event. Once it has, a turn's own
+   *  echo (matched by the id `events.send` returned) is the anchor that separates earlier turns'
+   *  late events from this turn's (#32). Learned, never assumed: a stream that does not echo
+   *  simply never becomes strict, so this can never hang or fail a turn that has no anchor. */
+  let userEchoObserved = false;
+  /** Events ignored this visible turn because they predate its own anchor (content-free count). */
+  let preAnchorEventsQuarantined = 0;
 
   /**
    * Correlates `agent.mcp_tool_result` events back to the tool call that produced
@@ -778,15 +804,44 @@ export async function connectToDjonik(
   /** Session usage events are cumulative; this is the completed-turn baseline. */
   let previousSessionUsage: DjonikCumulativeUsage | null = null;
 
-  async function runTurn(events: SendableEvent[]): Promise<string> {
-    await client.beta.sessions.events.send(session.id, { events });
-
+  /**
+   * Submits one `user.message` and reads the primary event stream up to that submission's
+   * authoritative idle. Returns `completed: true` ONLY for `stop_reason: end_turn` (#32); a budget
+   * pause, `requires_action`, exhausted retries or an unrecognised stop is `completed: false` and its
+   * partial text is data, never a reply. It never resumes, resends or raises a budget.
+   */
+  async function runTurn(events: SendableEvent[]): Promise<TurnEnd> {
+    const sent = await client.beta.sessions.events.send(session.id, { events });
+    const submittedId = submittedUserEventId(sent);
+    // Strict only when the platform has already shown it echoes `user.message` on this stream AND
+    // told us this submission's id: then every event before this turn's own echo is an earlier
+    // turn's (a late tail, a stale idle) and is quarantined. Otherwise nothing waits for an anchor.
+    const strict = submittedId !== null && userEchoObserved;
+    let anchored = !strict;
     let reply = "";
 
     for (;;) {
       const { value: event, done } = await iterator.next();
       if (done) {
         throw new DjonikSessionDeadError("Djonik session event stream ended unexpectedly.");
+      }
+
+      if (event.type === "user.message") {
+        userEchoObserved = true;
+        if (strict && !anchored) {
+          if (event.id !== submittedId) {
+            // Single-flight (FIFO) submission makes another message's echo impossible here, so a
+            // different id is a provenance violation: fail visibly instead of guessing.
+            throw new Error("Djonik could not correlate this turn: unexpected user.message echo on the event stream.");
+          }
+          anchored = true;
+        }
+        continue;
+      }
+      if (!anchored && !PRE_ANCHOR_PASSTHROUGH.has(event.type)) {
+        if (event.type === "session.thread_created") specialist.onThreadCreated(event, false);
+        preAnchorEventsQuarantined += 1;
+        continue;
       }
 
       switch (event.type) {
@@ -797,25 +852,18 @@ export async function connectToDjonik(
             .join("");
           break;
         case "session.thread_created":
-          if (projectHealthSpecialistName !== null && event.agent_name === projectHealthSpecialistName) {
-            projectHealthThreadIds.add(event.session_thread_id);
-          }
+          specialist.onThreadCreated(event, true);
+          break;
+        case "agent.thread_message_sent":
+          specialist.onThreadMessageSent(event);
           break;
         case "agent.thread_message_received":
-          // Only a message from a thread this Session created for the canonical specialist,
-          // carrying that same callable-agent name, is ever a Project Health candidate.
-          if (
-            projectHealthSpecialistName !== null &&
-            event.from_agent_name === projectHealthSpecialistName &&
-            projectHealthThreadIds.has(event.from_session_thread_id)
-          ) {
-            projectHealthTurn.specialistMessages.push(exactSpecialistMessageText(event.content));
-          }
+          specialist.onThreadMessageReceived(event);
+          break;
+        case "session.thread_status_idle":
+          specialist.onThreadIdle(event);
           break;
         case "agent.mcp_tool_use":
-          if (isTrelloWriteTool(event.mcp_server_name, event.name)) {
-            projectHealthTurn.trelloWriteAttempted = true;
-          }
           mcpToolCallsById.set(event.id, {
             serverName: event.mcp_server_name,
             toolName: event.name,
@@ -871,22 +919,28 @@ export async function connectToDjonik(
           // "retrying" and "exhausted" are non-terminal per the Managed
           // Agents API: the session keeps running (or returns to idle to
           // accept a new prompt). Only "terminal" means the session itself
-          // is dying. A turn that ends via "exhausted" with no assistant
-          // message is still caught below by the empty-reply check on
-          // session.status_idle.
+          // is dying. A turn that ends via "exhausted" then idles with
+          // `stop_reason: retries_exhausted` (incomplete, below) or with an
+          // empty end_turn (the empty-reply check below).
           if (event.error.retry_status.type === "terminal") {
             throw new DjonikSessionDeadError(`Djonik session error: ${event.error.message}`);
           }
           break;
         case "session.status_terminated":
           throw new DjonikSessionDeadError("Djonik session terminated unexpectedly.");
-        case "session.status_idle":
-          // A turn with an exactly-relayable specialist result is complete even if the
-          // coordinator produced no message of its own (#28); `sendPartsSerial` finalizes it.
-          if (!reply && selectProjectHealthRelay(projectHealthTurn) === null) {
+        case "session.status_idle": {
+          // Idle is a pause, not a verdict: only `end_turn` completes the turn (#32).
+          const stopKind = classifyStopReason(event.stop_reason);
+          if (stopKind !== "end_turn") return { completed: false, stopKind, partialReply: reply };
+          // A turn with a verified specialist result is complete even if the coordinator produced
+          // no message of its own (#28) — unless it attempted Trello writes, whose outcome then has
+          // no coordinator text to accompany it; `sendPartsSerial` composes the reply.
+          const idleVerdict = specialist.verdict().status;
+          if (!reply && idleVerdict !== "unverified" && (idleVerdict !== "verified" || ledger.outcomes().length > 0)) {
             throw new Error("Djonik produced no text reply for this turn.");
           }
-          return reply;
+          return { completed: true, reply };
+        }
         default:
           break;
       }
@@ -940,7 +994,8 @@ export async function connectToDjonik(
    */
   async function sendPartsSerial(parts: DjonikTurnPart[]): Promise<string> {
     ledger = new TrelloMutationLedger();
-    projectHealthTurn = { specialistMessages: [], trelloWriteAttempted: false };
+    specialist.beginTurn();
+    preAnchorEventsQuarantined = 0;
     mcpToolCallsById.clear();
     turnTelemetry = createTurnTelemetryCollector(turnSource, session.id, previousSessionUsage);
 
@@ -975,13 +1030,15 @@ export async function connectToDjonik(
     }
 
     try {
-      let reply = await runTurn([{ type: "user.message", content }]);
+      let end = await runTurn([{ type: "user.message", content }]);
 
       let outcomes = ledger.outcomes();
-      for (let attempt = 0; outcomes.some(isNudgeable) && attempt < MAX_VERIFICATION_NUDGES; attempt += 1) {
+      // A nudge is a corrective read request for a turn that COMPLETED with an unverified write. A turn
+      // that stopped without `end_turn` is never resumed or re-prompted here (#32).
+      for (let attempt = 0; end.completed && outcomes.some(isNudgeable) && attempt < MAX_VERIFICATION_NUDGES; attempt += 1) {
         onTrace?.({ type: "verification_nudge_sent", attempt: attempt + 1 });
         turnTelemetry.recordVerificationNudge();
-        reply = await runTurn([
+        end = await runTurn([
           {
             type: "user.message",
             content: [{ type: "text", text: buildVerificationNudgeText(nudgeTargetIds(outcomes)) }],
@@ -990,9 +1047,43 @@ export async function connectToDjonik(
         outcomes = ledger.outcomes();
       }
 
+      if (!end.completed) {
+        // Budget pause / requires_action / exhausted retries / unknown stop: never a reply. Any Trello
+        // writes the turn attempted are reported from tool events only — no replay, no assumed success.
+        onTrace?.({ type: "turn_incomplete", stopKind: end.stopKind });
+        if (outcomes.some(isUnresolved)) onTrace?.({ type: "write_unverified_failure" });
+        throw new DjonikTurnIncompleteError(
+          end.stopKind,
+          end.partialReply,
+          outcomes.length > 0 ? describeMutationOutcomes(outcomes, describeDueForUser) : null,
+        );
+      }
+      let reply = end.reply;
+
+      const verdict = specialist.verdict();
+      if (verdict.status === "unverified") onTrace?.({ type: "specialist_result_unverified", reason: verdict.reason });
+      const specialistText = verdict.status === "verified" ? verdict.text : null;
+      const mutationReport = outcomes.length > 0 ? describeMutationOutcomes(outcomes, describeDueForUser) : null;
+
       if (outcomes.some(isUnresolved)) {
         onTrace?.({ type: "write_unverified_failure" });
-        throw new DjonikUnverifiedMutationError(outcomes, reply);
+        throw new DjonikUnverifiedMutationError(
+          outcomes,
+          reply,
+          verdict.status === "verified"
+            ? specialistBlockForError(verdict.text)
+            : verdict.status === "unverified"
+              ? `\n\n———\n${specialistUnverifiedNotice(verdict.reason)}`
+              : null,
+        );
+      }
+
+      // Issue #32: a canonical Project Health delegation was engaged but its result cannot be
+      // established reliably. The coordinator's text may present Project Health as specialist-backed
+      // and events cannot say which part does, so it is never shown — the turn fails visibly. No
+      // retry, no re-delegation, no replay; any Trello outcome is reported from tool events.
+      if (verdict.status === "unverified") {
+        throw new DjonikSpecialistUnverifiedError(verdict.reason, reply, mutationReport);
       }
 
       // Issue #23 (per mutation since #31): prompt/Skill guidance alone was tried twice and failed
@@ -1002,21 +1093,38 @@ export async function connectToDjonik(
         const dueTrace = describeDueOutcomeForTrace(dueOutcome);
         if (dueTrace) onTrace?.({ type: "due_date_reply_finalized", ...dueTrace });
       }
-      reply = finalizeMutationReply(reply, outcomes);
 
-      // Issue #28: after Claude has natively delegated and the specialist has returned exactly one
-      // result, the specialist's exact string — not the coordinator's possibly rewritten message —
-      // is the reply. Never touches a turn that attempted a Trello write (handled above).
-      const projectHealthRelay = selectProjectHealthRelay(projectHealthTurn);
-      if (projectHealthRelay !== null) {
-        onTrace?.({ type: "project_health_reply_finalized", replacedCoordinatorReply: reply !== projectHealthRelay });
-        reply = projectHealthRelay;
+      // Issue #28 boundary, made explicit by #32: a VERIFIED specialist result (one engaged thread,
+      // one plain-text result, a child that completed) is the authoritative Project Health answer,
+      // byte for byte. Coordinator text other than exactly that string is withheld behind a visible
+      // notice — events cannot prove it is independent of, rather than a rewrite of, the specialist.
+      // A turn with a Trello mutation leads with the system-owned mutation reply (#31/#23), never
+      // model text, so no model wording can reach the user beside the specialist block.
+      if (specialistText !== null) {
+        const composed = composeWithSpecialist(
+          reply,
+          specialistText,
+          outcomes.length > 0 ? finalizeMutationReply(null, outcomes) : null,
+        );
+        onTrace?.({ type: "specialist_reply_composed", mode: composed.mode });
+        return composed.text;
       }
+
+      reply = finalizeMutationReply(reply, outcomes);
 
       return reply;
     } finally {
+      if (preAnchorEventsQuarantined > 0 || specialist.quarantinedResults > 0) {
+        onTrace?.({
+          type: "late_events_quarantined",
+          preAnchorEvents: preAnchorEventsQuarantined,
+          lateSpecialistResults: specialist.quarantinedResults,
+        });
+      }
       const completedTelemetry = turnTelemetry.summary();
-      previousSessionUsage = turnTelemetry.cumulativeUsage();
+      // A turn that saw no usage snapshot must not reset the cumulative baseline (that would make the
+      // next turn's delta re-count everything before it).
+      previousSessionUsage = turnTelemetry.cumulativeUsage() ?? previousSessionUsage;
       onTurnTelemetry?.(completedTelemetry);
       turnTelemetry = null;
     }
