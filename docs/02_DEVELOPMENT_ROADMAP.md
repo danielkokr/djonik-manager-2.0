@@ -16,9 +16,25 @@ Governance [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) rec
 
 ## Canonical v1 delivery queue
 
-### NOW — Reliability: verify every Trello mutation against its own target and result (#31)
+### DONE — Reliability: verify every Trello mutation against its own target and result (#31)
 
-Canonical bounded issue: [#31](https://github.com/danielkokr/djonik-manager-2.0/issues/31). First pass: source-only per-operation identity, post-write same-target verification, supported field postconditions, partial outcomes and card-anchored due extraction. Use audit R1/R2/R6 as regression inputs; no live writes or paid inference in this pass.
+Accepted 2026-09-21 at commit `591b406934b650eae059275ca92abd7e2d31503c`.
+
+Verified outcome:
+- every Trello mutation is tracked independently against its own tool-use/result identity and target;
+- create verification is anchored to the actual card identity returned by the successful mutation;
+- each mutation requires its own authoritative post-write direct-card evidence and supported field postconditions;
+- failed, ambiguous, mismatched or unverified mutations cannot be represented as successful by model prose;
+- due extraction is anchored to the verified card object and preserves the accepted Europe/Kyiv #23 safeguard;
+- audit regressions R1/R2/R6 are covered;
+- focused tests passed 175/175, full suite passed 411/411, typecheck and `git diff --check` passed;
+- live Trello result-shape validation remains deferred to a separately authorized bounded smoke.
+
+### NOW — Reliability: correlate turn completion and preserve specialist results safely (#32)
+
+Canonical bounded issue: [#32](https://github.com/danielkokr/djonik-manager-2.0/issues/32).
+
+First pass is source-only. Correlate each visible user turn with authoritative completion state and specialist-child provenance so budget pauses, stale/late results, reused threads or ambiguous specialist outcomes cannot become false successful replies. Preserve the accepted Project Health specialist authority while keeping #31 mutation verification, #23 due safeguards, FIFO and telemetry intact. No paid inference, production mutation or live Trello write in this pass.
 
 | Order | Bounded issue | Start / acceptance condition |
 |---|---|---|
