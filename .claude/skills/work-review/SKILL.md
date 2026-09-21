@@ -1,99 +1,74 @@
 ---
 name: work-review
-description: Guides Djonik through a concise, honest, evidence-based review of work outcomes as they stand NOW — what is currently Done, in progress, planned, waiting or not started, and how an explicitly accepted plan compares with the current actual state — for questions such as "Що зараз із тим, що ми планували цього тижня?", "Що з цих задач уже виглядає завершеним?", "Що зараз у Done / в роботі?", "Дай короткий review по Extract", "Що з плану виконано станом на зараз?". Also use when a retrospective question asks for history Trello does not expose ("Що я реально завершив цього тижня?", "Коли ця задача перейшла в Done?", "Що повернулось у роботу?", "Що рухалось останні 3 дні?") so the answer separates what is provable now from what is not. Read-only; not a health assessment, not a planning request, not a task mutation.
+description: Guides Djonik through a short, evidence-bounded review of where work stands NOW — what is currently in Done, active, or waiting, and how an explicitly accepted plan compares with the current Trello state — for questions such as "Що зараз у Done / в роботі?", "Дай короткий review по Extract", "Що з плану виконано станом на зараз?", "Що з цих задач уже виглядає завершеним?". Also use when a retrospective question asks for history Trello does not expose ("Що я зробив цього тижня?", "Що завершили за останні дні?", "Що повернулось у роботу?", "Що просунулось цього тижня?", "Коли ця задача перейшла в Done?") so the answer says what current data cannot prove and still gives the useful current state. Read-only; not a health assessment, not a planning request, not a task mutation.
 ---
 
 # Work review
 
-A work review is a short PM read of fresh Trello evidence about where work stands now, optionally set against a plan Daniel explicitly accepted. Trello currently exposes the present state of cards, not the history of how they got there, so a review may only claim what the present state proves. It is never a stored score, a productivity verdict, or a competing source of truth.
+A work review is a short read of fresh Trello evidence about where work stands now, optionally set beside a plan Daniel explicitly accepted. Trello currently exposes the present state of cards, not the history of how they got there, so the review claims only what the present state proves. It is not a timeline, a score, or a competing source of truth.
 
 ## Scope and handoffs
 
-Use this Skill for review and retrospective questions about outcomes: what is currently Done, in progress, planned or not started, and how an accepted plan compares with the current actual state.
+- **Health, risk, blocking, staleness or overload** belong to the Project Health capability and its specialist. Do not judge them here and do not restate, paraphrase or extend a Project Health result; the runtime keeps that result authoritative. When a message is mainly a health question, that path answers it.
+- **What to do today or this week** belongs to daily-planning or weekly-planning.
+- **An explicit request to create, change, move or complete a task** belongs to task-management, which owns the target, the write and its verification.
 
-- **Current health, risk, waiting or blocking interpretation** of a project belongs to the existing Project Health capability, which owns that judgement. Do not re-derive or duplicate it here and do not issue a health verdict from this Skill. If a message is mostly a health question, use the Project Health path instead. If it mixes both, answer the outcome part here and leave the health interpretation to that path.
-- **What to do today or this week** belongs to the daily-planning or weekly-planning Skill; those own plan construction and their own fresh-read requirements.
-- **An explicit request to create, update, move, or complete a task** belongs to the task-management Skill, which owns target resolution, the write, and same-card verification.
+## Evidence
 
-## Gather fresh evidence first
+Read the relevant board, list or card state in this turn (`trelloReadBoard`, `trelloReadList`, `trelloReadCard`) before any exact current-state claim. `trelloSearch` only discovers candidates; it is not authoritative field evidence. A default listing may hide closed cards, so read so that closed cards are included when archived work matters. Use only values the fresh result actually returned; if a field you would like is absent, say so briefly instead of filling the gap. Fresh Trello outranks Memory, earlier conversation and your own inference. Managed Agents cannot force this fresh read on every turn (#18); this Skill requires it, and an answer with exact Trello claims and no fresh read is not acceptable.
 
-Before any exact current-state claim, read the relevant Trello board, list, or card state in this turn. Exact current list/status, Done membership, closed/archived state, `due`, and `dueComplete` each need a fresh direct read (`trelloReadBoard`, `trelloReadList`, or `trelloReadCard`). Use `trelloSearch` only to discover a candidate board, list, or card; search results are not authoritative field evidence, and a missing `due` in search proves nothing. A default listing may show only open cards, so read in a way that includes closed cards when the question is about archived work.
+The present state supports these facts: which card, which board or project, its current list, current `closed`, `due`, `dueComplete`, and labels when returned. Say them in current-state words: «зараз у Done», «зараз у In progress», «лежить у Waiting», «архівована».
 
-Use only values a fresh result actually returned and that are not empty. Do not assume labels, members, checklist state, start dates, or any other field merely because Trello supports it. If a field you would like is absent, say that briefly instead of filling the gap.
+## History is not available
 
-Fresh Trello operational truth outranks Memory, earlier conversation, and your own inference. Managed Agents cannot deterministically force this fresh read on every turn (#18). This Skill requires it for review answers, but does not add middleware, a phrase router, or a custom tool loop. An answer with exact current Trello claims and no fresh evidence is not acceptable.
+Current data cannot show when a card was completed, which card finished first or last, that a card moved lists, that it was reopened, who worked on it, whether activity meant real progress, or whether it belonged to a past period. Do not reconstruct any of that. This includes ordering the cards against each other in time: name Done cards as a set, never as «остання закрита», «перша завершена», «нещодавно закрита» or «свіжо завершена».
 
-## What Trello can and cannot prove
+For a question that depends on such history («Що я зробив цього тижня?», «що завершили за останні дні?», «що повернулось у роботу?», «що просунулось цього тижня?»):
 
-Trello currently exposes the present state but not the transition history. There is no activity or history read available to Djonik: no completion event, no list-movement record, no reopen event, no per-period change log, and no record of who did what. Do not reconstruct any of it from present-state data.
+1. Say in one short sentence that the connected current-state data cannot prove what was completed, moved or reopened in that period.
+2. Give the useful current state that is supported: a few strongest facts, phrased as «зараз».
+3. Add no dates, order, movement, reopen events or causes. Do not present current Done cards as «this week's» work.
 
-From current-state data alone, never claim:
+If the question is answerable from current state, answer it and skip the caveat.
 
-- that something was completed this week, today, yesterday, or in any period;
-- that a card moved from one list to another, or when it moved;
-- that a card was reopened, or when;
-- that work repeatedly slipped;
-- that work progressed during a period, or that a project consumed attention;
-- who worked on a card during a period.
+## Signals stay distinct
 
-When Daniel asks for one of these, do three things, briefly:
+`lastActivityAt` only means Trello recorded some activity on the card at that raw timestamp; moving, reordering or creating a card can set it. By default do not mention it. Never use it as evidence of completion, order, movement, reopening, progress, an actor, staleness, or membership in a period, and never to choose which cards to include. Never rewrite it as a local date or time, a weekday, or relative wording, and never present it as when something happened. If it must appear, copy the raw ISO string verbatim as «Trello recorded activity at <ISO>». A raw UTC time re-written as «21 вересня о 07:09» is a measured failure.
 
-1. say in one short sentence that Trello shows the present state but not the transition history needed to prove that claim;
-2. still give the useful current-state evidence that is available;
-3. never fabricate chronology to make the answer feel complete.
+`due` is a different kind of field: a current deadline, recorded on the card. It may be shown in a correct human-readable form, and needs no raw ISO when the wording is exactly right for the recorded value. If you are unsure of a conversion or a weekday, quote the recorded ISO instead. Do not derive a countdown or lateness from it. It is a recorded deadline, not a client commitment. Exact due wording after a write stays with task-management.
 
-Do not turn the answer into a limitations essay. Mention the limitation only where the question actually depends on history; if the question is answerable from current state, answer it and skip the caveat. Rely on what a fresh result actually contains, not on an assumed capability.
+Three signals speak to completion state. Report each for what it is and keep them apart:
 
-## `lastActivityAt`
+- a card in a list named Done: the board currently treats it as Done;
+- `closed`: the card is archived now, which does not mean the work was finished;
+- `dueComplete`: a current boolean with no completion time.
 
-Treat `lastActivityAt` narrowly: it means only that Trello recorded some activity on that card at that raw timestamp. The provider does not document the field, and moving, reordering, or creating a card can set it without any work.
+Do not promote any of them into «завершено в такий-то момент». When they disagree (for example archived but not in Done, in Done but `dueComplete` false, or `dueComplete` true in an active list) and it matters, state what each shows and that they differ. Do not pick a winner or invent a transition that would reconcile them. `due` is not one of these signals: a deadline is not proof that work is or is not finished, so report it as a current fact on its own and not as a completion-state conflict.
 
-It may serve as a weak discovery hint about which cards deserve a closer read. It is not proof of completion, list movement, reopening, work progress, active work, a specific actor, staleness, or that anything happened inside a requested time window. Do not use it to decide that a card belongs to, or is missing from, a period.
+## Coverage and counts
 
-Quote it only as «Trello recorded activity at <ISO>», exactly as recorded. From it never derive a weekday, a local date or time, «N днів тому», «сьогодні», «вчора», «завтра», or «this week» membership. A later deterministic date boundary could own such calculations; until one exists, do not make them. Apply the same restraint to `due`: quote the recorded ISO value without a self-computed weekday, local time, or countdown. Exact due-date wording after a write stays with task-management.
+Before a summary or aggregate claim, know what was actually read: which board or label scope, whether closed cards were included, and whether the result was cut off (`hasNextPage`, a reached `limit`, only some lists read, or discovery by search only). If coverage is partial or unclear, say so first, and speak only about what was retrieved («серед прочитаних карток…»). Do not say «усі завершені», «це все, що активно», «всього N» or «жодної» unless coverage proves it.
 
-## What Done, closed, and dueComplete mean
+Give no counts by default. If Daniel asks for a count, name the set it covers (scope, open and closed or open only), tally the returned cards one by one, and write a number that equals the cards you actually enumerate. If you also name cards, the number must match the names shown. With partial coverage, say the count is of what was read.
 
-- A card in a list named `Done` is workflow evidence that Daniel's board currently treats it as Done. Report it as «зараз у Done». Do not silently turn it into «Daniel completed it on DATE».
-- `closed` means the card is archived or closed now. It does not mean the work was completed; an archived card may never have been finished. Do not call it completed on that basis alone.
-- `dueComplete` is a current boolean with no completion timestamp. It says nothing about when, or whether inside a period.
-- There is no universal provider-level completion event to lean on. A card that is not in Done now does not tell you whether it was ever Done or was reopened.
-- If these signals disagree, for example an archived card that is not in Done, say the evidence is mixed. Do not reconcile it by guessing.
+## Accepted plan and current state
 
-## Accepted plan versus current actual
+Durable Memory, or a plan Daniel explicitly accepted earlier in this conversation, may supply only the plan side. A suggestion that was only discussed is not a plan, and a Trello list such as «This week» is not an accepted plan unless Daniel says so. Fresh Trello supplies only the current side. Compare them only when both are reliable and the card is clearly the same task in the same project.
 
-Durable Memory, or a plan Daniel explicitly accepted earlier in this conversation, may supply only the PLAN or context side: an accepted plan, an explicit commitment, or stable project context. A suggestion that was only discussed is not a plan. Fresh Trello supplies only the current ACTUAL side.
+Allowed: «У прийнятому плані була X; зараз у Trello вона в Done.»
 
-Allowed framing describes the plan next to the current state: «У плані було A, B, C; зараз A у Done, B в In progress, C у Backlog.»
-
-Without history, do not say: «A виконано цього тижня», «B зірвали вчора», «C повернули назад», or that an item was on time or late. Do not compute lateness or a countdown either. Do not treat a Trello list such as «This week» as the accepted plan unless Daniel says it is. If no accepted plan is available, say so and give the current-state review instead of reconstructing a plan.
-
-If it is ambiguous which Trello card a remembered plan item refers to, for example two cards with similar names or the same name under different projects, clarify with one short question, or say which item you could not match. Do not guess a match.
-
-Memory never proves that work was completed, moved, or reopened, and a remembered task state never overrides a fresh read.
+If no accepted plan is available, or it looks cancelled, superseded or of unclear period, say so and give the current-state review instead of inventing a plan. If a plan item could match more than one card, or the only match is in another project, do not compare: ask one short question or name the item you could not match. Never write «виконано за планом цього тижня», «зірвали», «повернули», or «вчасно» or «із запізненням» from current state. Memory never proves that work was completed, moved or reopened.
 
 ## Project scope
 
-Keep the review scoped to the project Daniel names, and do not let urgent-looking cards from another project into it. A project may be a Trello board or a label on a shared board. Look for a board first; if none matches, read the shared board's labels and cards directly and, if exactly one label matches, scope to the cards carrying it and say briefly which label you used. Cards without that label do not drive the review. If more than one label or board plausibly matches, or nothing does, ask one short clarification instead of guessing. Do not hard-code project or board names or keep a mapping table. Archived cards can carry a project label, so a label's use count may include closed work.
+Keep a single-project review inside that project. Look for a board first; if none matches, read the shared board's labels and cards and, if exactly one label matches, scope to cards carrying it and say which label you used. Cards of other projects are not named, counted or flagged, even when urgent-looking; do not add «а ще в іншому проєкті…». If more than one board or label plausibly matches, or none does, ask one short clarification. Do not hard-code project names. If Daniel asks across several projects, keep each project's facts separate. A label's use count can include archived cards.
 
-If Daniel asks across several projects, keep each project's facts separate rather than blending them.
+## Shape of the answer
 
-## Form the review
+Give a few of the strongest supported facts, in concise ordinary Ukrainian, conclusion first: what is currently Done, what is active, what is waiting (only as the direct fact that the card sits in that list or says so itself), and any material uncertainty or conflict. Add one next action only when a card's own evidence directly supports it; otherwise stop with the facts. No chronology, totals, score, percentage or productivity verdict, no line for every card, no opening inventory. Name only the few cards that carry the point. Do not add vague interpretation such as «невеликий процес» or «тиждень був продуктивним», and do not offer causes you cannot see. List everything only when Daniel explicitly asks for a list or table, and then still state current facts only.
 
-Lead with the current PM read, then only the strongest evidence, mention the historical limitation only if it is material, and end with one useful retrospective insight or next PM step. The supported dimensions, each only where fresh evidence shows it, are: currently Done, currently in progress, currently planned (for example a «This week» list), currently Waiting, currently Backlog or not started, and current `due` / `dueComplete`. State a blocker only when a card's own evidence names a concrete one; interpreting health belongs to the Project Health path.
+Tone, not a template. Good: «Зараз у Done стоять A і B; C ще в In progress. Коли A і B туди потрапили, Trello не показує, тож «за тиждень» підтвердити не можу.» Bad: «Цього тижня ти завершив A і B, остання закрита — A.»
 
-Do not enumerate every card, do not open with an inventory, and do not give a score, percentage, or productivity verdict such as «продуктивний тиждень». Name only the few cards that carry the point. Do not offer causes you cannot see. List everything only when Daniel explicitly asks for a breakdown, list, or table, and then structure is fine.
+## Read-only and Memory
 
-## Read-only
-
-A work review performs zero Trello mutations and has no Calendar dependency. Never change a card just because a review recommends an action. If Daniel then explicitly asks to act, hand it to the task-management Skill, which owns mutation intent, target resolution, bounded writing, and separate verification. Do not duplicate that logic here.
-
-## Memory boundary
-
-Do not automatically write transient retrospective conclusions to durable Memory, for example «проєкт відставав», «Daniel був перевантажений», «проєкт забрав найбільше уваги», or «тиждень був продуктивним / непродуктивним». Recompute the review from fresh Trello evidence each time. Stable accepted lessons and decisions stay under the existing Memory policy.
-
-## Style
-
-Reply in concise, ordinary Ukrainian with the conclusion first, usually one compact paragraph or a few short sentences, no audit tone. Distinguish what the evidence proves from your PM interpretation, and state uncertainty instead of filling gaps with plausible facts.
-
-Tone only, not a template. Good: «Зараз у Done стоять A і B, а C ще в In progress. Коли саме A і B туди потрапили, Trello не показує, тож «за тиждень» я підтвердити не можу.» Bad: «Цього тижня ти завершив A і B.»
+A review performs zero Trello writes and has no Calendar dependency; never change a card because a review recommends an action. If Daniel then explicitly asks to act, hand it to task-management. Do not write transient retrospective conclusions to durable Memory («проєкт відставав», «Daniel був перевантажений», «тиждень був продуктивним»); recompute from fresh Trello each time. Stable accepted lessons stay under the existing Memory policy.
