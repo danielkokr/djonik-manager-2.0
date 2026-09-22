@@ -56,8 +56,8 @@ Verified outcome:
 | 2 | [#32 — Turn completion and specialist results](https://github.com/danielkokr/djonik-manager-2.0/issues/32) | DONE |
 | ~~—~~ | ~~[#29 — Current-state review and ownership validation](https://github.com/danielkokr/djonik-manager-2.0/issues/29)~~ | Superseded 2026-09-22 by #36 ([docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)) |
 | 3 | [#40 — Idempotent Managed Agents custom-tool continuation by event id](https://github.com/danielkokr/djonik-manager-2.0/issues/40) | DONE — accepted 2026-09-22 at `e5b0df2` ([docs/31](31_ISSUE_40_IMPLEMENTATION_REPORT.md)) |
-| 4 | **NOW — [#36 — Weekly work review from Trello action history](https://github.com/danielkokr/djonik-manager-2.0/issues/36)** | Exactly one separately authorized live diagnostic (docs/04 §27); stop rules below |
-| 5 | [#37 — Project label on create + Memory hygiene](https://github.com/danielkokr/djonik-manager-2.0/issues/37) | After #36 is accepted; Memory diff needs Daniel's approval |
+| 4 | [#36 — Weekly work review from Trello action history](https://github.com/danielkokr/djonik-manager-2.0/issues/36) | DONE — accepted 2026-09-22; post-#40 live diagnostic PASS at `3312706` ([docs/32](32_ISSUE_36_POST_40_LIVE_DIAGNOSTIC.md)) |
+| 5 | **NOW — [#37 — Project label on create + Memory hygiene](https://github.com/danielkokr/djonik-manager-2.0/issues/37)** | Source-first; Memory content diff requires Daniel's explicit approval before any Memory write |
 | 6 | [#38 — Voice and Telegram UX](https://github.com/danielkokr/djonik-manager-2.0/issues/38) | After #37 source; brings the coordinator system prompt into `managed-agents/djonik.md` |
 | 7 | [#33 — Pinned release, always-on host, serving Session](https://github.com/danielkokr/djonik-manager-2.0/issues/33) | Promotes the accepted #40 runtime revision together with accepted #36/#37/#38; always-on adapter host and secrets (see #33 comments) |
 | 8 | [#34 — Commitments, waiting and follow-up](https://github.com/danielkokr/djonik-manager-2.0/issues/34) | After #33; accepted plan items keep Trello card ID/project; check dates feed #39 |
@@ -66,17 +66,11 @@ Verified outcome:
 
 Only one item is NOW. The next item starts when this roadmap is updated. There is no parallel source work: we intentionally return to one NOW item to reduce variables. Live runs follow docs/04 §27 one at a time.
 
-### Post-#40 acceptance — #36 diagnostic stop rule
+### Acceptance record — #40 / #36
 
 **#40 — ACCEPTED 2026-09-22:** principal offline pass accepted at `e5b0df2`; exact docs/29 regression failed pre-fix and passed post-fix; full suite 495/495, typecheck and `git diff --check` passed; no paid inference ([docs/31](31_ISSUE_40_IMPLEMENTATION_REPORT.md)).
 
-**#36 after #40 source acceptance:**
-- #36 product/source work is **not** redesigned while #40 is NOW; the runtime problem is owned only by #40;
-- one isolated live Session and one visible work-review turn (the real-provider smoke for #40 as well);
-- no return to renderer/prompt hardening, and no restoration of the old five-sample synthetic #36 matrix;
-- PASS → accept/close #36;
-- a new runtime semantic not covered by docs/30 → stop and architecture-review; do not start another remediation loop;
-- ordinary PM wording variation is not a hard factual failure.
+**#36 — ACCEPTED 2026-09-22:** one isolated post-#40 Haiku Session reproduced the provider's duplicate-`requires_action` sequence for the same `custom_tool_use_id`; the accepted runtime executed and submitted the tool once, kept provenance verified, exact-relayed the deterministic Variant-B factual block byte-for-byte, completed on authoritative `end_turn`, and made zero Trello/Calendar/Memory writes. The run used one Session / one visible turn and cost $0.03 ([docs/32](32_ISSUE_36_POST_40_LIVE_DIAGNOSTIC.md)). Haiku repeated the factual report inside the model-owned PM section; this was explicitly graded as a non-hard UX observation and is deferred to real working-rhythm observation rather than another #36 hardening loop.
 
 Scope promotion requires updating this roadmap; an open/closed issue or larger number never selects the next task by itself. Share later authorized smoke evidence where sufficient instead of duplicating paid runs. The current [validation policy](04_MANAGED_AGENT_TOKEN_COST_AUDIT.md#27-development--validation-spend-guardrail-issue-21) requires explicit budget, candidate isolation, full-turn admission reserve and stop reasons; this governance change authorizes no paid experiment.
 
@@ -429,9 +423,20 @@ Verified outcome:
 - full suite passed 495/495, typecheck and `git diff --check` passed;
 - no paid inference or production change occurred; the real-provider smoke is the one post-#40 #36 diagnostic.
 
-### NOW — Wave C2: Weekly work review from Trello action history (#36)
+### DONE — Wave C2: Weekly work review from Trello action history (#36)
 
-Canonical bounded issue: [#36](https://github.com/danielkokr/djonik-manager-2.0/issues/36). Read-only custom tool `trello_work_history` computes the facts deterministically (Kyiv week window, one net transition per card, noise rule, coverage, Kyiv formatting) and renders the Variant-B factual answer; the thin client exact-relays a successful current-turn `answer_text` by event provenance, and the Haiku coordinator adds a separate `PM-висновок` ([docs/28](28_ISSUE_36_FACTUAL_OUTPUT_BOUNDARY_REPORT.md), [docs/01](01_CLAUDE_NATIVE_ARCHITECTURE.md)). Part of the working PM baseline (Product Owner decision 2026-09-22, docs/00). Source history: [docs/26](26_ISSUE_36_SOURCE_FIRST_IMPLEMENTATION_REPORT.md) (source-first `e106a2e`), [docs/27](27_ISSUE_36_LIVE_VALIDATION_REPORT.md) (narration candidates failed), [docs/28](28_ISSUE_36_FACTUAL_OUTPUT_BOUNDARY_REPORT.md) (factual relay `d9b3496`), [docs/29](29_ISSUE_36_FACTUAL_RELAY_LIVE_DIAGNOSTIC.md) (live diagnostic: facts and exact prefix correct; duplicate custom-tool execution → #40). Remaining: exactly one separately authorized live diagnostic (stop rules above), which also serves as the real-provider smoke for the accepted #40 runtime correction; then promotion via #33. Evidence: [docs/23](23_WORK_HISTORY_SPIKE_REPORT.md).
+Accepted 2026-09-22 after the single authorized post-#40 live diagnostic; evidence: [docs/32](32_ISSUE_36_POST_40_LIVE_DIAGNOSTIC.md), committed at `3312706`.
+
+Verified outcome:
+- Claude selected `trello_work_history` with project `Extract`, `last_week`, concise;
+- deterministic Trello action-history facts were complete for the window and rendered by Variant-B;
+- the visible response began with the exact deterministic `answer_text` byte-for-byte;
+- the provider re-emitted `requires_action` for the same custom-tool id; #40 handled it with executor 1 / submission 1 / echo 1 and verified provenance;
+- zero Trello, Calendar or Memory writes; production Agent unchanged;
+- authoritative `end_turn`; one fresh Session, one visible turn, $0.03 list cost;
+- Haiku duplicated the factual report inside the model-owned PM section; accepted as a non-hard UX observation to evaluate in the later working-rhythm pilot rather than reopening prompt/renderer hardening.
+
+Source history: [docs/26](26_ISSUE_36_SOURCE_FIRST_IMPLEMENTATION_REPORT.md), [docs/27](27_ISSUE_36_LIVE_VALIDATION_REPORT.md), [docs/28](28_ISSUE_36_FACTUAL_OUTPUT_BOUNDARY_REPORT.md), [docs/29](29_ISSUE_36_FACTUAL_RELAY_LIVE_DIAGNOSTIC.md), runtime correction [docs/30](30_RUNTIME_EVENT_LOOP_AUDIT.md) / [docs/31](31_ISSUE_40_IMPLEMENTATION_REPORT.md), final gate [docs/32](32_ISSUE_36_POST_40_LIVE_DIAGNOSTIC.md).
 
 ### DONE — Wave C2 spike: Trello work-history evidence (GO, 2026-09-22)
 
