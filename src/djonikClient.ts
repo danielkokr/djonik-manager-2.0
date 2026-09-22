@@ -358,7 +358,14 @@ export type DjonikTraceEvent =
   /** Content-free (#32): events that provably (or, without an anchor, conservatively) belonged to an
    *  earlier turn were ignored. `preAnchorEvents` predate this turn's own `user.message` echo;
    *  `lateSpecialistResults` are canonical specialist results with no in-turn engagement. */
-  | { type: "late_events_quarantined"; preAnchorEvents: number; lateSpecialistResults: number };
+  | { type: "late_events_quarantined"; preAnchorEvents: number; lateSpecialistResults: number }
+  /** Content-free (#36): this turn's one verified `trello_work_history` `answer_text` was placed at
+   *  the start of the visible reply. `mode` says whether any coordinator commentary followed it. */
+  | { type: "work_history_relay_composed"; mode: WorkHistoryCompositionMode }
+  /** Content-free (#36): this turn engaged `trello_work_history` but no single successful, correlated
+   *  result with a usable `answer_text` could be established, so no exact relay was composed — the
+   *  coordinator's own reply (which may explain the failure itself) is used unchanged. */
+  | { type: "work_history_relay_skipped" };
 
 /**
  * Session-specific guidance shown to the agent alongside the memory store's
@@ -703,6 +710,49 @@ export function finalizeMutationReply(reply: string | null, outcomes: MutationOu
     .join("\n");
 }
 
+/**
+ * Issue #36 provenance-based exact relay for the read-only `trello_work_history` custom tool.
+ *
+ * Three local-remediation candidates (docs/27) proved that handing Claude the factual content of a
+ * period-based work review — however pre-computed, down to an already-complete, ready-to-send
+ * `answer_text` — still lets it add unsupported interpretation or drop a sentence while restating it.
+ * The accepted fix (docs/28 §L, the #36 audit) moves the same authority boundary #28/#32 already use
+ * for Project Health: when code has already produced the authoritative user-facing result this turn,
+ * code delivers it, and the model's own text becomes clearly separated commentary instead of the
+ * vehicle for the fact itself.
+ *
+ * Unlike the Project Health specialist boundary, this one needs no exact-match/withhold logic:
+ * `answerText` is placed FIRST, unconditionally, so no coordinator wording can ever displace or alter
+ * it (H5) — there is nothing to protect it from, so the coordinator's own text (a PM conclusion, or
+ * its answer to the rest of a mixed-intent request, #32C) is simply appended after a fixed, visually
+ * distinct separator rather than compared, filtered, or suppressed.
+ */
+export type WorkHistoryCompositionMode = "answer_only" | "with_commentary";
+
+const WORK_HISTORY_SEPARATOR = "\n\n---\nPM-висновок:\n";
+
+export function composeWorkHistoryReply(commentary: string, answerText: string): { text: string; mode: WorkHistoryCompositionMode } {
+  if (commentary.trim().length === 0) return { text: answerText, mode: "answer_only" };
+  return { text: `${answerText}${WORK_HISTORY_SEPARATOR}${commentary}`, mode: "with_commentary" };
+}
+
+/**
+ * Extracts a usable `answer_text` from a successful `trello_work_history` custom-tool result's raw
+ * JSON `content` string. Returns null (never throws) for unparsable JSON or a missing/empty/non-string
+ * `answer_text` — the caller treats that exactly like an unsuccessful result, so a malformed payload
+ * can never be substituted as the authoritative factual block (#36 §H12).
+ */
+function extractWorkHistoryAnswerText(content: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  const answerText = (parsed as { answer_text?: unknown } | null)?.answer_text;
+  return typeof answerText === "string" && answerText.length > 0 ? answerText : null;
+}
+
 const MAX_VERIFICATION_NUDGES = 1;
 
 type SendableContentBlock =
@@ -823,6 +873,30 @@ export async function connectToDjonik(
   const customToolCallsById = new Map<string, { name: string; input: unknown }>();
   /** This turn's per-mutation Trello verification ledger (#31); replaced at the start of every turn. */
   let ledger = new TrelloMutationLedger();
+  /** Every `trello_work_history` result resolved during the CURRENT visible turn, across a possible
+   *  post-mutation verification-nudge rerun of `runTurn` (#36). Reset once per visible turn in
+   *  `sendPartsSerial`, never inside `runTurn`, so a nudge rerun cannot lose an earlier result — and
+   *  never carried across turns, so a later turn cannot receive an earlier turn's `answer_text` (H8/H13). */
+  let workHistoryResults: string[] = [];
+  /** True when this visible turn resolved at least one `trello_work_history` call that did NOT yield a
+   *  usable result (tool error, or unparsable/empty `answer_text`) — tracked so an unusable result
+   *  beside a separate successful one still makes the turn ambiguous rather than silently relaying the
+   *  good one. */
+  let workHistoryHadUnusableResult = false;
+
+  type WorkHistoryVerdict = { status: "none" } | { status: "verified"; answerText: string } | { status: "unverified" };
+
+  /** Trusts an exact relay only for the single unambiguous case: exactly one `trello_work_history`
+   *  call resolved this turn, and it yielded a usable `answer_text`, with no other call/failure this
+   *  turn (#36 §A6). Every other shape — no call, several calls, any error/malformed result mixed in —
+   *  is `unverified`: never guessed between, same as the untouched fallback (the coordinator's own
+   *  reply is used exactly as before). */
+  function workHistoryVerdict(): WorkHistoryVerdict {
+    if (workHistoryHadUnusableResult) return { status: "unverified" };
+    if (workHistoryResults.length === 0) return { status: "none" };
+    if (workHistoryResults.length === 1) return { status: "verified", answerText: workHistoryResults[0] };
+    return { status: "unverified" };
+  }
   let turnTelemetry: DjonikTurnTelemetryCollector | null = null;
   /** Session usage events are cumulative; this is the completed-turn baseline. */
   let previousSessionUsage: DjonikCumulativeUsage | null = null;
@@ -975,6 +1049,18 @@ export async function connectToDjonik(
             // post-tool continuation somehow reaches end_turn without a fresh final message.
             reply = "";
             const results = await Promise.all(calls.map((call) => customToolExecutor(call!.input)));
+            for (const result of results) {
+              if (result.isError) {
+                workHistoryHadUnusableResult = true;
+                continue;
+              }
+              const answerText = extractWorkHistoryAnswerText(result.content);
+              if (answerText === null) {
+                workHistoryHadUnusableResult = true;
+                continue;
+              }
+              workHistoryResults.push(answerText);
+            }
             await client.beta.sessions.events.send(session.id, {
               events: blockingIds.map((id, index) => ({
                 type: "user.custom_tool_result" as const,
@@ -991,7 +1077,15 @@ export async function connectToDjonik(
           // no message of its own (#28) — unless it attempted Trello writes, whose outcome then has
           // no coordinator text to accompany it; `sendPartsSerial` composes the reply.
           const idleVerdict = specialist.verdict().status;
-          if (!reply && idleVerdict !== "unverified" && (idleVerdict !== "verified" || ledger.outcomes().length > 0)) {
+          // #36: a verified trello_work_history result is likewise a complete answer on its own —
+          // the coordinator may legitimately have nothing to add after it.
+          const workHistoryVerified = workHistoryVerdict().status === "verified";
+          if (
+            !reply &&
+            idleVerdict !== "unverified" &&
+            !workHistoryVerified &&
+            (idleVerdict !== "verified" || ledger.outcomes().length > 0)
+          ) {
             throw new Error("Djonik produced no text reply for this turn.");
           }
           return { completed: true, reply };
@@ -1050,6 +1144,8 @@ export async function connectToDjonik(
   async function sendPartsSerial(parts: DjonikTurnPart[]): Promise<string> {
     ledger = new TrelloMutationLedger();
     specialist.beginTurn();
+    workHistoryResults = [];
+    workHistoryHadUnusableResult = false;
     preAnchorEventsQuarantined = 0;
     mcpToolCallsById.clear();
     customToolCallsById.clear();
@@ -1156,6 +1252,7 @@ export async function connectToDjonik(
       // notice — events cannot prove it is independent of, rather than a rewrite of, the specialist.
       // A turn with a Trello mutation leads with the system-owned mutation reply (#31/#23), never
       // model text, so no model wording can reach the user beside the specialist block.
+      let commentary: string;
       if (specialistText !== null) {
         const composed = composeWithSpecialist(
           reply,
@@ -1163,12 +1260,24 @@ export async function connectToDjonik(
           outcomes.length > 0 ? finalizeMutationReply(null, outcomes) : null,
         );
         onTrace?.({ type: "specialist_reply_composed", mode: composed.mode });
-        return composed.text;
+        commentary = composed.text;
+      } else {
+        commentary = finalizeMutationReply(reply, outcomes);
       }
 
-      reply = finalizeMutationReply(reply, outcomes);
+      // Issue #36: a verified `trello_work_history` result is the authoritative factual block and
+      // always leads the visible reply, unconditionally. Everything else this turn produced — a PH
+      // relay/withhold notice, a mutation report, or plain coordinator prose — becomes the commentary
+      // that follows the fixed separator (#32C mixed-intent: never suppressed, only relocated).
+      const workHistory = workHistoryVerdict();
+      if (workHistory.status === "unverified") onTrace?.({ type: "work_history_relay_skipped" });
+      if (workHistory.status === "verified") {
+        const composedHistory = composeWorkHistoryReply(commentary, workHistory.answerText);
+        onTrace?.({ type: "work_history_relay_composed", mode: composedHistory.mode });
+        return composedHistory.text;
+      }
 
-      return reply;
+      return commentary;
     } finally {
       if (preAnchorEventsQuarantined > 0 || specialist.quarantinedResults > 0) {
         onTrace?.({

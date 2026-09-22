@@ -29,17 +29,20 @@ test("#36 work-review Skill is thin, history-first, actor-safe and read-only", (
   assert.match(skill, /Do not make Project Health judgements, productivity scores, effort\/time claims, trend analysis/i);
 });
 
-// docs/29 #36 semantic-compression remediation: candidate #3 (docs/27 §12) proved that handing
-// Claude even fully-correct `fact_lines` still requires it to compress 15–25 lines into a short
-// answer, and that compression is where it invented category/direction/reason claims. The Skill
-// must now point the coordinator at one already-complete `answer_text` instead of a list to
-// summarize, categorize, or generalize.
-test("#36 work-review Skill treats answer_text as an already-complete answer, not a list to summarize", () => {
+// docs/28 #36 output-ownership remediation: three local-remediation candidates (docs/27) proved that
+// handing Claude the factual content of a review — however pre-rendered, down to a fully-complete
+// `answer_text` — still lets it add unsupported interpretation or drop a sentence while restating it.
+// The accepted fix moves relay of the authoritative factual block OUT of the model entirely: the thin
+// client now delivers `answer_text` verbatim by provenance (`src/djonikClient.ts`), so the Skill's job
+// changes from "relay this exactly" to "do not touch it at all" plus one short PM-owned addition.
+test("#36 work-review Skill treats answer_text as delivered by the client, not something Claude relays or rewrites", () => {
   assert.match(skill, /answer_text/);
   assert.doesNotMatch(skill, /fact_lines/);
-  assert.match(skill, /already-complete|already complete/i);
-  assert.match(skill, /without summarizing, categorizing, generalizing/i);
-  assert.match(skill, /never recompute a number, change what category something belongs to, or state a direction/i);
+  assert.match(skill, /client delivers it to Daniel verbatim/i);
+  assert.match(skill, /do not repeat, rewrite, reformat, or summarize/i);
+  assert.match(skill, /ONE short PM-level conclusion/i);
+  assert.match(skill, /схоже/);
+  assert.doesNotMatch(skill, /without summarizing, categorizing, generalizing/i);
 });
 
 test("#36 exports one bounded custom-tool schema with semantic window, scope and format inputs", () => {

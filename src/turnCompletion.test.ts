@@ -938,3 +938,163 @@ test("#32 23: telemetry stays attributed to the visible turn that produced it, a
   assert.equal(telemetry[2].usage?.listCostAmount, "160");
   session.close();
 });
+
+// ---------------------------------------------------------------------------------------------
+// #36 provenance-based exact relay: a verified trello_work_history result's answer_text is
+// delivered to the user verbatim by the client, unconditionally leading the visible reply, with
+// any coordinator commentary appended after a fixed PM separator (docs/28 output-ownership
+// boundary — the same architectural move #28/#32 already made for Project Health).
+// ---------------------------------------------------------------------------------------------
+
+const historyExecutor = (answerText: string): DjonikCustomToolExecutor => async () => ({
+  isError: false,
+  content: JSON.stringify({ answer_text: answerText }),
+});
+const failingHistoryExecutor: DjonikCustomToolExecutor = async () => ({
+  isError: true,
+  content: JSON.stringify({ error: { message: "Trello history is temporarily unavailable." } }),
+});
+const malformedHistoryExecutor: DjonikCustomToolExecutor = async () => ({
+  isError: false,
+  content: JSON.stringify({ not_answer_text: "oops" }),
+});
+const PM_SEPARATOR = "\n\n---\nPM-висновок:\n";
+
+test("#36 relay 1: a verified trello_work_history result begins the visible reply exactly, not a coordinator rewrite", async () => {
+  const { session, push } = await open(undefined, false, historyExecutor("ANSWER_TEXT"));
+  push(customUse("h1"), idleWith("requires_action", { event_ids: ["h1"] }), msg("Ось перефразований звіт про Extract."), IDLE_OK);
+  const reply = await session.send("Що по Extract минулого тижня?");
+  assert.ok(reply.startsWith("ANSWER_TEXT"));
+  assert.ok(!reply.startsWith("Ось перефразований"));
+  session.close();
+});
+
+test("#36 relay 2: coordinator commentary is preserved, but only after the fixed PM separator", async () => {
+  const { session, push } = await open(undefined, false, historyExecutor("ANSWER_TEXT"));
+  push(customUse("h1"), idleWith("requires_action", { event_ids: ["h1"] }), msg("Варто перевірити Брендбук."), IDLE_OK);
+  const reply = await session.send("Що по Extract?");
+  assert.equal(reply, `ANSWER_TEXT${PM_SEPARATOR}Варто перевірити Брендбук.`);
+  session.close();
+});
+
+test("#36 relay 3: a coordinator rewrite of the same history cannot replace the deterministic block, only trail it", async () => {
+  const { session, push } = await open(undefined, false, historyExecutor("ANSWER_TEXT"));
+  push(customUse("h1"), idleWith("requires_action", { event_ids: ["h1"] }), msg("ANSWER_TEXT переказаний по-своєму."), IDLE_OK);
+  const reply = await session.send("Що по Extract?");
+  assert.ok(reply.startsWith(`ANSWER_TEXT${PM_SEPARATOR}`));
+  assert.ok(reply.includes("переказаний по-своєму"));
+  session.close();
+});
+
+test("#36 relay 4: an added interpretation is isolated to the PM section and never touches the factual block", async () => {
+  const { session, push } = await open(undefined, false, historyExecutor("Цього тижня в Done перейшло 3 картки."));
+  push(customUse("h1"), idleWith("requires_action", { event_ids: ["h1"] }), msg("Схоже, тиждень був продуктивний."), IDLE_OK);
+  const reply = await session.send("Що по Extract?");
+  const [factual, commentary] = reply.split(PM_SEPARATOR);
+  assert.equal(factual, "Цього тижня в Done перейшло 3 картки.");
+  assert.equal(commentary, "Схоже, тиждень був продуктивний.");
+  session.close();
+});
+
+test("#36 relay 5: an empty coordinator message still returns the factual block alone, with no dangling separator", async () => {
+  const { session, push } = await open(undefined, false, historyExecutor("ANSWER_TEXT"));
+  push(customUse("h1"), idleWith("requires_action", { event_ids: ["h1"] }), IDLE_OK);
+  assert.equal(await session.send("Що по Extract?"), "ANSWER_TEXT");
+  session.close();
+});
+
+test("#36 relay 6: a mixed-intent turn keeps both the factual block and the coordinator's answer to the rest of the request", async () => {
+  const { session, push } = await open(undefined, false, historyExecutor("ANSWER_TEXT"));
+  push(customUse("h1"), idleWith("requires_action", { event_ids: ["h1"] }), msg("Завтра варто почати з Брендбука."), IDLE_OK);
+  const reply = await session.send("Дай огляд Extract за тиждень і скажи, що завтра зробити першим.");
+  assert.equal(reply, `ANSWER_TEXT${PM_SEPARATOR}Завтра варто почати з Брендбука.`);
+  session.close();
+});
+
+test("#36 relay 7: an ordinary turn with no trello_work_history call is unaffected", async () => {
+  const { session, push } = await open(undefined, false, historyExecutor("UNUSED"));
+  push(msg("Привіт!"), IDLE_OK);
+  assert.strictEqual(await session.send("Привіт"), "Привіт!");
+  session.close();
+});
+
+test("#36 relay 8: Project Health specialist relay is unaffected when no work-history call occurs this turn", async () => {
+  const { session, push } = await open(roster());
+  push(created(), sentTo(), childResult(S), msg(S), IDLE_OK);
+  assert.strictEqual(await session.send("Що по Extract?"), S);
+  session.close();
+});
+
+test("#36 relay 8b: a verified work-history result and a verified PH specialist result in the same turn both survive, history leading", async () => {
+  const { session, push } = await open(roster(), false, historyExecutor("ANSWER_TEXT"));
+  push(customUse("h1"), idleWith("requires_action", { event_ids: ["h1"] }), created(), sentTo(), childResult(S), msg(S), IDLE_OK);
+  const reply = await session.send("Що по Extract цього тижня і як в цілому стан проєкту?");
+  assert.ok(reply.startsWith(`ANSWER_TEXT${PM_SEPARATOR}`));
+  assert.ok(reply.includes(S));
+  session.close();
+});
+
+test("#36 relay 9: a verified due-date write keeps the #23 deterministic sentence as the PM section behind a verified work-history relay", async () => {
+  const due = "2026-09-21T21:30:00.000Z"; // Kyiv: вівторок, 22 вересня 2026, 00:30
+  const card = { id: "card_A", name: "Card A", due };
+  const { session, push } = await open(undefined, false, historyExecutor("ANSWER_TEXT"));
+  push(
+    customUse("h1"),
+    idleWith("requires_action", { event_ids: ["h1"] }),
+    toolUse("w", "trelloWriteCard", { action: "update", cardId: "card_A", due }),
+    toolResult("w", false, card),
+    toolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "card_A" }),
+    toolResult("r", false, card),
+    msg("Понеділок, 22 вересня, 00:30"),
+    IDLE_OK,
+  );
+  const reply = await session.send("Постав дедлайн і покажи, що змінилось на Extract цього тижня.");
+  assert.equal(
+    reply,
+    `ANSWER_TEXT${PM_SEPARATOR}Готово. Trello підтвердив дедлайн: вівторок, 22 вересня 2026, 00:30 за Києвом.`,
+  );
+  assert.ok(!reply.includes("Понеділок"), "the model's own (wrong-weekday) due wording never survives the #23 deterministic override");
+  session.close();
+});
+
+test("#36 relay 10: a work-history call followed by a budget stop never leaks answer_text as a completed reply", async () => {
+  const { session, push } = await open(undefined, false, historyExecutor("ANSWER_TEXT"));
+  push(customUse("h1"), idleWith("requires_action", { event_ids: ["h1"] }), msg("Ще рахую..."), idleWith("budget_reached"));
+  const error = await rejection(session.send("Що по Extract?"));
+  assert.ok(error instanceof DjonikTurnIncompleteError);
+  assert.ok(!error.message.includes("ANSWER_TEXT"));
+  session.close();
+});
+
+test("#36 relay 11: a failed trello_work_history call never produces an exact relay; the coordinator's own explanation is used", async () => {
+  const { session, push, traces } = await open(undefined, false, failingHistoryExecutor);
+  push(customUse("h1"), idleWith("requires_action", { event_ids: ["h1"] }), msg("Історія Trello зараз недоступна."), IDLE_OK);
+  const reply = await session.send("Що по Extract?");
+  assert.equal(reply, "Історія Trello зараз недоступна.");
+  assert.deepEqual(traces.filter((t) => t.type === "work_history_relay_skipped"), [{ type: "work_history_relay_skipped" }]);
+  session.close();
+});
+
+test("#36 relay 12: a malformed/missing answer_text never triggers a relay; nothing is fabricated in its place", async () => {
+  const { session, push } = await open(undefined, false, malformedHistoryExecutor);
+  push(customUse("h1"), idleWith("requires_action", { event_ids: ["h1"] }), msg("Ось відповідь координатора."), IDLE_OK);
+  assert.equal(await session.send("Що по Extract?"), "Ось відповідь координатора.");
+  session.close();
+});
+
+test("#36 relay 13: a later ordinary turn never receives an earlier turn's answer_text", async () => {
+  const { session, push } = await open(undefined, false, historyExecutor("FIRST_ANSWER"));
+  push(customUse("h1"), idleWith("requires_action", { event_ids: ["h1"] }), IDLE_OK);
+  assert.equal(await session.send("Що по Extract минулого тижня?"), "FIRST_ANSWER");
+
+  push(msg("Звичайна відповідь."), IDLE_OK);
+  assert.strictEqual(await session.send("Дякую"), "Звичайна відповідь.");
+  session.close();
+});
+
+test("#36 relay 14: an unrecognised custom tool can never reach a completed turn, so it can never trigger the history relay", async () => {
+  const { session, push } = await open(undefined, false, historyExecutor("SHOULD_NEVER_APPEAR"));
+  push(customUse("bad", "not_allowed"), idleWith("requires_action", { event_ids: ["bad"] }));
+  await assert.rejects(session.send("Що по Extract?"), /unsupported custom tool/i);
+  session.close();
+});

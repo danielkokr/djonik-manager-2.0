@@ -358,103 +358,76 @@ function joinUkrainianList(parts: readonly string[]): string {
   return `${parts.slice(0, -1).join(", ")} та ${parts.at(-1)}`;
 }
 
-/** Lowercase, non-terminal clause form of each category's total, for folding several categories
- *  into one opening sentence instead of one standalone sentence per category. */
-const TOTAL_CLAUSE: Record<CategoryKey, (n: number) => string> = {
-  reached_done: (n) => `в Done перейшло ${n} ${ukrainianPlural(n, ["подія", "події", "подій"])}`,
-  returned_from_done: (n) => `${n} ${ukrainianPlural(n, ["подія", "події", "подій"])} повернулося з Done`,
-  created: (n) => `створено ${n} ${ukrainianPlural(n, ["картка", "картки", "карток"])}`,
-  archived: (n) => `архівовано ${n} ${ukrainianPlural(n, ["картка", "картки", "карток"])}`,
-  moved: (n) => `ще ${n} ${ukrainianPlural(n, ["картка", "картки", "карток"])} перемістилися між іншими списками`,
-};
-
 function temporalPhrase(input: WorkHistoryWindowInput, window: HistoryWindow): string {
   if (input.kind === "this_week") return "Цього тижня";
   if (input.kind === "last_week") return "Минулого тижня";
   return `За період ${formatKyivDateTime(window.from)} – ${formatKyivDateTime(window.to)}`;
 }
 
-function scopePhrase(scope: WorkHistoryScope): string {
-  return scope.kind === "project" ? ` по ${scope.label} на дошці` : " на дошці";
+/** The structured "Variant B" heading line, e.g. "Минулого тижня по Extract:" or
+ *  "Цього тижня на дошці:" for a whole-board review (Product Owner decision 2026-09-22). */
+function headingLine(input: TrelloWorkHistoryInput, window: HistoryWindow): string {
+  const scope = input.scope.kind === "project" ? ` по ${input.scope.label}` : " на дошці";
+  return `${temporalPhrase(input.window, window)}${scope}:`;
 }
 
-/**
- * One combined opening sentence stating every non-empty category's authoritative total —
- * deliberately one sentence for however many categories are active, rather than one standalone
- * sentence per category, so a busy week does not by itself blow past a short answer's sentence
- * budget. Returns null only when every category is empty (the zero-activity fallback applies).
- */
-function buildOpeningSentence(categories: WorkHistoryCategories, input: TrelloWorkHistoryInput, window: HistoryWindow): string | null {
-  const clauses = CATEGORY_ORDER.filter((key) => categories[key]).map((key) => TOTAL_CLAUSE[key](categories[key]!.total));
-  if (clauses.length === 0) return null;
-  return `${temporalPhrase(input.window, window)}${scopePhrase(input.scope)} ${joinUkrainianList(clauses)}.`;
-}
-
-type NamedCategoryKey = "reached_done" | "returned_from_done";
-
-const NAMED_SENTENCE: Record<NamedCategoryKey, { subjectPrefix: string; singularVerb: string; pluralVerb: string }> = {
-  reached_done: { subjectPrefix: "У Done", singularVerb: "перейшла", pluralVerb: "перейшли" },
-  returned_from_done: { subjectPrefix: "Із Done", singularVerb: "повернулася", pluralVerb: "повернулися" },
+const VARIANT_B_LABEL: Record<CategoryKey, string> = {
+  reached_done: "Перейшло в Done",
+  returned_from_done: "Повернулось з Done",
+  created: "Створено",
+  archived: "Архівовано",
+  moved: "Інші переміщення",
 };
 
-/**
- * Names the cards behind a "completion" category (reached/returned-from Done) — the facts Daniel
- * is most likely to want by name. Only `items` already selected/capped by `buildWorkHistoryCategories`
- * are used (docs/29's "named-example policy": deterministic code chooses and orders names; Claude
- * is never handed a list to choose from). A non-zero `omitted` is folded into the same sentence as
- * "(ще N)" instead of a separate sentence, so overflow never grows the answer's sentence count.
- */
-function buildNamedSentence(key: NamedCategoryKey, category: WorkHistoryCategory | undefined): string | null {
-  if (!category || category.items.length === 0) return null;
-  const config = NAMED_SENTENCE[key];
-  const verb = category.items.length === 1 ? config.singularVerb : config.pluralVerb;
-  const names = joinUkrainianList(category.items.map((item) => `«${item.card}»`));
-  const overflow = category.omitted > 0 ? ` (ще ${category.omitted})` : "";
-  return `${config.subjectPrefix} ${verb} ${names}${overflow}.`;
-}
+/** The two categories Daniel is most likely to want by name (docs/29's "named-example policy":
+ *  deterministic code chooses and orders names; Claude is never handed a list to choose from).
+ *  `created`/`archived`/`moved` stay count-only — never individually named in a concise review,
+ *  and (Product Owner decision) never accompanied by a "not all listed" caveat either: that
+ *  caveat conflated a real data-coverage gap with concise mode's ordinary example limit. */
+const VARIANT_B_NAMED: ReadonlySet<CategoryKey> = new Set(["reached_done", "returned_from_done"]);
 
-const UNNAMED_CAVEAT_LABEL: Partial<Record<CategoryKey, string>> = {
-  created: "створені",
-  archived: "архівовані",
-};
+const VARIANT_B_COUNT_NOUN: readonly [string, string, string] = ["картка", "картки", "карток"];
 
 /**
- * `created`/`archived` cards are never individually named in a concise answer (only `moved`'s
- * bulk-noise total is even less named, deliberately with no caveat: the "ще N карток
- * перемістилися" phrasing never promised names). When either is non-empty, one honest sentence
- * says their names were not listed here — never silently, and never as a per-category sentence.
+ * One structured bullet for a single non-empty category. `category.total` is always the
+ * authoritative count (event occurrences for `reached_done`/`returned_from_done`, so a
+ * Done → reopen → Done card still counts twice even though only one card is named — the same
+ * total/shown/omitted split `buildWorkHistoryCategories` already computes, just rendered as a
+ * bullet instead of a sentence). A non-zero `omitted` is folded into the same bullet as "(ще N)"
+ * rather than a separate line, so overflow never grows the answer's line count.
  */
-function buildUnnamedCaveatSentence(categories: WorkHistoryCategories): string | null {
-  const labels = (["created", "archived"] as const).filter((key) => categories[key]).map((key) => UNNAMED_CAVEAT_LABEL[key]!);
-  if (labels.length === 0) return null;
-  return `У короткому огляді перелічено не всі ${joinUkrainianList(labels)} картки.`;
+function buildVariantBBullet(key: CategoryKey, category: WorkHistoryCategory): string {
+  const label = VARIANT_B_LABEL[key];
+  if (VARIANT_B_NAMED.has(key)) {
+    const names = joinUkrainianList(category.items.map((item) => `«${item.card}»`));
+    const overflow = category.omitted > 0 ? ` (ще ${category.omitted})` : "";
+    return `- **${label}:** ${category.total} — ${names}${overflow}`;
+  }
+  return `- **${label}:** ${category.total} ${ukrainianPlural(category.total, VARIANT_B_COUNT_NOUN)}`;
 }
 
 /**
- * The deterministic concise `answer_text`: one opening sentence with every category's total, one
- * sentence naming reached-Done cards, one naming returned-from-Done cards, and (only when
- * applicable) one caveat that created/archived cards were not individually named. Typically
- * 1–4 sentences before any coverage/zero-activity suffix. No direction/trend/reason is stated for
- * `moved`, or anywhere else, because no such fact is computed.
+ * The deterministic concise `answer_text` in the Product Owner's selected structured "Variant B"
+ * shape: a heading line, then one Markdown bullet per non-empty category, in `CATEGORY_ORDER`.
+ * A category with zero items is omitted entirely rather than rendered as "0" (requirement #7).
+ * No direction/trend/reason is stated anywhere, because no such fact is computed.
  */
-function buildConciseAnswerText(categories: WorkHistoryCategories, input: TrelloWorkHistoryInput, window: HistoryWindow): string[] {
-  const sentences: string[] = [];
-  const opening = buildOpeningSentence(categories, input, window);
-  if (opening) sentences.push(opening);
-  const done = buildNamedSentence("reached_done", categories.reached_done);
-  if (done) sentences.push(done);
-  const returned = buildNamedSentence("returned_from_done", categories.returned_from_done);
-  if (returned) sentences.push(returned);
-  const caveat = buildUnnamedCaveatSentence(categories);
-  if (caveat) sentences.push(caveat);
-  return sentences;
+function buildVariantBAnswerText(categories: WorkHistoryCategories, input: TrelloWorkHistoryInput, window: HistoryWindow): string {
+  const heading = headingLine(input, window);
+  const activeKeys = CATEGORY_ORDER.filter((key) => categories[key]);
+  if (activeKeys.length === 0) return `${heading} за цей період суттєвих змін не зафіксовано.`;
+  return [heading, "", ...activeKeys.map((key) => buildVariantBBullet(key, categories[key]!))].join("\n");
 }
 
 /** The deterministic detailed `answer_text`: every category total and every named item, in full —
  *  the same computation `renderCategoryFactLines` already performs, just no longer a separate
- *  model-facing field Claude would have to fold into prose itself. */
-function buildDetailedAnswerText(categories: WorkHistoryCategories): string[] {
-  return renderCategoryFactLines(categories);
+ *  model-facing field Claude would have to fold into prose itself. Unchanged by the Variant B
+ *  concise-mode rework (Product Owner decision: adapt concise only). */
+function buildDetailedAnswerText(categories: WorkHistoryCategories, coverageWarning: string | null): string {
+  const sentences = renderCategoryFactLines(categories);
+  if (coverageWarning) sentences.push(coverageWarning);
+  if (sentences.length === 0) sentences.push("За цей період суттєвих змін не зафіксовано.");
+  return sentences.join(" ");
 }
 
 interface CardFacts {
@@ -570,18 +543,19 @@ export function buildWorkHistoryAnswer(
   const window = resolveHistoryWindow(input.window, now);
   const categories = buildWorkHistoryCategories(input, actions, cards, now);
   const format = input.response_format ?? "concise";
-  const sentences = format === "concise" ? buildConciseAnswerText(categories, input, window) : buildDetailedAnswerText(categories);
-  if (coverage.truncated || !coverage.oldestActionReached) {
-    sentences.push("Історія за цей період може бути неповною: частину дій не вдалося прочитати повністю.");
-  }
-  if (sentences.length === 0) {
-    sentences.push("За цей період суттєвих змін не зафіксовано.");
-  }
+  const incomplete = coverage.truncated || !coverage.oldestActionReached;
+  // Only a real data-coverage limitation (truncated/partial retrieval) produces this warning —
+  // never concise mode's ordinary per-category example cap, which is not a coverage gap.
+  const coverageWarning = incomplete ? "Історія за цей період може бути неповною: частину дій не вдалося прочитати повністю." : null;
+  const answerText =
+    format === "concise"
+      ? buildVariantBAnswerText(categories, input, window) + (coverageWarning ? `\n\n${coverageWarning}` : "")
+      : buildDetailedAnswerText(categories, coverageWarning);
   return {
     window: { from: formatKyivDateTime(window.from), to: formatKyivDateTime(window.to), label: window.label },
     scope: input.scope.kind === "board" ? { kind: "board" } : { kind: "project", label: input.scope.label },
     coverage,
-    answer_text: sentences.join(" "),
+    answer_text: answerText,
   };
 }
 

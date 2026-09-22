@@ -64,7 +64,7 @@ test("#36 internal categories (debug/test-only) still count occurrences vs cards
   assert.equal(board.reached_done?.total, 3, "whole-board scope includes the other labelled card");
 });
 
-test("#36 concise answer_text is one already-complete Ukrainian review: combined totals, named completions, no raw IDs, no lastActivityAt, no actor claim", () => {
+test("#36 concise answer_text is the structured Variant B report: project heading, bold bullet labels, named completions, no raw IDs, no lastActivityAt, no actor claim", () => {
   const answer = buildWorkHistoryAnswer(
     { window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" } },
     history,
@@ -74,13 +74,17 @@ test("#36 concise answer_text is one already-complete Ukrainian review: combined
   );
   assert.equal(
     answer.answer_text,
-    "Цього тижня по Extract на дошці в Done перейшло 2 події та 1 подія повернулося з Done. " +
-      "У Done перейшла «Анонімна картка». " +
-      "Із Done повернулася «Анонімна картка».",
+    "Цього тижня по Extract:\n\n" +
+      "- **Перейшло в Done:** 2 — «Анонімна картка»\n" +
+      "- **Повернулось з Done:** 1 — «Анонімна картка»",
   );
   assert.doesNotMatch(answer.answer_text, /card_extract|lastActivityAt|ти зробив|daniel/i);
+});
+
+test("#36 Variant B board-scope heading says «на дошці», never a project name that was not requested", () => {
   const board = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: { kind: "board" } }, history, cards, { pagesRead: 1, truncated: false, oldestActionReached: true }, NOW);
-  assert.match(board.answer_text, /в Done перейшло 3 події/, "whole-board scope includes the other labelled card in the combined opening sentence");
+  assert.ok(board.answer_text.startsWith("Цього тижня на дошці:\n"), board.answer_text);
+  assert.match(board.answer_text, /\*\*Перейшло в Done:\*\* 3 —/, "whole-board scope includes the other labelled card in the Done bullet's total");
 });
 
 test("#36 detailed answer_text names every item and never emits an omitted-example sentence", () => {
@@ -98,17 +102,26 @@ test("#36 detailed answer_text names every item and never emits an omitted-examp
   );
 });
 
-test("#36 concise answer_text limits named completions to five, folds the omitted count into the same sentence, and flags incomplete coverage", () => {
+test("#36 concise Variant B limits named completions to five, folds the omitted count into the same bullet, and shows a coverage warning ONLY for a real truncated/partial retrieval", () => {
   const manyCards = Array.from({ length: 6 }, (_, index) => ({ id: `id_${index}`, name: `Картка ${index}`, labels: [{ name: "Extract" }] }));
   const manyActions = manyCards.map((card, index) => action(`a_${index}`, `2026-03-23T0${index}:00:00Z`, "updateCard", { card, listBefore: { name: "In progress" }, listAfter: { name: "Done" } }));
   const answer = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" } }, manyActions, manyCards, { pagesRead: 1, truncated: true, oldestActionReached: false }, NOW);
   assert.equal(
     answer.answer_text,
-    "Цього тижня по Extract на дошці в Done перейшло 6 подій. " +
-      "У Done перейшли «Картка 0», «Картка 1», «Картка 2», «Картка 3» та «Картка 4» (ще 1). " +
+    "Цього тижня по Extract:\n\n" +
+      "- **Перейшло в Done:** 6 — «Картка 0», «Картка 1», «Картка 2», «Картка 3» та «Картка 4» (ще 1)\n\n" +
       "Історія за цей період може бути неповною: частину дій не вдалося прочитати повністю.",
   );
   assert.equal(formatKyivDateTime("2026-03-23T08:00:00Z"), "пн 23.03, 10:00");
+
+  // The same 6-card shape with COMPLETE coverage must never show that warning — concise mode's
+  // ordinary 5-item example cap is not a data-coverage limitation (requirement #9).
+  const complete = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" } }, manyActions, manyCards, { pagesRead: 1, truncated: false, oldestActionReached: true }, NOW);
+  assert.doesNotMatch(complete.answer_text, /може бути неповною|не всі|not all/i);
+  assert.equal(
+    complete.answer_text,
+    "Цього тижня по Extract:\n\n- **Перейшло в Done:** 6 — «Картка 0», «Картка 1», «Картка 2», «Картка 3» та «Картка 4» (ще 1)",
+  );
 });
 
 test("#36 fixture A (first live failure): a concise board-noise moved total never leaks into a named sentence and states 7, not 5", () => {
@@ -130,8 +143,10 @@ test("#36 fixture A (first live failure): a concise board-noise moved total neve
     { pagesRead: 1, truncated: false, oldestActionReached: true },
     NOW,
   );
-  assert.equal(answer.answer_text, "Цього тижня по Extract на дошці ще 7 карток перемістилися між іншими списками.");
-  assert.doesNotMatch(answer.answer_text, /«Рух|moved_\d|lastActivityAt|5 карт/);
+  // Only the one applicable bullet is rendered — the four other (zero-value) categories are
+  // omitted entirely rather than shown as "0" (requirement #6/#7 of the Variant B follow-up).
+  assert.equal(answer.answer_text, "Цього тижня по Extract:\n\n- **Інші переміщення:** 7 карток");
+  assert.doesNotMatch(answer.answer_text, /«Рух|moved_\d|lastActivityAt|5 карт|Перейшло в Done|Повернулось з Done|Створено|Архівовано/);
 });
 
 test("#36 fixture B (second live failure): reached-Done and created totals stay authoritative and created cards are never individually named", () => {
@@ -152,11 +167,13 @@ test("#36 fixture B (second live failure): reached-Done and created totals stay 
     NOW,
   );
 
-  assert.match(answer.answer_text, /в Done перейшло 4 поді[їй]/, "reached-Done total is stated exactly, with no lower substitute total");
-  assert.match(answer.answer_text, /створено 6 карток/, "created total is stated exactly, not the five internally shown");
-  assert.match(answer.answer_text, /перейшли «Завершення 1», «Завершення 2», «Завершення 3» та «Завершення 4»/, "all four reached-Done examples are named because the concise limit (5) is not exceeded");
+  assert.match(answer.answer_text, /\*\*Перейшло в Done:\*\* 4 —/, "reached-Done total is stated exactly, with no lower substitute total");
+  assert.match(answer.answer_text, /\*\*Створено:\*\* 6 карток/, "created total is stated exactly, not the five internally shown, and never individually named");
+  assert.match(answer.answer_text, /«Завершення 1», «Завершення 2», «Завершення 3» та «Завершення 4»/, "all four reached-Done examples are named because the concise limit (5) is not exceeded");
   assert.doesNotMatch(answer.answer_text, /Нова картка/, "created cards are never individually named in a concise answer");
-  assert.match(answer.answer_text, /не всі створені картки/, "the caveat says created cards were not individually listed");
+  // Requirement #8: concise mode's per-category example cap is never presented as a coverage gap —
+  // complete coverage here must not print any "not all listed" caveat.
+  assert.doesNotMatch(answer.answer_text, /не всі|not all|може бути неповною/i);
   assert.doesNotMatch(answer.answer_text, /\b5\b.*created|created.*\b5\b/i);
 });
 
@@ -211,10 +228,10 @@ test("#36 exact third live diagnostic fixture (docs/27 §12): every requirement 
   );
 
   // 1-4: every authoritative total is stated correctly.
-  assert.match(answer.answer_text, /в Done перейшло 4 поді[їй]/, "4 reached-Done events");
-  assert.match(answer.answer_text, /2 поді[їй] повернулося з Done/, "2 returned-from-Done events");
-  assert.match(answer.answer_text, /створено 6 карток/, "6 created cards");
-  assert.match(answer.answer_text, /5 карток перемістилися між іншими списками/, "5 moved cards");
+  assert.match(answer.answer_text, /\*\*Перейшло в Done:\*\* 4 —/, "4 reached-Done events");
+  assert.match(answer.answer_text, /\*\*Повернулось з Done:\*\* 2 —/, "2 returned-from-Done events");
+  assert.match(answer.answer_text, /\*\*Створено:\*\* 6 карток/, "6 created cards");
+  assert.match(answer.answer_text, /\*\*Інші переміщення:\*\* 5 карток/, "5 moved cards");
   // 5: the moved card "Міні-парфуми адаптація" never appears anywhere, so it cannot be misdescribed as created.
   assert.doesNotMatch(answer.answer_text, /адаптація/i);
   // 6/7: no direction/majority claim, so «Брендбук»'s real (backward) direction cannot be contradicted.
@@ -223,9 +240,57 @@ test("#36 exact third live diagnostic fixture (docs/27 §12): every requirement 
   assert.doesNotMatch(answer.answer_text, /правок|доробк/i);
   // 9: no productivity/trend framing.
   assert.doesNotMatch(answer.answer_text, /активн|ресурс|продуктивн/i);
-  // 10: stays within the intended short-answer sentence budget.
-  const sentenceCount = answer.answer_text.split(". ").length;
-  assert.ok(sentenceCount <= 4, `expected <=4 sentences, got ${sentenceCount}: ${answer.answer_text}`);
+  // 10: stays within the intended short-answer budget — one bullet per active category, no more.
+  const bulletCount = answer.answer_text.split("\n").filter((line) => line.startsWith("- ")).length;
+  assert.equal(bulletCount, 4, `expected exactly 4 bullets, got ${bulletCount}: ${answer.answer_text}`);
+});
+
+test("#36 Variant B: docs/27-shaped last-week Extract fixture renders the exact structured report Daniel selected", () => {
+  // Same facts docs/27's live diagnostics exercised (4 reached Done, 2 of those also returned from
+  // Done, 6 created, 5 otherwise-moved), but using window: "last_week" (requirement #11) and dates
+  // that actually fall in that resolved window, to prove the end-to-end structured shape Daniel
+  // selected ("Минулого тижня по Extract: ..."), not just isolated total/name assertions.
+  const doneCards = [
+    { id: "kohaiu", name: "Кохаю пінка", labels: [{ name: "Extract" }] },
+    { id: "bili3d", name: "Білі аромати 3D відео", labels: [{ name: "Extract" }] },
+    { id: "avtorender", name: "Автоматизація рендеру", labels: [{ name: "Extract" }] },
+    { id: "komentari", name: "Коментарі по пінкам", labels: [{ name: "Extract" }] },
+  ];
+  const createdOnlyCards = [
+    { id: "bili50", name: "Білі аромати 50 ML", labels: [{ name: "Extract" }] },
+    { id: "chorni100", name: "Чорні аромати 100 ML", labels: [{ name: "Extract" }] },
+  ];
+  const movedOnlyCards = Array.from({ length: 5 }, (_, i) => ({ id: `moved_${i}`, name: `Рух ${i + 1}`, labels: [{ name: "Extract" }] }));
+  const allCards = [...doneCards, ...createdOnlyCards, ...movedOnlyCards];
+
+  const actions: TrelloAction[] = [
+    // All four created early in the window (before Done/move actions), so factsByCard insertion
+    // order — which the bullet's named list follows — matches doneCards' own order.
+    ...[...doneCards, ...createdOnlyCards].map((card, i) => action(`create_${i}`, `2026-03-16T0${i + 1}:00:00Z`, "createCard", { card })),
+    ...movedOnlyCards.map((card, i) => action(`move_${i}`, `2026-03-17T0${i + 1}:00:00Z`, "updateCard", { card, listBefore: { name: "Backlog" }, listAfter: { name: "This week" } })),
+    ...doneCards.map((card, i) => action(`done_${i}`, `2026-03-18T0${i + 1}:00:00Z`, "updateCard", { card, listBefore: { name: "In progress" }, listAfter: { name: "Done" } })),
+    // Two of the four reopen after reaching Done: «Білі аромати 3D відео» (index 1) and «Коментарі по пінкам» (index 3).
+    action("return_1", "2026-03-18T05:00:00Z", "updateCard", { card: doneCards[1], listBefore: { name: "Done" }, listAfter: { name: "In progress" } }),
+    action("return_3", "2026-03-18T06:00:00Z", "updateCard", { card: doneCards[3], listBefore: { name: "Done" }, listAfter: { name: "In progress" } }),
+  ];
+
+  const answer = buildWorkHistoryAnswer(
+    { window: { kind: "last_week" }, scope: { kind: "project", label: "Extract" }, response_format: "concise" },
+    actions,
+    allCards,
+    { pagesRead: 1, truncated: false, oldestActionReached: true },
+    NOW,
+  );
+
+  assert.equal(
+    answer.answer_text,
+    "Минулого тижня по Extract:\n\n" +
+      "- **Перейшло в Done:** 4 — «Кохаю пінка», «Білі аромати 3D відео», «Автоматизація рендеру» та «Коментарі по пінкам»\n" +
+      "- **Повернулось з Done:** 2 — «Білі аромати 3D відео» та «Коментарі по пінкам»\n" +
+      "- **Створено:** 6 карток\n" +
+      "- **Інші переміщення:** 5 карток",
+  );
+  assert.doesNotMatch(answer.answer_text, /card_|lastActivityAt|ти зробив|daniel|не всі|може бути неповною/i);
 });
 
 test("#36 reports ordinary creation and archival independently when they are not same-window noise", () => {
@@ -259,7 +324,7 @@ test("#36 create+archive noise within the same window is suppressed cleanly and 
     { pagesRead: 1, truncated: false, oldestActionReached: true },
     NOW,
   );
-  assert.equal(answer.answer_text, "За цей період суттєвих змін не зафіксовано.");
+  assert.equal(answer.answer_text, "Цього тижня по Extract: за цей період суттєвих змін не зафіксовано.");
 });
 
 test("#36 read-only REST paging uses since/before and reports coverage without credentials in requests or errors", async () => {
