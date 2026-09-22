@@ -1,702 +1,85 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { test } from "node:test";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { TRELLO_WORK_HISTORY_TOOL } from "./trelloWorkHistory.js";
 import {
   WORK_REVIEW_RUBRIC,
   extractEvidenceTrace,
   gradeEvidenceAcquisition,
   lintWorkReviewAnswer,
-  type DiscoveryOutcome,
-  type RubricDimensionId,
-  type RubricVerdict,
 } from "./workReviewRubric.js";
 
-// Issue #29 (Wave C2), source-only slice: contract fixtures for the simplified
-// current-state work-review Skill and the behavioral rubric.
-//
-// IMPORTANT: these are deterministic SOURCE checks. They prove that the canonical
-// Skill text and the rubric explicitly encode each required boundary. They do NOT
-// prove that any model (Haiku or Sonnet) follows the Skill — a prior live Haiku run
-// failed despite explicit prohibitions in the text. Behavior is judged only by the
-// later, separately authorized experiment, using docs/20 on the same dimensions.
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const skill = readFileSync(join(root, ".claude", "skills", "work-review", "SKILL.md"), "utf8");
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+// #29's rubric/source remains historical evidence. These assertions replace only its now-superseded
+// current-state Skill contract with #36's action-history tool contract.
+test("#36 work-review Skill is thin, history-first, actor-safe and read-only", () => {
+  assert.ok(Buffer.byteLength(skill, "utf8") <= 3 * 1024);
+  assert.match(skill, /trello_work_history/);
+  assert.match(skill, /2–4 concise Ukrainian sentences/);
+  assert.match(skill, /на дошці перейшло в Done/);
+  assert.match(skill, /not «ти зробив» or «Daniel завершив»/);
+  assert.match(skill, /coverage/i);
+  assert.match(skill, /Project Health remains its own capability/);
+  assert.match(skill, /history is unavailable/i);
+  assert.match(skill, /Do not write Trello, Calendar, or Memory/);
+  assert.doesNotMatch(skill, /lastActivityAt/);
+  assert.match(skill, /Do not make Project Health judgements, productivity scores, effort\/time claims, trend analysis/i);
+});
 
-function readRepoFile(...parts: string[]): string {
-  return readFileSync(join(repoRoot, ...parts), "utf8").replace(/\r\n?/g, "\n");
-}
+test("#36 exports one bounded custom-tool schema with semantic window, scope and format inputs", () => {
+  assert.equal(TRELLO_WORK_HISTORY_TOOL.type, "custom");
+  assert.equal(TRELLO_WORK_HISTORY_TOOL.name, "trello_work_history");
+  assert.match(TRELLO_WORK_HISTORY_TOOL.description, /read-only/i);
+  const schema = JSON.stringify(TRELLO_WORK_HISTORY_TOOL.input_schema);
+  for (const token of ["this_week", "last_week", "explicit", "from", "to", "project", "board", "response_format", "concise", "detailed"]) {
+    assert.ok(schema.includes(token), `schema must include ${token}`);
+  }
+  assert.doesNotMatch(schema, /http|endpoint|url|api_key/i);
+});
 
-const SKILL = readRepoFile(".claude", "skills", "work-review", "SKILL.md");
-const RUBRIC_DOC = readRepoFile("docs", "20_ISSUE_29_WORK_REVIEW_BEHAVIORAL_RUBRIC.md");
+// These are deliberately retained from #29 as source-level regression helpers. They no longer
+// prescribe the superseded current-state Skill wording, but stay useful for historical evaluation
+// artifacts and must not silently lose their independent mechanics.
+test("historical work-review rubric keeps all named dimensions and model-neutral severity metadata", () => {
+  assert.deepEqual(WORK_REVIEW_RUBRIC.map((dimension) => dimension.id), Array.from({ length: 16 }, (_, i) => `R${String(i + 1).padStart(2, "0")}`));
+  assert.ok(WORK_REVIEW_RUBRIC.every((dimension) => dimension.severity === "critical" || dimension.severity === "major"));
+});
 
-function section(heading: string): string {
-  const start = SKILL.indexOf(`\n## ${heading}\n`);
-  assert.ok(start >= 0, `expected a '${heading}' section in work-review`);
-  const next = SKILL.indexOf("\n## ", start + 1);
-  return next >= 0 ? SKILL.slice(start, next) : SKILL.slice(start);
-}
+test("historical lint helper flags unsupported chronology but leaves a human-readable due date to factual review", () => {
+  const flags = lintWorkReviewAnswer("Остання закрита картка була вчора. Дедлайн: 21 вересня.");
+  assert.ok(flags.some((flag) => flag.dimension === "R01"));
+  assert.ok(!flags.some((flag) => flag.dimension === "R03"));
+});
 
-interface ContractAssertion {
-  readonly section: string;
-  readonly pattern: RegExp;
-}
+test("historical fresh-evidence trace counts only Trello discovery before the final message", () => {
+  const trace = extractEvidenceTrace([
+    { type: "agent.tool_use", name: "read", input: {} },
+    { type: "agent.mcp_tool_use", mcp_server_name: "trello", name: "trelloReadBoard" },
+    { type: "agent.message", content: [{ type: "text", text: "Уточнити?" }] },
+    { type: "agent.mcp_tool_use", mcp_server_name: "trello", name: "trelloReadCard" },
+  ]);
+  assert.deepEqual(trace.trelloDiscoveryToolNames, ["trelloReadBoard"]);
+  assert.equal(trace.finalMessageAsksQuestion, true);
+});
 
-interface ContractFixture {
-  readonly id: string;
-  readonly title: string;
-  readonly userPrompt: string;
-  /** Synthetic description of the fresh evidence a grader would hold; no real card data. */
-  readonly evidence: string;
-  readonly expectedContract: string;
-  readonly dimensions: readonly RubricDimensionId[];
-  readonly assertions: readonly ContractAssertion[];
-}
-
-const FIXTURES: readonly ContractFixture[] = [
-  {
-    id: "A",
-    title: "Historical-looking question",
-    userPrompt: "Що я зробив цього тижня?",
-    evidence: "Fresh board read: three cards currently in Done, two in In progress; no completion times exist in the data.",
-    expectedContract:
-      "States once that current data cannot prove what was completed in that window, still gives a bounded current-state summary, invents no dates/order/movement.",
-    dimensions: ["R01", "R13"],
-    assertions: [
-      { section: "History is not available", pattern: /cannot show when a card was completed/i },
-      { section: "History is not available", pattern: /cannot prove what was completed, moved or reopened in that period/i },
-      { section: "History is not available", pattern: /Give the useful current state that is supported/i },
-      { section: "History is not available", pattern: /Add no dates, order, movement, reopen events or causes/i },
-      { section: "History is not available", pattern: /Do not present current Done cards as .this week's. work/i },
-      { section: "History is not available", pattern: /«що завершили за останні дні\?», «що повернулось у роботу\?», «що просунулось цього тижня\?»/ },
-    ],
-  },
-  {
-    id: "B",
-    title: "Project review with Done / active / waiting cards",
-    userPrompt: "Дай короткий review по Extract",
-    evidence: "Nine open cards: four Done, three In progress, two in a list named Waiting.",
-    expectedContract: "A few strongest supported facts; no per-card inventory, totals, chronology or score by default.",
-    dimensions: ["R09", "R14"],
-    assertions: [
-      { section: "Shape of the answer", pattern: /a few of the strongest supported facts/i },
-      { section: "Shape of the answer", pattern: /what is currently Done, what is active, what is waiting/i },
-      { section: "Shape of the answer", pattern: /No chronology, totals, score, percentage or productivity verdict/i },
-      { section: "Shape of the answer", pattern: /no line for every card, no opening inventory/i },
-      { section: "Shape of the answer", pattern: /Name only the few cards that carry the point/i },
-      { section: "Shape of the answer", pattern: /Do not add vague interpretation such as «невеликий процес»/ },
-      { section: "Shape of the answer", pattern: /List everything only when Daniel explicitly asks for a list or table/i },
-    ],
-  },
-  {
-    id: "C",
-    title: "lastActivityAt",
-    userPrompt: "Що по Extract рухалось останнім часом?",
-    evidence: "A Done card with lastActivityAt 2026-09-21T07:09:13.924Z (raw UTC); other Done cards with earlier values.",
-    expectedContract:
-      "lastActivityAt is never completion/order/progress/time-window evidence; no naturalized clock time such as «о 07:09» is produced from it.",
-    dimensions: ["R02", "R03"],
-    assertions: [
-      { section: "Signals stay distinct", pattern: /only means Trello recorded some activity on the card at that raw timestamp/i },
-      { section: "Signals stay distinct", pattern: /Never use it as evidence of completion, order, movement, reopening, progress, an actor, staleness, or membership in a period/i },
-      { section: "Signals stay distinct", pattern: /never to choose which cards to include/i },
-      { section: "Signals stay distinct", pattern: /Never rewrite it as a local date or time, a weekday, or relative wording, and never present it as when something happened/i },
-      { section: "Signals stay distinct", pattern: /copy the raw ISO string verbatim as «Trello recorded activity at <ISO>»/ },
-      { section: "Signals stay distinct", pattern: /«21 вересня о 07:09» is a measured failure/ },
-    ],
-  },
-  {
-    id: "D",
-    title: "Conflicting Done / closed / dueComplete state",
-    userPrompt: "Що з цих задач уже виглядає завершеним?",
-    evidence:
-      "One archived card outside Done; one card in Done with dueComplete false; one card with dueComplete true in In progress; one not-Done card whose recorded due has passed.",
-    expectedContract:
-      "Done/list, closed and dueComplete reported for what they are; material conflicts among them named; no invented reconciliation. due stays an independent current fact, not a completion-state signal.",
-    dimensions: ["R06", "R04"],
-    assertions: [
-      { section: "Signals stay distinct", pattern: /Three signals speak to completion state\. Report each for what it is and keep them apart/i },
-      { section: "Signals stay distinct", pattern: /a card in a list named Done: the board currently treats it as Done/i },
-      { section: "Signals stay distinct", pattern: /`closed`: the card is archived now, which does not mean the work was finished/i },
-      { section: "Signals stay distinct", pattern: /`dueComplete`: a current boolean with no completion time/i },
-      { section: "Signals stay distinct", pattern: /state what each shows and that they differ/i },
-      { section: "Signals stay distinct", pattern: /Do not pick a winner or invent a transition/i },
-      { section: "Signals stay distinct", pattern: /Three signals speak to completion state/i },
-      { section: "Signals stay distinct", pattern: /`due` is not one of these signals: a deadline is not proof that work is or is not finished/i },
-      { section: "Signals stay distinct", pattern: /report it as a current fact on its own and not as a completion-state conflict/i },
-    ],
-  },
-  {
-    id: "E",
-    title: "Partial retrieval",
-    userPrompt: "Що активно по Seqthera?",
-    evidence: "Card listing returned with hasNextPage true (or limit reached); only open cards read.",
-    expectedContract: "Coverage disclosed before any aggregate; no «усі», «це все», «всього N» unless coverage proves it.",
-    dimensions: ["R07"],
-    assertions: [
-      { section: "Coverage and counts", pattern: /whether the result was cut off \(`hasNextPage`, a reached `limit`/i },
-      { section: "Coverage and counts", pattern: /say so first, and speak only about what was retrieved/i },
-      { section: "Coverage and counts", pattern: /Do not say «усі завершені», «це все, що активно», «всього N» or «жодної» unless coverage proves it/ },
-    ],
-  },
-  {
-    id: "F",
-    title: "Explicit count request",
-    userPrompt: "Скільки задач по Extract зараз у Done?",
-    evidence: "Four Done cards in the retrieved set (one is archived); coverage complete for the scope.",
-    expectedContract: "Count defined over a named set, equal to the enumerated cards; partial coverage disclosed.",
-    dimensions: ["R08", "R07"],
-    assertions: [
-      { section: "Coverage and counts", pattern: /Give no counts by default/i },
-      { section: "Coverage and counts", pattern: /name the set it covers \(scope, open and closed or open only\)/i },
-      { section: "Coverage and counts", pattern: /tally the returned cards one by one/i },
-      { section: "Coverage and counts", pattern: /a number that equals the cards you actually enumerate/i },
-      { section: "Coverage and counts", pattern: /the number must match the names shown/i },
-      { section: "Coverage and counts", pattern: /With partial coverage, say the count is of what was read/i },
-    ],
-  },
-  {
-    id: "G",
-    title: "Accepted plan and a matching current card",
-    userPrompt: "Що з плану виконано станом на зараз?",
-    evidence: "Memory holds an explicitly accepted plan naming task X; one card X in the same project is currently in Done.",
-    expectedContract: "Plan side and current-actual side stated separately; no completed-this-week claim.",
-    dimensions: ["R10"],
-    assertions: [
-      { section: "Accepted plan and current state", pattern: /may supply only the plan side/i },
-      { section: "Accepted plan and current state", pattern: /Fresh Trello supplies only the current side/i },
-      { section: "Accepted plan and current state", pattern: /only when both are reliable and the card is clearly the same task in the same project/i },
-      { section: "Accepted plan and current state", pattern: /Allowed: «У прийнятому плані була X; зараз у Trello вона в Done\.»/ },
-      { section: "Accepted plan and current state", pattern: /Never write «виконано за планом цього тижня»/ },
-      { section: "Accepted plan and current state", pattern: /Memory never proves that work was completed, moved or reopened/i },
-    ],
-  },
-  {
-    id: "H",
-    title: "Accepted plan missing, ambiguous or in the wrong project",
-    userPrompt: "Що з плану виконано станом на зараз?",
-    evidence:
-      "Variants: no accepted plan in Memory; a plan later cancelled; two similarly named cards; the only matching card belongs to another project.",
-    expectedContract: "No fabricated comparison; say what is missing or ambiguous and give the current-state review.",
-    dimensions: ["R10"],
-    assertions: [
-      { section: "Accepted plan and current state", pattern: /A suggestion that was only discussed is not a plan/i },
-      { section: "Accepted plan and current state", pattern: /is not an accepted plan unless Daniel says so/i },
-      { section: "Accepted plan and current state", pattern: /no accepted plan is available, or it looks cancelled, superseded or of unclear period, say so/i },
-      { section: "Accepted plan and current state", pattern: /instead of inventing a plan/i },
-      { section: "Accepted plan and current state", pattern: /could match more than one card, or the only match is in another project, do not compare/i },
-      { section: "Accepted plan and current state", pattern: /ask one short question or name the item you could not match/i },
-    ],
-  },
-  {
-    id: "I",
-    title: "Single-project isolation",
-    userPrompt: "Дай короткий review по Extract",
-    evidence: "Shared board read returns cards of several projects, including an urgent-looking card labelled for another project.",
-    expectedContract: "Only the named project's cards are named, counted or flagged; nothing from another project leaks.",
-    dimensions: ["R05"],
-    assertions: [
-      { section: "Project scope", pattern: /Keep a single-project review inside that project/i },
-      { section: "Project scope", pattern: /Cards of other projects are not named, counted or flagged, even when urgent-looking/i },
-      { section: "Project scope", pattern: /do not add «а ще в іншому проєкті…»/i },
-      { section: "Project scope", pattern: /Ask one short clarification only after that discovery, when several boards or labels plausibly match or none does/i },
-      { section: "Project scope", pattern: /Do not hard-code project names/i },
-      { section: "Project scope", pattern: /keep each project's facts separate/i },
-    ],
-  },
-  {
-    id: "J",
-    title: "Project Health ownership boundary",
-    userPrompt: "Чи є ризики по Extract і що там зараз у Done?",
-    evidence: "Mixed request: a health/risk question plus a current-state question; Waiting list present.",
-    expectedContract:
-      "Risk/blocking/health judgement stays with Project Health; the specialist result is not restated or extended; Waiting is only a direct fact.",
-    dimensions: ["R12", "R04"],
-    assertions: [
-      { section: "Scope and handoffs", pattern: /Health, risk, blocking, staleness or overload.{0,10} belong to the Project Health capability and its specialist/i },
-      { section: "Scope and handoffs", pattern: /do not restate, paraphrase or extend a Project Health result/i },
-      { section: "Scope and handoffs", pattern: /the runtime keeps that result authoritative/i },
-      { section: "Shape of the answer", pattern: /what is waiting \(only as the direct fact that the card sits in that list or says so itself\)/i },
-      { section: "Evidence", pattern: /in this turn/i },
-      { section: "Evidence", pattern: /`trelloSearch` only discovers candidates; it is not authoritative field evidence/i },
-      { section: "Evidence", pattern: /Use only values the fresh result actually returned/i },
-    ],
-  },
-  {
-    id: "K",
-    title: "Review-only scenario stays read-only",
-    userPrompt: "Дай короткий review по Extract",
-    evidence: "Review recommends a next action on a card; Daniel has not asked to change anything.",
-    expectedContract: "Zero Trello writes, no Calendar, no transient retrospective judgement written to Memory.",
-    dimensions: ["R11", "R15"],
-    assertions: [
-      { section: "Read-only and Memory", pattern: /zero Trello writes and has no Calendar dependency/i },
-      { section: "Read-only and Memory", pattern: /never change a card because a review recommends an action/i },
-      { section: "Read-only and Memory", pattern: /explicitly asks to act, hand it to task-management/i },
-      { section: "Read-only and Memory", pattern: /Do not write transient retrospective conclusions to durable Memory/i },
-      { section: "Read-only and Memory", pattern: /recompute from fresh Trello each time/i },
-    ],
-  },
-];
-
-for (const fixture of FIXTURES) {
-  test(`fixture ${fixture.id} (${fixture.title}): the canonical Skill encodes the required contract`, () => {
-    assert.ok(fixture.userPrompt.length > 0 && fixture.evidence.length > 0 && fixture.expectedContract.length > 0);
-    for (const a of fixture.assertions) {
-      assert.match(section(a.section), a.pattern, `fixture ${fixture.id}: '${a.section}' must match ${a.pattern}`);
-    }
+test("historical fresh-evidence grader rejects a premature clarification and accepts a discovered ambiguity", () => {
+  const premature = gradeEvidenceAcquisition({
+    entityNamed: true,
+    exactIdentitySupplied: false,
+    discoveryAvailable: true,
+    trace: { trelloDiscoveryCalls: 0, trelloDiscoveryToolNames: [], finalMessage: "Уточнити?", finalMessageAsksQuestion: true },
   });
-}
-
-
-// ---- R16: evidence acquisition before clarification (fixtures PR-A .. PR-G) ----
-//
-// Each fixture is a SYNTHETIC event stream shaped like the real Managed Agents events (built-in tool calls are
-// `agent.tool_use`, MCP calls `agent.mcp_tool_use` with mcp_server_name "trello"), a scenario description, and the
-// verdict the rubric must give. They exercise the rubric's mechanics and the Skill text, not any model.
-
-type SyntheticEvent = Record<string, unknown>;
-const skillRead = (): SyntheticEvent[] => [
-  { type: "agent.tool_use", id: "t0", name: "read", input: { file_path: "/workspace/skills/work-review/SKILL.md" } },
-  { type: "agent.tool_result", tool_use_id: "t0", is_error: false },
-];
-const trello = (id: string, name: string, input: Record<string, unknown>): SyntheticEvent[] => [
-  { type: "agent.mcp_tool_use", id, name, input, mcp_server_name: "trello" },
-  { type: "agent.mcp_tool_result", mcp_tool_use_id: id, is_error: false },
-];
-const said = (text: string): SyntheticEvent => ({ type: "agent.message", content: [{ type: "text", text }] });
-
-interface ResolutionFixture {
-  readonly id: string;
-  readonly title: string;
-  readonly userPrompt: string;
-  readonly events: readonly SyntheticEvent[];
-  readonly entityNamed: boolean;
-  readonly exactIdentitySupplied: boolean;
-  readonly discoveryAvailable: boolean;
-  readonly discoveryOutcome?: DiscoveryOutcome;
-  readonly expected: RubricVerdict;
-  readonly expectedDiscoveryCalls: number;
-  readonly skillAssertions: readonly RegExp[];
-}
-
-const RESOLUTION_FIXTURES: readonly ResolutionFixture[] = [
-  {
-    id: "PR-A",
-    title: "Named project with a discoverable exact board: discover first",
-    userPrompt: "Дай короткий review по Extract",
-    events: [
-      ...skillRead(),
-      ...trello("m1", "trelloSearch", { action: "search_boards", query: "Extract" }),
-      ...trello("m2", "trelloReadCard", { action: "list_by_board", filter: "all" }),
-      said("Зараз у Done стоять A і B; C ще в In progress."),
-    ],
-    entityNamed: true,
-    exactIdentitySupplied: false,
-    discoveryAvailable: true,
-    discoveryOutcome: "single_match",
-    expected: "PASS",
-    expectedDiscoveryCalls: 2,
-    skillAssertions: [/Resolve the named project by looking, not by asking: search or read the boards first/i],
-  },
-  {
-    id: "PR-B",
-    title: "Named project with exactly one matching label: proceed after discovery",
-    userPrompt: "Дай короткий review по Seqthera",
-    events: [
-      ...skillRead(),
-      ...trello("m1", "trelloSearch", { action: "search_boards", query: "Seqthera" }),
-      ...trello("m2", "trelloReadBoard", { action: "list_labels" }),
-      ...trello("m3", "trelloReadCard", { action: "list_by_board", filter: "all" }),
-      said("Беру label з цією назвою. Зараз у Done стоїть A; B в In progress."),
-    ],
-    entityNamed: true,
-    exactIdentitySupplied: false,
-    discoveryAvailable: true,
-    discoveryOutcome: "single_match",
-    expected: "PASS",
-    expectedDiscoveryCalls: 3,
-    skillAssertions: [
-      /if none matches, read the shared board's labels and cards and, if exactly one label matches, scope to cards carrying it and say which label you used/i,
-    ],
-  },
-  {
-    id: "PR-C",
-    title: "Several plausible matches after discovery: one clarification is allowed",
-    userPrompt: "Дай короткий review по Alpha",
-    events: [
-      ...skillRead(),
-      ...trello("m1", "trelloSearch", { action: "search_boards", query: "Alpha" }),
-      ...trello("m2", "trelloReadBoard", { action: "list_labels" }),
-      said("Знайшов дві підходящі дошки. Яку з них взяти?"),
-    ],
+  assert.equal(premature.verdict, "FAIL");
+  const discovered = gradeEvidenceAcquisition({
     entityNamed: true,
     exactIdentitySupplied: false,
     discoveryAvailable: true,
     discoveryOutcome: "multiple_matches",
-    expected: "PASS",
-    expectedDiscoveryCalls: 2,
-    skillAssertions: [/Ask one short clarification only after that discovery, when several boards or labels plausibly match or none does/i],
-  },
-  {
-    id: "PR-D",
-    title: "Zero matches after discovery: one clarification is allowed",
-    userPrompt: "Дай короткий review по Beta",
-    events: [
-      ...skillRead(),
-      ...trello("m1", "trelloSearch", { action: "search_boards", query: "Beta" }),
-      ...trello("m2", "trelloReadBoard", { action: "list_labels" }),
-      said("Ні дошки, ні label з такою назвою не знайшов. Як саме називається проєкт?"),
-    ],
-    entityNamed: true,
-    exactIdentitySupplied: false,
-    discoveryAvailable: true,
-    discoveryOutcome: "no_match",
-    expected: "PASS",
-    expectedDiscoveryCalls: 2,
-    skillAssertions: [/Ask one short clarification only after that discovery, when several boards or labels plausibly match or none does/i],
-  },
-  {
-    id: "PR-E",
-    title: "Zero Trello calls, then an immediate clarification (shape of the first paid diagnostic)",
-    userPrompt: "Що я реально зробив цього тижня по Extract? Дай коротко.",
-    events: [
-      ...skillRead(),
-      said("Щоб дати огляд по Extract, мені треба знайти цей проєкт. Це окрема дошка або це карти з лейблом на спільній дошці?"),
-    ],
-    entityNamed: true,
-    exactIdentitySupplied: false,
-    discoveryAvailable: true,
-    expected: "FAIL",
-    expectedDiscoveryCalls: 0,
-    skillAssertions: [/Never ask first/i],
-  },
-  {
-    id: "PR-F",
-    title: "Missing Memory context alone does not justify skipping Trello discovery",
-    userPrompt: "Дай короткий review по Extract",
-    events: [
-      ...skillRead(),
-      said("У моїй пам'яті немає інформації про цей проєкт. Де він живе — окрема дошка чи label?"),
-    ],
-    entityNamed: true,
-    exactIdentitySupplied: false,
-    discoveryAvailable: true,
-    expected: "FAIL",
-    expectedDiscoveryCalls: 0,
-    skillAssertions: [/not merely because Memory does not say where the project lives/i],
-  },
-  {
-    id: "PR-G",
-    title: "Exact board identity supplied by the user: the dimension does not apply",
-    userPrompt: "Дай короткий review по цій дошці https://trello.com/b/abc123/djonik",
-    events: [...skillRead(), said("Зараз у Done стоять A і B.")],
-    entityNamed: true,
-    exactIdentitySupplied: true,
-    discoveryAvailable: true,
-    expected: "N/A",
-    expectedDiscoveryCalls: 0,
-    skillAssertions: [/Resolve the named project by looking, not by asking/i],
-  },
-];
-
-for (const f of RESOLUTION_FIXTURES) {
-  test(`fixture ${f.id} (${f.title}): the rubric grades R16 mechanically and the Skill encodes discovery-before-clarification`, () => {
-    const trace = extractEvidenceTrace(f.events);
-    assert.equal(trace.trelloDiscoveryCalls, f.expectedDiscoveryCalls, JSON.stringify(trace.trelloDiscoveryToolNames));
-    const graded = gradeEvidenceAcquisition({
-      entityNamed: f.entityNamed,
-      exactIdentitySupplied: f.exactIdentitySupplied,
-      discoveryAvailable: f.discoveryAvailable,
-      discoveryOutcome: f.discoveryOutcome,
-      trace,
-    });
-    assert.equal(graded.verdict, f.expected, graded.reason);
-    for (const pattern of f.skillAssertions) assert.match(section("Project scope"), pattern, `${f.id}: Project scope must match ${pattern}`);
+    trace: { trelloDiscoveryCalls: 1, trelloDiscoveryToolNames: ["trelloReadBoard"], finalMessage: "Уточнити?", finalMessageAsksQuestion: true },
   });
-}
-
-test("R16 fixtures PR-A to PR-G are present exactly once and cover the new dimension", () => {
-  assert.deepEqual(
-    RESOLUTION_FIXTURES.map((f) => f.id),
-    ["PR-A", "PR-B", "PR-C", "PR-D", "PR-E", "PR-F", "PR-G"],
-  );
-  assert.deepEqual(
-    RESOLUTION_FIXTURES.map((f) => f.expected),
-    ["PASS", "PASS", "PASS", "PASS", "FAIL", "FAIL", "N/A"],
-  );
-});
-
-test("R16 trace counts only Trello search/read calls before the final message: a built-in Skill read is not discovery", () => {
-  const trace = extractEvidenceTrace([
-    ...skillRead(),
-    ...trello("m1", "trelloSearch", { action: "search_boards" }),
-    ...trello("m2", "trelloWriteCard", { action: "update" }),
-    said("Готово."),
-    ...trello("m3", "trelloReadBoard", { action: "list" }),
-  ]);
-  assert.deepEqual(trace.trelloDiscoveryToolNames, ["trelloSearch"]);
-  assert.equal(extractEvidenceTrace(skillRead()).trelloDiscoveryCalls, 0);
-  assert.equal(extractEvidenceTrace([...skillRead(), said("Готово.")]).finalMessageAsksQuestion, false);
-  assert.equal(extractEvidenceTrace([...skillRead(), said("Яка дошка?")]).finalMessageAsksQuestion, true);
-});
-
-test("R16 grading edges: zero-discovery answer, unjustified clarification, N/A conditions, and required outcome", () => {
-  const noCalls = extractEvidenceTrace([...skillRead(), said("Ось огляд без читання.")]);
-  const base = { entityNamed: true, exactIdentitySupplied: false, discoveryAvailable: true, trace: noCalls } as const;
-  // answering without any read is as much a failure of evidence acquisition as asking
-  assert.equal(gradeEvidenceAcquisition(base).verdict, "FAIL");
-  // asking although discovery found exactly one match is not justified by the discovery
-  const found = extractEvidenceTrace([...skillRead(), ...trello("m1", "trelloSearch", {}), said("Це та дошка?")]);
-  assert.equal(gradeEvidenceAcquisition({ ...base, trace: found, discoveryOutcome: "single_match" }).verdict, "FAIL");
-  assert.equal(gradeEvidenceAcquisition({ ...base, trace: found, discoveryOutcome: "multiple_matches" }).verdict, "PASS");
-  assert.throws(() => gradeEvidenceAcquisition({ ...base, trace: found }), /discoveryOutcome is required/);
-  // N/A conditions
-  assert.equal(gradeEvidenceAcquisition({ ...base, entityNamed: false }).verdict, "N/A");
-  assert.equal(gradeEvidenceAcquisition({ ...base, discoveryAvailable: false }).verdict, "N/A");
-  assert.equal(gradeEvidenceAcquisition({ ...base, exactIdentitySupplied: true }).verdict, "N/A");
-});
-
-test("R16 verdict is independent of Memory: the grader accepts no Memory input and PR-E and PR-F fail alike", () => {
-  const graded = RESOLUTION_FIXTURES.filter((f) => f.id === "PR-E" || f.id === "PR-F").map((f) =>
-    gradeEvidenceAcquisition({
-      entityNamed: f.entityNamed,
-      exactIdentitySupplied: f.exactIdentitySupplied,
-      discoveryAvailable: f.discoveryAvailable,
-      trace: extractEvidenceTrace(f.events),
-    }),
-  );
-  assert.deepEqual(graded.map((g) => g.verdict), ["FAIL", "FAIL"]);
-  assert.equal(graded[0].reason, graded[1].reason);
-  const params = gradeEvidenceAcquisition.toString();
-  assert.doesNotMatch(params, /memory/i);
-});
-
-test("Skill orders discovery before clarification without project names, a phrase router or a lookup table", () => {
-  const scope = section("Project scope");
-  assert.match(scope, /Resolve the named project by looking, not by asking/i);
-  assert.match(scope, /Never ask first/i);
-  assert.doesNotMatch(scope, /Extract|Seqthera|Djonik|Limen|Cossack|A1\b/);
-  assert.doesNotMatch(SKILL, /\brouter\b|\bparser\b|\bmapping table\b/i);
-  assert.ok(Buffer.byteLength(SKILL, "utf8") < 11_515);
-});
-
-test("R16 is defined in the rubric as a major, model-neutral dimension with the required PASS/FAIL/N/A semantics", () => {
-  const r16 = WORK_REVIEW_RUBRIC.find((d) => d.id === "R16");
-  assert.equal(r16?.severity, "major");
-  assert.equal(r16?.title, "Fresh evidence acquisition / premature clarification");
-  const start = RUBRIC_DOC.indexOf("### R16 —");
-  assert.ok(start >= 0);
-  const doc = RUBRIC_DOC.slice(start, RUBRIC_DOC.indexOf("## 3. Покриття"));
-  assert.match(doc, /^### R16 — Fresh evidence acquisition \/ premature clarification \(major\)/);
-  for (const marker of ["PASS:", "FAIL:", "N/A:", "нуль Trello-спроб", "відсутність Memory", "ніколи", "Чому major, а не critical", "неевідентний", "не ранжує моделі"]) {
-    assert.ok(doc.includes(marker), `R16 doc must contain «${marker}»`);
-  }
-  assert.doesNotMatch(doc, /Haiku[^.]{0,40}(гірш|кращ)|Sonnet[^.]{0,40}(гірш|кращ)/);
-});
-
-test("docs/16 records the first paid diagnostic as INCONCLUSIVE, not as a Haiku failure, and documents the next configuration without a budget", () => {
-  const report = readRepoFile("docs", "16_ISSUE_29_WORK_REVIEW_DISCOVERY_REPORT.md");
-  const start = report.indexOf("\n## 30.");
-  assert.ok(start >= 0, "docs/16 must have a §30");
-  const s30 = report.slice(start);
-  assert.match(s30, /INCONCLUSIVE — candidate setup differed materially from production context/);
-  assert.match(s30, /не є збоєм Haiku|не свідчить проти Haiku/);
-  for (const marker of ["read_only", "trelloSearch", "усі Trello writes вимкнені", "Calendar", "PH-roster", "експериментальне відхилення", "не обирається бюджет", "нова авторизація Product Owner"]) {
-    assert.ok(s30.includes(marker), `docs/16 §30 must mention «${marker}»`);
-  }
-  // the historical §29 diagnostic and the earlier failed v20 record are preserved
-  assert.match(report, /## 29\. Paid fail-fast diagnostic/);
-  assert.match(report, /## 26\. Slice 3/);
-});
-
-test("fixtures cover the required scenarios A to K exactly once and every rubric dimension at least once", () => {
-  assert.deepEqual(
-    FIXTURES.map((f) => f.id),
-    ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K"],
-  );
-  const known = new Set<string>(WORK_REVIEW_RUBRIC.map((d) => d.id));
-  const covered = new Set<string>();
-  for (const f of FIXTURES) for (const d of f.dimensions) {
-    assert.ok(known.has(d), `fixture ${f.id} names unknown dimension ${d}`);
-    covered.add(d);
-  }
-  // the PR-A..PR-G family exercises the evidence-acquisition dimension (R16)
-  assert.ok(RESOLUTION_FIXTURES.length > 0);
-  covered.add("R16");
-  for (const id of known) assert.ok(covered.has(id), `rubric dimension ${id} has no fixture`);
-});
-
-// ---- Skill shape: simpler, positive contract, no chronology / totals / mandatory takeaway ----
-
-test("work-review Skill has valid frontmatter and covers current-state and history-limited questions without claiming health, planning or mutation", () => {
-  assert.match(SKILL, /^---\nname: work-review\ndescription: .+\n---\n/);
-  const frontmatter = SKILL.split("---")[1] ?? "";
-  for (const phrase of [
-    "Що зараз у Done",
-    "Дай короткий review по Extract",
-    "Що я зробив цього тижня",
-    "Що завершили за останні дні",
-    "Що повернулось у роботу",
-    "Що просунулось цього тижня",
-  ]) {
-    assert.ok(frontmatter.includes(phrase), `frontmatter should cover «${phrase}»`);
-  }
-  assert.match(frontmatter, /Read-only/);
-  assert.doesNotMatch(frontmatter, /create, update, move, or complete|Що робити сьогодні|Що робити цього тижня|Дай health check|Чи є ризики/i);
-});
-
-test("work-review is simpler than the previous candidate and keeps the expected sections", () => {
-  const bytes = Buffer.byteLength(SKILL, "utf8");
-  assert.ok(bytes < 11_515, `expected a smaller contract than the previous 11,515-byte Skill, got ${bytes}`);
-  const headings = [...SKILL.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
-  assert.deepEqual(headings, [
-    "Scope and handoffs",
-    "Evidence",
-    "History is not available",
-    "Signals stay distinct",
-    "Coverage and counts",
-    "Accepted plan and current state",
-    "Project scope",
-    "Shape of the answer",
-    "Read-only and Memory",
-  ]);
-});
-
-test("work-review no longer requires chronology, totals, a mandatory takeaway or a forced progress judgement", () => {
-  const shape = section("Shape of the answer");
-  assert.match(shape, /Add one next action only when a card's own evidence directly supports it; otherwise stop with the facts/i);
-  assert.doesNotMatch(SKILL, /end with one useful retrospective insight|must (?:include|give) (?:a )?(?:total|count|takeaway)/i);
-  assert.doesNotMatch(SKILL, /Lead with the current PM read/i);
-});
-
-test("work-review forbids ordering cards in time and names the measured ordering phrases", () => {
-  const history = section("History is not available");
-  assert.match(history, /never as «остання закрита», «перша завершена», «нещодавно закрита» or «свіжо завершена»/);
-  assert.match(history, /This includes ordering the cards against each other in time/i);
-});
-
-test("work-review has no Trello write tool name, no Calendar use and no numeric age threshold", () => {
-  assert.doesNotMatch(SKILL, /trelloWrite[A-Z]/);
-  assert.doesNotMatch(SKILL, /(older than|more than|over|>=?|≥)\s*\d+\s*(days?|дн|дні|днів|weeks?|тижн)/i);
-  assert.doesNotMatch(SKILL, /\brouter\b|\bparser\b|\bmiddleware\b|\btool loop\b/i);
-});
-
-test("existing Skills stay independent of work-review and work-review does not restate Project Health states", () => {
-  for (const name of ["daily-planning", "weekly-planning", "task-management", "studio-intake", "project-health"]) {
-    assert.doesNotMatch(readRepoFile(".claude", "skills", name, "SKILL.md"), /work-review/, `${name} must not depend on work-review`);
-  }
-  assert.doesNotMatch(SKILL, /Backlog is a queue|not automatically Blocked|Blocked may be justified/i);
-});
-
-test("work-review treats due as a valid current deadline field: no raw-ISO-only rule, no date middleware, no countdown", () => {
-  const signals = section("Signals stay distinct");
-  assert.match(signals, /`due` is a different kind of field: a current deadline, recorded on the card/i);
-  assert.match(signals, /may be shown in a correct human-readable form, and needs no raw ISO when the wording is exactly right/i);
-  assert.match(signals, /If you are unsure of a conversion or a weekday, quote the recorded ISO instead/i);
-  assert.match(signals, /Do not derive a countdown or lateness from it/i);
-  // The raw-ISO-only restriction is for lastActivityAt alone.
-  assert.doesNotMatch(signals, /\(or `due`\)|дедлайн у Trello: <ISO>/);
-  assert.doesNotMatch(SKILL, /middleware|deterministic date/i);
-});
-
-test("rubric R03 is limited to lastActivityAt and leaves due correctness to R04", () => {
-  const r03 = RUBRIC_DOC.slice(RUBRIC_DOC.indexOf("### R03 —"), RUBRIC_DOC.indexOf("### R04 —"));
-  assert.match(r03, /^### R03 — lastActivityAt converted into/);
-  assert.match(r03, /`due` \*\*не\*\* входить у R03/);
-  assert.match(r03, /не вимагає сирого ISO/);
-  assert.match(r03, /оцінюється в R04/);
-  assert.match(r03, /date-middleware тут не додано/);
-  assert.doesNotMatch(r03, /`lastActivityAt`, `due`/);
-  const r04 = RUBRIC_DOC.slice(RUBRIC_DOC.indexOf("### R04 —"), RUBRIC_DOC.indexOf("### R05 —"));
-  assert.match(r04, /`due`.{0,60}(?:зон|день тижня)/);
-  assert.match(WORK_REVIEW_RUBRIC.find((d) => d.id === "R03")!.title, /^lastActivityAt /);
-});
-
-test("rubric R06 covers Done/list, closed and dueComplete, and treats due independently under R04", () => {
-  const r06 = RUBRIC_DOC.slice(RUBRIC_DOC.indexOf("### R06 —"), RUBRIC_DOC.indexOf("### R07 —"));
-  assert.match(r06, /три сигнали стану завершення — поточний Done\/список, `closed`\/архів і `dueComplete`/);
-  assert.match(r06, /`due` — не сигнал стану завершення/);
-  assert.match(r06, /R04/);
-  assert.match(r06, /вигадана історія/);
-  assert.doesNotMatch(r06, /сигнали Done-список, `closed`, `dueComplete`, `due`/);
-});
-
-// ---- Rubric: doc and module stay in step; lint pre-screens measured failures ----
-
-test("rubric document defines every dimension with a matching severity and lists fixtures A to K", () => {
-  for (const d of WORK_REVIEW_RUBRIC) {
-    assert.match(RUBRIC_DOC, new RegExp(`### ${d.id} — .+ \\(${d.severity}\\)`), `docs/20 must define ${d.id} as ${d.severity}`);
-  }
-  for (const id of "ABCDEFGHIJK") assert.match(RUBRIC_DOC, new RegExp(`\\| ${id} \\|`), `docs/20 must list fixture ${id}`);
-  const minimum = ["R01", "R02", "R03", "R04", "R05", "R06", "R07", "R08", "R09", "R10", "R11", "R12"];
-  for (const id of minimum) assert.ok(WORK_REVIEW_RUBRIC.some((d) => d.id === id));
-});
-
-test("rubric is model-neutral: it names no winner and ranks no model", () => {
-  assert.doesNotMatch(RUBRIC_DOC, /winner is|переможець[:\s]+(Haiku|Sonnet)|кращий кандидат/i);
-  assert.match(RUBRIC_DOC, /ранжує моделі/);
-  assert.match(RUBRIC_DOC, /не доводять поведінку моделі/);
-});
-
-const MEASURED_FAILED_ANSWER = `Готово. Зараз у Done стоять три карти Extract:
-
-1. **Коментарі по пінкам** — зараз у Done, Trello записав активність 21 вересня о 07:09
-2. **Автоматизація рендеру** — зараз у Done, мала дедлайн 18 вересня
-3. **Білі аромати 3D відео** — зараз у Done, мала дедлайн 14 вересня
-4. **Кохаю пінка** — зараз у Done, мала дедлайн 14 вересня
-
-Щодо того, коли саме вони туди потрапили — Trello показує поточний стан, але не історію переходів, тож підтвердити «за цей тиждень» я не можу.
-
-У **This week** наразі 5 карт Extract, які ще не у Done:
-- Брендбук (дедлайн 25 вересня)
-
-На фоні — невеликий процес. Коментарі по пінкам було останньою замкненою задачею з Extract.`;
-
-test("lint pre-screen flags the measured failed Haiku answer on the mechanically visible dimensions", () => {
-  const flags = lintWorkReviewAnswer(MEASURED_FAILED_ANSWER);
-  const dims = new Set(flags.map((f) => f.dimension));
-  for (const d of ["R01", "R02", "R03", "R14"] as const) assert.ok(dims.has(d), `expected a ${d} flag`);
-  assert.ok(flags.some((f) => f.dimension === "R01" && /останньою замкненою/.test(f.match)));
-  assert.ok(flags.some((f) => f.dimension === "R03" && /07:09/.test(f.match)));
-  assert.ok(flags.some((f) => f.dimension === "R14" && /невеликий процес/.test(f.match)));
-  // The counting errors (R08) are not lintable; the rubric says so rather than pretending.
-  assert.equal(WORK_REVIEW_RUBRIC.find((d) => d.id === "R08")?.lintable, false);
-});
-
-test("lint pre-screen does not flag a contract-shaped answer, verbatim ISO, or the recommended coverage wording", () => {
-  const compliant = [
-    "Зараз у Done стоять «Коментарі по пінкам» і «Автоматизація рендеру». Коли саме вони туди потрапили, Trello не показує, тож «за тиждень» підтвердити не можу.",
-    "Серед прочитаних карток у This week лежить «Брендбук»; дедлайн у Trello: 2026-09-25T15:00:00Z.",
-    "Trello recorded activity at 2026-09-21T07:09:13.924Z; це лише слабка ознака активності, не доказ завершення.",
-    "У прийнятому плані була «Флакони 1.5 ML»; зараз у Trello вона в Done. Архівована картка лежить поза Done — сигнали різні.",
-  ];
-  for (const answer of compliant) assert.deepEqual(lintWorkReviewAnswer(answer), [], answer);
-});
-
-test("lint pre-screen catches derived weekday, relative and naturalized-time wording but is only a pre-screen", () => {
-  // Activity converted into relative/local time is R03 (and an event claim, R02).
-  const activity = lintWorkReviewAnswer("Trello записав активність у середу о 10:09, тобто 3 дні тому.");
-  assert.ok(activity.filter((f) => f.dimension === "R03").length >= 3, JSON.stringify(activity));
-  assert.ok(activity.some((f) => f.dimension === "R02"));
-  // A derived time attached to a completion verb is an R01 chronology claim.
-  assert.ok(lintWorkReviewAnswer("Картка завершена вчора.").some((f) => f.dimension === "R01"));
-  assert.ok(lintWorkReviewAnswer("Остання завершена картка — A.").some((f) => f.dimension === "R01"));
-  // An empty result never proves compliance: a fabricated non-lintable claim passes the lint.
-  assert.deepEqual(lintWorkReviewAnswer("Усього 7 задач у Done."), []);
-});
-
-test("lint never treats a human-readable due date as an R03 finding; due correctness is left to R04", () => {
-  const dueRenderings = [
-    "Брендбук — дедлайн 25 вересня.",
-    "Дедлайн у Брендбук: 25 вересня о 18:00 за київським часом.",
-    "Флакони 1.5 ML мають due у пʼятницю.",
-    "Автоматизація рендеру зараз у Done, дедлайн був 18 вересня.",
-    "Дедлайн завершеної картки — 14 вересня.",
-  ];
-  for (const answer of dueRenderings) assert.deepEqual(lintWorkReviewAnswer(answer), [], answer);
-  // Even a WRONG due rendering is not lintable (it needs the raw payload): it is graded under R04, not flagged as R03.
-  assert.deepEqual(lintWorkReviewAnswer("Дедлайн — у понеділок, 3 дні тому."), []);
-  assert.equal(WORK_REVIEW_RUBRIC.find((d) => d.id === "R04")?.lintable, false);
+  assert.equal(discovered.verdict, "PASS");
 });

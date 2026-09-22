@@ -24,6 +24,7 @@ import {
   type SpecialistCompositionMode,
   type SpecialistUnverifiedReason,
 } from "./turnCorrelation.js";
+import { executeTrelloWorkHistoryFromEnvironment, type CustomToolExecutionResult } from "./trelloWorkHistory.js";
 
 export { DjonikSpecialistUnverifiedError, DjonikTurnIncompleteError } from "./turnCorrelation.js";
 
@@ -341,6 +342,8 @@ export class DjonikSessionDeadError extends Error {}
 export type DjonikTraceEvent =
   | { type: "mcp_tool_use"; serverName: string; toolName: string; input: Record<string, unknown> }
   | { type: "mcp_tool_result"; serverName: string; toolName: string; isError: boolean }
+  /** Content-free #36 audit marker: the only supported client-side custom tool was requested/resolved. */
+  | { type: "custom_tool_result_sent"; toolName: "trello_work_history"; isError: boolean }
   | { type: "verification_nudge_sent"; attempt: number }
   | { type: "write_unverified_failure" }
   | { type: "due_date_reply_finalized"; verifiedDue: string; kyivDate: string; weekdayEn: string; mismatch: boolean }
@@ -709,6 +712,9 @@ type SendableContentBlock =
 
 type SendableEvent = { type: "user.message"; content: SendableContentBlock[] };
 
+/** Injected in local tests only; production uses the bounded environment-backed executor. */
+export type DjonikCustomToolExecutor = (input: unknown) => Promise<CustomToolExecutionResult>;
+
 /** How one submitted `user.message` ended (#32). Only `end_turn` is a completed turn. */
 type TurnEnd =
   | { completed: true; reply: string }
@@ -760,6 +766,7 @@ export async function connectToDjonik(
   onTrace?: (event: DjonikTraceEvent) => void,
   onTurnTelemetry?: (telemetry: DjonikTurnTelemetry) => void,
   turnSource: DjonikTurnSource = "unknown",
+  customToolExecutor: DjonikCustomToolExecutor = executeTrelloWorkHistoryFromEnvironment,
 ): Promise<DjonikSessionHandle> {
   const session = await client.beta.sessions.create({
     agent: agentId,
@@ -798,6 +805,8 @@ export async function connectToDjonik(
    * Scoped to one `send()` call — cleared at the start of each.
    */
   const mcpToolCallsById = new Map<string, { serverName: string; toolName: string; input: Record<string, unknown> }>();
+  /** Custom uses are keyed by the provider event id. Only ids named by requires_action may be answered. */
+  const customToolCallsById = new Map<string, { name: string; input: unknown }>();
   /** This turn's per-mutation Trello verification ledger (#31); replaced at the start of every turn. */
   let ledger = new TrelloMutationLedger();
   let turnTelemetry: DjonikTurnTelemetryCollector | null = null;
@@ -904,6 +913,11 @@ export async function connectToDjonik(
           }
           break;
         }
+        case "agent.custom_tool_use":
+          // `session_thread_id` can identify a cross-posted subagent event, but is informational.
+          // Result routing is exclusively by the observed blocking custom-tool event id below.
+          customToolCallsById.set(event.id, { name: event.name, input: event.input });
+          break;
         case "agent.tool_use":
           if (event.name === "read") {
             turnTelemetry?.recordBuiltInRead(event.input as Record<string, unknown>);
@@ -931,6 +945,33 @@ export async function connectToDjonik(
         case "session.status_idle": {
           // Idle is a pause, not a verdict: only `end_turn` completes the turn (#32).
           const stopKind = classifyStopReason(event.stop_reason);
+          if (stopKind === "requires_action") {
+            const blockingIds = event.stop_reason && "event_ids" in event.stop_reason ? event.stop_reason.event_ids : undefined;
+            // Existing non-custom action pauses (for example a server-side confirmation) remain
+            // incomplete exactly as #32 requires; this client must not guess how to settle them.
+            if (customToolCallsById.size === 0) return { completed: false, stopKind, partialReply: reply };
+            if (!Array.isArray(blockingIds) || blockingIds.length === 0 || new Set(blockingIds).size !== blockingIds.length) {
+              throw new Error("Djonik requested a malformed custom-tool action; the turn was not completed.");
+            }
+            const calls = blockingIds.map((id) => (typeof id === "string" ? customToolCallsById.get(id) : undefined));
+            if (calls.some((call) => !call || call.name !== "trello_work_history")) {
+              throw new Error("Djonik requested an unsupported custom tool; the turn was not completed.");
+            }
+            // Any text before a tool pause is provisional. It cannot become a visible answer if the
+            // post-tool continuation somehow reaches end_turn without a fresh final message.
+            reply = "";
+            const results = await Promise.all(calls.map((call) => customToolExecutor(call!.input)));
+            await client.beta.sessions.events.send(session.id, {
+              events: blockingIds.map((id, index) => ({
+                type: "user.custom_tool_result" as const,
+                custom_tool_use_id: id,
+                is_error: results[index].isError,
+                content: [{ type: "text" as const, text: results[index].content }],
+              })),
+            });
+            for (const result of results) onTrace?.({ type: "custom_tool_result_sent", toolName: "trello_work_history", isError: result.isError });
+            continue;
+          }
           if (stopKind !== "end_turn") return { completed: false, stopKind, partialReply: reply };
           // A turn with a verified specialist result is complete even if the coordinator produced
           // no message of its own (#28) — unless it attempted Trello writes, whose outcome then has
@@ -997,6 +1038,7 @@ export async function connectToDjonik(
     specialist.beginTurn();
     preAnchorEventsQuarantined = 0;
     mcpToolCallsById.clear();
+    customToolCallsById.clear();
     turnTelemetry = createTurnTelemetryCollector(turnSource, session.id, previousSessionUsage);
 
     // A grouped multi-attachment turn (#25) still records only the first

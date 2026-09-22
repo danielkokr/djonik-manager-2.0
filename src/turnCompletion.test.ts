@@ -8,6 +8,7 @@ import {
   DjonikTurnIncompleteError,
   DjonikUnverifiedMutationError,
   PROJECT_HEALTH_SPECIALIST_AGENT_ID,
+  type DjonikCustomToolExecutor,
   type DjonikSessionHandle,
   type DjonikTraceEvent,
   type DjonikTurnTelemetry,
@@ -147,7 +148,7 @@ const toolResult = (id: string, isError = false, card?: Record<string, unknown>)
 
 const S = "HEALTH ONLY";
 
-async function open(agent?: unknown, withIds = false) {
+async function open(agent?: unknown, withIds = false, customToolExecutor?: DjonikCustomToolExecutor) {
   const traces: DjonikTraceEvent[] = [];
   const telemetry: DjonikTurnTelemetry[] = [];
   const scripted = createScripted(agent, withIds);
@@ -160,6 +161,7 @@ async function open(agent?: unknown, withIds = false) {
     (event) => traces.push(event),
     (record) => telemetry.push(record),
     "telegram",
+    customToolExecutor,
   );
   return { ...scripted, session, traces, telemetry };
 }
@@ -232,6 +234,82 @@ test("#32 4: requires_action is an incomplete turn (this client resolves no bloc
   assert.ok(error instanceof DjonikTurnIncompleteError);
   assert.equal(error.stopKind, "requires_action");
   assert.equal(sendCalls.length, 1);
+  session.close();
+});
+
+// ---------------------------------------------------------------------------------------------
+// #36 custom tool continuation. The source client settles only the canonical, read-only tool;
+// it never resends the user's message or turns a requires_action pause into a visible reply.
+// ---------------------------------------------------------------------------------------------
+
+const customUse = (
+  id: string,
+  name = "trello_work_history",
+  input: Record<string, unknown> = {},
+  sessionThreadId?: string,
+): unknown => ({
+  type: "agent.custom_tool_use",
+  id,
+  name,
+  input,
+  ...(sessionThreadId === undefined ? {} : { session_thread_id: sessionThreadId }),
+});
+
+test("#36: a cross-posted custom use routes solely by its exact event id, then continues through end_turn", async () => {
+  const executor: DjonikCustomToolExecutor = async (input) => ({ isError: false, content: JSON.stringify({ digest: input }) });
+  const { session, push, sendCalls, traces } = await open(undefined, false, executor);
+  push(
+    customUse("custom_42", "trello_work_history", { window: { kind: "this_week" } }, "sthr_subagent_42"),
+    idleWith("requires_action", { event_ids: ["custom_42"] }),
+    msg("На дошці перейшла в Done одна картка."),
+    IDLE_OK,
+  );
+  assert.equal(await session.send("Що змінилось?"), "На дошці перейшла в Done одна картка.");
+  assert.equal(sendCalls.length, 2, "the user turn is not replayed");
+  const result = (sendCalls[1] as { events: Array<Record<string, unknown>> }).events[0]!;
+  assert.equal(result.type, "user.custom_tool_result");
+  assert.equal(result.custom_tool_use_id, "custom_42");
+  assert.ok(!Object.hasOwn(result, "session_thread_id"), "the informational source thread id is never echoed back");
+  assert.deepEqual(traces.filter((trace) => trace.type === "custom_tool_result_sent"), [
+    { type: "custom_tool_result_sent", toolName: "trello_work_history", isError: false },
+  ]);
+  session.close();
+});
+
+test("#36: pre-tool text cannot become a successful reply, and an unknown/mismatched custom action fails safely", async () => {
+  const first = await open(undefined, false, async () => ({ isError: false, content: "{}" }));
+  first.push(msg("PRE-TOOL TEXT"), customUse("custom_1"), idleWith("requires_action", { event_ids: ["custom_1"] }), IDLE_OK);
+  const noFinal = await rejection(first.session.send("Історія"));
+  assert.match(noFinal.message, /no text reply/i);
+  assert.equal(first.sendCalls.length, 2);
+  first.session.close();
+
+  const unknown = await open(undefined, false, async () => ({ isError: false, content: "{}" }));
+  unknown.push(customUse("custom_bad", "not_allowed"), idleWith("requires_action", { event_ids: ["custom_bad"] }));
+  assert.match((await rejection(unknown.session.send("Історія"))).message, /unsupported custom tool/i);
+  assert.equal(unknown.sendCalls.length, 1);
+  unknown.session.close();
+
+  const mismatched = await open(undefined, false, async () => ({ isError: false, content: "{}" }));
+  mismatched.push(customUse("custom_seen"), idleWith("requires_action", { event_ids: ["custom_missing"] }));
+  assert.match((await rejection(mismatched.session.send("Історія"))).message, /unsupported custom tool/i);
+  assert.equal(mismatched.sendCalls.length, 1);
+  mismatched.session.close();
+});
+
+test("#36: a history custom-tool result is not a Trello mutation and does not weaken verified-write accounting", async () => {
+  const { session, push } = await open(undefined, false, async () => ({ isError: false, content: "{}" }));
+  push(
+    toolUse("write_1", "trelloWriteCard", { action: "update", cardId: "card_A", title: "A" }),
+    toolResult("write_1", false, { id: "card_A", name: "A" }),
+    toolUse("read_1", "trelloReadCard", { action: "get", cardIdOrUrl: "card_A" }),
+    toolResult("read_1", false, { id: "card_A", name: "A" }),
+    customUse("custom_ledger"),
+    idleWith("requires_action", { event_ids: ["custom_ledger"] }),
+    msg("Підтверджено."),
+    IDLE_OK,
+  );
+  assert.equal(await session.send("Онови й покажи історію"), "Підтверджено.");
   session.close();
 });
 

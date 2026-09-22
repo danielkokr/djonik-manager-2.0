@@ -51,6 +51,10 @@ Only messages from `TELEGRAM_ALLOWED_USER_ID` reach Djonik; every Telegram text 
 
 A console-only client (no Telegram) remains available via `npm run dev`.
 
+## Trello work-history credentials
+
+The source-only `trello_work_history` custom tool reads Trello REST action history with `TRELLO_API_KEY` and `TRELLO_READ_TOKEN`. In production they belong in the Telegram process's runtime secret store, not a Managed Agent, Skill, repository, or URL. The token must have read-only scope and is currently rotated every 30 days. Missing or rejected credentials produce a safe “history is unavailable” tool result; the client never falls back to current-state inference. The tool uses GET requests only and sends the credentials in Trello's `Authorization` header.
+
 ## Working model
 
 - Daniel — Product Owner / strategist
