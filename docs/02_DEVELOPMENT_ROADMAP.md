@@ -51,7 +51,7 @@ Verified outcome:
 | 1 | [#31 — Trello mutation verification](https://github.com/danielkokr/djonik-manager-2.0/issues/31) | Governance handoff available; source fixes first |
 | 2 | [#32 — Turn completion and specialist results](https://github.com/danielkokr/djonik-manager-2.0/issues/32) | #31 source checks pass; correlate late/reused child results and preserve mixed answers |
 | ~~3~~ | ~~[#29 — Current-state review and ownership validation](https://github.com/danielkokr/djonik-manager-2.0/issues/29)~~ | **Superseded 2026-09-22** by the work-history spike ([docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)); not a v1 gate |
-| 3 | **NOW — [#36 — Weekly work review from Trello action history](https://github.com/danielkokr/djonik-manager-2.0/issues/36)** | Spike GO 2026-09-22 ([docs/23](23_WORK_HISTORY_SPIKE_REPORT.md)); source-first tool + digest + thin Skill; live gate separately authorized; v1 inclusion is a PO decision in docs/00 |
+| 3 | **NOW — [#36 — Weekly work review from Trello action history](https://github.com/danielkokr/djonik-manager-2.0/issues/36)** | Spike GO 2026-09-22 ([docs/23](23_WORK_HISTORY_SPIKE_REPORT.md)); source-first tool + digest + thin Skill; live gate separately authorized; **in v1** (PO decision 2026-09-22) and required before #35 |
 | 4 | [#33 — Pinned release and serving Telegram Session](https://github.com/danielkokr/djonik-manager-2.0/issues/33) | No longer waits for a #29 candidate; promotes the accepted v21 / PH v4 / four-Skill tuple. A future work-history tool is a separate later promotion |
 | 5 | [#34 — Conversational commitment/waiting/follow-up](https://github.com/danielkokr/djonik-manager-2.0/issues/34) | #33; extend accepted #13 and align deadline/waiting semantics; accepted plan items keep the Trello card ID/project when known (plan side of a later plan-vs-actual) |
 | 6 | [#35 — Daily-use v1 acceptance](https://github.com/danielkokr/djonik-manager-2.0/issues/35) | Required gates accepted; working-week pilot and PO accept/hold |
@@ -395,7 +395,7 @@ Measured live validation changed the implementation direction:
 
 ### NOW — Wave C2: Weekly work review from Trello action history (#36)
 
-Canonical bounded issue: [#36](https://github.com/danielkokr/djonik-manager-2.0/issues/36). Read-only custom tool `trello_work_history` + deterministic digest (Kyiv week window, one net transition per card, noise rule, coverage, Kyiv formatting) + thin `work-review` Skill v2 narrated by the Haiku coordinator. Source first; live gate under docs/04 §27 needs separate authorization; production promotion only via #33. Whether it is part of the v1 boundary is an open PO decision (docs/00). Evidence: [docs/23](23_WORK_HISTORY_SPIKE_REPORT.md).
+Canonical bounded issue: [#36](https://github.com/danielkokr/djonik-manager-2.0/issues/36). Read-only custom tool `trello_work_history` + deterministic digest (Kyiv week window, one net transition per card, noise rule, coverage, Kyiv formatting) + thin `work-review` Skill v2 narrated by the Haiku coordinator. Source first; live gate under docs/04 §27 needs separate authorization; production promotion only via #33. It is **part of v1** (Product Owner decision 2026-09-22, docs/00) and is a required gate for #35. Evidence: [docs/23](23_WORK_HISTORY_SPIKE_REPORT.md).
 
 ### DONE — Wave C2 spike: Trello work-history evidence (GO, 2026-09-22)
 
@@ -413,7 +413,7 @@ Bounded goal: **establish, with zero model inference and zero mutation, whether 
 1. read-only custom tool `trello_work_history` + deterministic digest (window, transitions, counts, coverage, Kyiv formatting) and client handling of custom tool calls consistent with #32;
 2. thin `work-review` Skill v2 over that tool, then one isolated Haiku diagnostic and the §27 five-plus-one gate.
 
-Boundaries: no Managed Agent/Skill/Memory change, no paid Session, no Trello mutation, no event store, webhooks, snapshot store or episodic journal in this spike. Adding a weekly transitions review to v1 needs a separate Product Owner decision in `docs/00` after GO.
+Boundaries: no Managed Agent/Skill/Memory change, no paid Session, no Trello mutation, no event store, webhooks, snapshot store or episodic journal in this spike. After GO the Product Owner added the weekly transitions review to v1 (2026-09-22).
 
 ### SUPERSEDED 2026-09-22 — Wave C2: Reliable current-state work review and capability ownership validation (#29)
 
