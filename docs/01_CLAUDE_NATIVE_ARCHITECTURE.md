@@ -260,7 +260,7 @@ The burden of proof is on adding infrastructure, not on keeping Djonik Claude-na
 
 ## 13. Managed Agents custom-tool continuation (runtime reliability, #40)
 
-Decision record: [docs/30](30_RUNTIME_EVENT_LOOP_AUDIT.md) (2026-09-22, decision **B — refactor the custom-tool continuation abstraction**). Implementing issue: [#40](https://github.com/danielkokr/djonik-manager-2.0/issues/40) — **not yet implemented**.
+Decision record: [docs/30](30_RUNTIME_EVENT_LOOP_AUDIT.md) (2026-09-22, decision **B — refactor the custom-tool continuation abstraction**). [#40](https://github.com/danielkokr/djonik-manager-2.0/issues/40) was **accepted 2026-09-22** at commit `e5b0df2d8eb520c139a2c6f41bc0b95e726cb352`; implementation evidence: [docs/31](31_ISSUE_40_IMPLEMENTATION_REPORT.md).
 
 The #36 live diagnostic (docs/29) showed the provider legitimately emitting two distinct `session.status_idle{requires_action}` events for the same unresolved `custom_tool_use_id` (while a parallel built-in Skill `read` ran). The client executed and submitted the custom tool once per idle event, i.e. twice.
 
