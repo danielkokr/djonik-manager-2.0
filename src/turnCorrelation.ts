@@ -200,7 +200,9 @@ export class SpecialistTurnProvenance {
   onThreadIdle(event: { agent_name?: string; session_thread_id?: string; stop_reason?: unknown }): void {
     if (!this.isCanonicalThread(event.agent_name, event.session_thread_id)) return;
     const thread = this.engaged.get(event.session_thread_id);
-    if (thread && classifyStopReason(event.stop_reason) !== "end_turn") thread.incomplete = true;
+    // Thread idle is a level-triggered status (#40, docs/30 §9): the LATEST one wins, so a child that
+    // paused (e.g. `requires_action`) and then reached `end_turn` is complete, and vice versa.
+    if (thread) thread.incomplete = classifyStopReason(event.stop_reason) !== "end_turn";
   }
 
   /**

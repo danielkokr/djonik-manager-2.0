@@ -487,3 +487,33 @@ test("non-Trello MCP tools and unrelated Trello tools are ignored by the ledger"
     .result("t", card({ id: "A" }));
   assert.deepEqual(s.ledger.outcomes(), []);
 });
+
+test("#40: a replay of an already-recorded tool-use id after its result preserves the correlated outcome", () => {
+  // Verified write, then the same write event is replayed: still verified, never reset to no_result.
+  const verified = new Script()
+    .write("w", { action: "update", cardId: "A", name: "New" }, card({ id: "A", name: "New" }))
+    .read("r", "A", card({ id: "A", name: "New" }))
+    .use("w", "trelloWriteCard", { action: "update", cardId: "A", name: "New" });
+  assert.deepEqual(verified.statuses(), ["verified"]);
+
+  // A replayed READ keeps its original ordering after the write, so it still verifies it.
+  const replayedRead = new Script()
+    .write("w", { action: "update", cardId: "A", name: "New" }, card({ id: "A", name: "New" }))
+    .read("r", "A", card({ id: "A", name: "New" }))
+    .use("r", "trelloReadCard", { action: "get", cardIdOrUrl: "A" });
+  assert.deepEqual(replayedRead.statuses(), ["verified"]);
+
+  // A failed write replayed stays failed with its bounded error, never unresolved.
+  const failed = new Script()
+    .write("w", { action: "update", cardId: "A", name: "New" }, [{ type: "text", text: "Trello said no" }], true)
+    .use("w", "trelloWriteCard", { action: "update", cardId: "A", name: "New" });
+  assert.equal(failed.outcome().status, "failed");
+  assert.equal(failed.outcome().errorText, "Trello said no");
+
+  // A replay whose result is replayed too does not duplicate or overwrite anything.
+  const doubled = new Script()
+    .write("w", { action: "update", cardId: "A", name: "New" }, card({ id: "A", name: "New" }))
+    .write("w", { action: "update", cardId: "A", name: "Other" }, card({ id: "A", name: "Other" }))
+    .read("r", "A", card({ id: "A", name: "New" }));
+  assert.deepEqual(doubled.statuses(), ["verified"], "one write, first observation kept");
+});

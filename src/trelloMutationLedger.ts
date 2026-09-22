@@ -340,9 +340,11 @@ export class TrelloMutationLedger {
   private readonly calls = new Map<string, RecordedCall>();
 
   /** Records a Trello MCP tool call. Non-Trello calls and Trello tools that are neither the card
-   *  write nor a read are ignored. */
+   *  write nor a read are ignored. A replay of an already-recorded tool-use id (same provider event)
+   *  is ignored too (#40): it must never reset that call's ordering, correlated result or outcome. */
   recordToolUse(call: { id: string; serverName: string; toolName: string; input: Record<string, unknown> }): void {
     if (!isTrelloWriteTool(call.serverName, call.toolName) && !isTrelloReadTool(call.serverName, call.toolName)) return;
+    if (this.calls.has(call.id)) return;
     this.seq += 1;
     this.calls.set(call.id, { id: call.id, toolName: call.toolName, input: call.input ?? {}, useSeq: this.seq });
   }

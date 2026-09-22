@@ -249,3 +249,21 @@ test("DjonikSpecialistUnverifiedError: deterministic, names the reason, keeps co
     /Стан Trello-змін цього ходу[^]*✅ Підтверджено читанням картки: A/,
   );
 });
+
+test("SpecialistTurnProvenance (#40): the latest thread idle wins — requires_action then end_turn is complete, and vice versa", () => {
+  const resumed = new SpecialistTurnProvenance(NAME);
+  resumed.beginTurn();
+  resumed.onThreadCreated(created(), true);
+  resumed.onThreadIdle(idle("requires_action"));
+  resumed.onThreadMessageReceived(received("FINAL"));
+  resumed.onThreadIdle(idle("end_turn"));
+  assert.deepEqual(resumed.verdict(), { status: "verified", text: "FINAL" });
+
+  const stoppedLater = new SpecialistTurnProvenance(NAME);
+  stoppedLater.beginTurn();
+  stoppedLater.onThreadCreated(created(), true);
+  stoppedLater.onThreadMessageReceived(received("WORKING..."));
+  stoppedLater.onThreadIdle(idle("end_turn"));
+  stoppedLater.onThreadIdle(idle("budget_reached"));
+  assert.deepEqual(stoppedLater.verdict(), { status: "unverified", reason: "child_not_completed" });
+});

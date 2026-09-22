@@ -25,6 +25,11 @@ import {
   type SpecialistUnverifiedReason,
 } from "./turnCorrelation.js";
 import { executeTrelloWorkHistoryFromEnvironment, type CustomToolExecutionResult } from "./trelloWorkHistory.js";
+import { CustomToolResolution } from "./customToolResolution.js";
+
+/** The only custom tool this client settles (#36): read-only, so no side-effect idempotency key is
+ *  needed beyond the #40 per-id lifecycle (docs/01 §13 admission rule). */
+const WORK_HISTORY_TOOL = "trello_work_history";
 
 export { DjonikSpecialistUnverifiedError, DjonikTurnIncompleteError } from "./turnCorrelation.js";
 
@@ -869,33 +874,38 @@ export async function connectToDjonik(
    * Scoped to one `send()` call — cleared at the start of each.
    */
   const mcpToolCallsById = new Map<string, { serverName: string; toolName: string; input: Record<string, unknown> }>();
-  /** Custom uses are keyed by the provider event id. Only ids named by requires_action may be answered. */
-  const customToolCallsById = new Map<string, { name: string; input: unknown }>();
+  /** Session-scoped custom-tool lifecycle keyed by `custom_tool_use_id` (#40, docs/30): lives as long as
+   *  the Managed Session, never reset per turn, so a re-emitted `requires_action` can never execute an
+   *  id twice — not within a turn, not across a verification-nudge rerun, not in a later turn. */
+  const customTools = new CustomToolResolution([WORK_HISTORY_TOOL]);
+  /** Distinct `custom_tool_use_id`s observed during the CURRENT visible turn (across a possible
+   *  verification-nudge rerun of `runTurn`), in first-seen order. Reset once per visible turn in
+   *  `sendPartsSerial`, never inside `runTurn`, so a nudge rerun cannot lose an earlier call — and never
+   *  carried across turns, so a later turn cannot receive an earlier turn's `answer_text` (#36 H8/H13). */
+  let turnCustomToolUseIds: string[] = [];
   /** This turn's per-mutation Trello verification ledger (#31); replaced at the start of every turn. */
   let ledger = new TrelloMutationLedger();
-  /** Every `trello_work_history` result resolved during the CURRENT visible turn, across a possible
-   *  post-mutation verification-nudge rerun of `runTurn` (#36). Reset once per visible turn in
-   *  `sendPartsSerial`, never inside `runTurn`, so a nudge rerun cannot lose an earlier result — and
-   *  never carried across turns, so a later turn cannot receive an earlier turn's `answer_text` (H8/H13). */
-  let workHistoryResults: string[] = [];
-  /** True when this visible turn resolved at least one `trello_work_history` call that did NOT yield a
-   *  usable result (tool error, or unparsable/empty `answer_text`) — tracked so an unusable result
-   *  beside a separate successful one still makes the turn ambiguous rather than silently relaying the
-   *  good one. */
-  let workHistoryHadUnusableResult = false;
 
   type WorkHistoryVerdict = { status: "none" } | { status: "verified"; answerText: string } | { status: "unverified" };
 
-  /** Trusts an exact relay only for the single unambiguous case: exactly one `trello_work_history`
-   *  call resolved this turn, and it yielded a usable `answer_text`, with no other call/failure this
-   *  turn (#36 §A6). Every other shape — no call, several calls, any error/malformed result mixed in —
-   *  is `unverified`: never guessed between, same as the untouched fallback (the coordinator's own
-   *  reply is used exactly as before). */
+  /** Trusts an exact relay only for the single unambiguous case (#36 §A6, per id since #40): exactly one
+   *  distinct `trello_work_history` custom_tool_use_id this turn, whose one cached lifecycle result was
+   *  accepted by the provider (SUBMITTED/RESOLVED), is not an error, and yields a usable `answer_text`.
+   *  Repeated idles or send attempts for that id are still one call. Every other shape — several distinct
+   *  ids (even byte-identical), an error or malformed result, a result never accepted — is `unverified`:
+   *  never guessed between, and the coordinator's own reply is used exactly as before. */
   function workHistoryVerdict(): WorkHistoryVerdict {
-    if (workHistoryHadUnusableResult) return { status: "unverified" };
-    if (workHistoryResults.length === 0) return { status: "none" };
-    if (workHistoryResults.length === 1) return { status: "verified", answerText: workHistoryResults[0] };
-    return { status: "unverified" };
+    const ids = turnCustomToolUseIds.filter((id) => customTools.name(id) === WORK_HISTORY_TOOL);
+    if (ids.length === 0) return { status: "none" };
+    if (ids.length > 1) return { status: "unverified" };
+    const [id] = ids;
+    const state = customTools.state(id);
+    const result = customTools.result(id);
+    if (result === undefined || result.isError || (state !== "SUBMITTED" && state !== "RESOLVED")) {
+      return { status: "unverified" };
+    }
+    const answerText = extractWorkHistoryAnswerText(result.content);
+    return answerText === null ? { status: "unverified" } : { status: "verified", answerText };
   }
   let turnTelemetry: DjonikTurnTelemetryCollector | null = null;
   /** Session usage events are cumulative; this is the completed-turn baseline. */
@@ -933,6 +943,12 @@ export async function connectToDjonik(
           }
           anchored = true;
         }
+        continue;
+      }
+      if (event.type === "user.custom_tool_result") {
+        // The provider persisted a result for this id: authoritative RESOLVED (#40). A Session-level
+        // fact, so it is recorded even before this turn's anchor; it never affects the reply.
+        customTools.observeResultEcho(event.custom_tool_use_id);
         continue;
       }
       if (!anchored && !PRE_ANCHOR_PASSTHROUGH.has(event.type)) {
@@ -1003,8 +1019,9 @@ export async function connectToDjonik(
         }
         case "agent.custom_tool_use":
           // `session_thread_id` can identify a cross-posted subagent event, but is informational.
-          // Result routing is exclusively by the observed blocking custom-tool event id below.
-          customToolCallsById.set(event.id, { name: event.name, input: event.input });
+          // Result routing is exclusively by the observed blocking custom-tool event id (#40 lifecycle).
+          customTools.observeUse({ id: event.id, name: event.name, input: event.input });
+          if (!turnCustomToolUseIds.includes(event.id)) turnCustomToolUseIds.push(event.id);
           break;
         case "agent.tool_use":
           if (event.name === "read") {
@@ -1037,39 +1054,24 @@ export async function connectToDjonik(
             const blockingIds = event.stop_reason && "event_ids" in event.stop_reason ? event.stop_reason.event_ids : undefined;
             // Existing non-custom action pauses (for example a server-side confirmation) remain
             // incomplete exactly as #32 requires; this client must not guess how to settle them.
-            if (customToolCallsById.size === 0) return { completed: false, stopKind, partialReply: reply };
-            if (!Array.isArray(blockingIds) || blockingIds.length === 0 || new Set(blockingIds).size !== blockingIds.length) {
-              throw new Error("Djonik requested a malformed custom-tool action; the turn was not completed.");
+            const namesKnownCustomTool =
+              Array.isArray(blockingIds) && blockingIds.some((id) => typeof id === "string" && customTools.has(id));
+            if (turnCustomToolUseIds.length === 0 && !namesKnownCustomTool) {
+              return { completed: false, stopKind, partialReply: reply };
             }
-            const calls = blockingIds.map((id) => (typeof id === "string" ? customToolCallsById.get(id) : undefined));
-            if (calls.some((call) => !call || call.name !== "trello_work_history")) {
-              throw new Error("Djonik requested an unsupported custom tool; the turn was not completed.");
-            }
+            // #40: this idle is a STATUS over the Session-scoped lifecycle, not an execution command.
+            // Only OBSERVED ids execute (once); ids already executing/submitted are no-ops; a cached
+            // result is (re)submitted only when it was never accepted. Anything else fails closed.
+            const resolution = await customTools.resolveBlocking(blockingIds, customToolExecutor, (results) =>
+              client.beta.sessions.events.send(session.id, { events: results }),
+            );
             // Any text before a tool pause is provisional. It cannot become a visible answer if the
-            // post-tool continuation somehow reaches end_turn without a fresh final message.
-            reply = "";
-            const results = await Promise.all(calls.map((call) => customToolExecutor(call!.input)));
-            for (const result of results) {
-              if (result.isError) {
-                workHistoryHadUnusableResult = true;
-                continue;
-              }
-              const answerText = extractWorkHistoryAnswerText(result.content);
-              if (answerText === null) {
-                workHistoryHadUnusableResult = true;
-                continue;
-              }
-              workHistoryResults.push(answerText);
+            // post-tool continuation somehow reaches end_turn without a fresh final message. Reset only
+            // on a real new execution: a re-emitted status for an already-running call changes nothing.
+            if (resolution.executed.length > 0) reply = "";
+            for (const sent of resolution.submitted) {
+              onTrace?.({ type: "custom_tool_result_sent", toolName: WORK_HISTORY_TOOL, isError: sent.isError });
             }
-            await client.beta.sessions.events.send(session.id, {
-              events: blockingIds.map((id, index) => ({
-                type: "user.custom_tool_result" as const,
-                custom_tool_use_id: id,
-                is_error: results[index].isError,
-                content: [{ type: "text" as const, text: results[index].content }],
-              })),
-            });
-            for (const result of results) onTrace?.({ type: "custom_tool_result_sent", toolName: "trello_work_history", isError: result.isError });
             continue;
           }
           if (stopKind !== "end_turn") return { completed: false, stopKind, partialReply: reply };
@@ -1144,11 +1146,9 @@ export async function connectToDjonik(
   async function sendPartsSerial(parts: DjonikTurnPart[]): Promise<string> {
     ledger = new TrelloMutationLedger();
     specialist.beginTurn();
-    workHistoryResults = [];
-    workHistoryHadUnusableResult = false;
+    turnCustomToolUseIds = [];
     preAnchorEventsQuarantined = 0;
     mcpToolCallsById.clear();
-    customToolCallsById.clear();
     turnTelemetry = createTurnTelemetryCollector(turnSource, session.id, previousSessionUsage);
 
     // A grouped multi-attachment turn (#25) still records only the first

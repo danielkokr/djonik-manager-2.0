@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type Anthropic from "@anthropic-ai/sdk";
+import { APIConnectionError, BadRequestError, InternalServerError } from "@anthropic-ai/sdk";
 import {
   connectToDjonik,
   DjonikSessionDeadError,
@@ -13,6 +14,7 @@ import {
   type DjonikTraceEvent,
   type DjonikTurnTelemetry,
 } from "./djonikClient.js";
+import { EXECUTOR_EXCEPTION_CONTENT } from "./customToolResolution.js";
 
 // ---------------------------------------------------------------------------------------------
 // Issue #32: turn completion, event correlation and specialist-result preservation.
@@ -1096,5 +1098,339 @@ test("#36 relay 14: an unrecognised custom tool can never reach a completed turn
   const { session, push } = await open(undefined, false, historyExecutor("SHOULD_NEVER_APPEAR"));
   push(customUse("bad", "not_allowed"), idleWith("requires_action", { event_ids: ["bad"] }));
   await assert.rejects(session.send("Що по Extract?"), /unsupported custom tool/i);
+  session.close();
+});
+
+// ---------------------------------------------------------------------------------------------
+// #40 idempotent custom-tool continuation by event id (docs/30). `session.status_idle{requires_action}`
+// is a level-triggered STATUS the provider may re-emit while a blocking id is unresolved; it is never
+// permission to execute the same `custom_tool_use_id` again. Every fixture asserts the executor
+// invocation count equals the number of DISTINCT custom_tool_use_ids expected to execute.
+// ---------------------------------------------------------------------------------------------
+
+const running = (): unknown => ({ type: "session.status_running" });
+const requiresAction = (idleId: string, ...ids: string[]): unknown => ({
+  type: "session.status_idle",
+  id: idleId,
+  stop_reason: { type: "requires_action", event_ids: ids },
+});
+/** The provider's authoritative echo of a persisted `user.custom_tool_result` on the stream. */
+const customResultEcho = (customToolUseId: string, isError = false): unknown => ({
+  type: "user.custom_tool_result",
+  id: `echo_${customToolUseId}`,
+  custom_tool_use_id: customToolUseId,
+  is_error: isError,
+  content: [{ type: "text", text: "(echoed)" }],
+});
+
+/** Wraps an executor and records every invocation (the input it ran with). */
+function countingExecutor(inner: DjonikCustomToolExecutor): { executor: DjonikCustomToolExecutor; calls: unknown[] } {
+  const calls: unknown[] = [];
+  return {
+    calls,
+    executor: async (input) => {
+      calls.push(input);
+      return inner(input);
+    },
+  };
+}
+
+type SentCustomResult = { type: string; custom_tool_use_id: string; is_error: boolean; content: Array<{ type: string; text: string }> };
+
+/** Every `user.custom_tool_result` the client submitted, in submission order (one entry per event). */
+function sentCustomResults(sendCalls: unknown[]): SentCustomResult[] {
+  return sendCalls
+    .flatMap((call) => (call as { events: Array<Record<string, unknown>> }).events)
+    .filter((event) => event.type === "user.custom_tool_result") as unknown as SentCustomResult[];
+}
+
+const DOCS29_INPUT = { response_format: "concise", scope: { kind: "project", label: "Extract" }, window: { kind: "last_week" } };
+
+test("#40 1 (docs/29 exact reproduction): a re-emitted requires_action for the SAME id never re-executes or re-submits", async () => {
+  const history = countingExecutor(historyExecutor("ANSWER_TEXT"));
+  const { session, push, sendCalls, traces } = await open(undefined, true, history.executor);
+  push(
+    userEcho(1),
+    customUse("sevt_A", "trello_work_history", DOCS29_INPUT),
+    requiresAction("sevt_idle_1", "sevt_A"),
+    running(),
+    requiresAction("sevt_idle_2", "sevt_A"), // a DIFFERENT idle event naming the same unresolved id
+    customResultEcho("sevt_A"),
+    running(),
+    msg("Дві картки повернулись з Done — варто перевірити."),
+    IDLE_OK,
+  );
+  const reply = await session.send("А минулого тижня по Extract? Теж коротко.");
+
+  assert.equal(history.calls.length, 1, "executor invocation count === distinct custom_tool_use_ids (1)");
+  assert.deepEqual(history.calls[0], DOCS29_INPUT);
+  const results = sentCustomResults(sendCalls);
+  assert.equal(results.length, 1, "exactly one result submission for sevt_A");
+  assert.equal(results[0].custom_tool_use_id, "sevt_A");
+  assert.equal(reply, `ANSWER_TEXT${PM_SEPARATOR}Дві картки повернулись з Done — варто перевірити.`, "#36 relay composes");
+  assert.deepEqual(traces.filter((t) => t.type === "custom_tool_result_sent"), [
+    { type: "custom_tool_result_sent", toolName: "trello_work_history", isError: false },
+  ], "no duplicate custom-tool provenance");
+  assert.deepEqual(traces.filter((t) => t.type === "work_history_relay_composed"), [
+    { type: "work_history_relay_composed", mode: "with_commentary" },
+  ]);
+  assert.equal(traces.filter((t) => t.type === "work_history_relay_skipped").length, 0);
+  session.close();
+});
+
+test("#40 2: a duplicate requires_action that arrives while the executor is still running never starts a second execution", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let pushLate: (...events: unknown[]) => void = () => {};
+  const calls: unknown[] = [];
+  const executor: DjonikCustomToolExecutor = async (input) => {
+    calls.push(input);
+    // The provider re-emits the status while the tool is still executing (before any result exists).
+    pushLate(requiresAction("sevt_idle_2", "A"));
+    await gate;
+    return { isError: false, content: JSON.stringify({ answer_text: "ANSWER_TEXT" }) };
+  };
+  const { session, push, sendCalls, traces } = await open(undefined, false, executor);
+  pushLate = push;
+  push(customUse("A"), requiresAction("sevt_idle_1", "A"));
+  const reply = session.send("Що по Extract?");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.length, 1, "executor is running");
+  release();
+  push(customResultEcho("A"), msg("Коментар."), IDLE_OK);
+
+  assert.equal(await reply, `ANSWER_TEXT${PM_SEPARATOR}Коментар.`);
+  assert.equal(calls.length, 1, "executor invocation count === distinct custom_tool_use_ids (1)");
+  assert.equal(sentCustomResults(sendCalls).length, 1);
+  assert.equal(traces.filter((t) => t.type === "custom_tool_result_sent").length, 1);
+  session.close();
+});
+
+test("#40 3: a requires_action naming an already-RESOLVED id is a visible inconsistency — no re-execute, no resend", async () => {
+  const history = countingExecutor(historyExecutor("ANSWER_TEXT"));
+  const { session, push, sendCalls } = await open(undefined, false, history.executor);
+  push(customUse("A"), requiresAction("sevt_idle_1", "A"), customResultEcho("A"), running(), requiresAction("sevt_idle_2", "A"));
+  const error = await rejection(session.send("Що по Extract?"));
+  assert.match(error.message, /already resolved/i);
+  assert.match(error.message, /Nothing was re-executed or resent/);
+  assert.ok(!/sevt_/.test(error.message), "no raw provider ids in the visible message");
+  assert.equal(history.calls.length, 1, "executor invocation count === distinct custom_tool_use_ids (1)");
+  assert.equal(sentCustomResults(sendCalls).length, 1, "no resend");
+  session.close();
+});
+
+/** Intercepts custom-tool result submissions: records every attempt's exact events, and throws the
+ *  next scripted error (if any) instead of delivering. Delivered submissions still reach `sendCalls`. */
+function interceptResultSends(client: Anthropic, errors: unknown[]): unknown[][] {
+  const attempts: unknown[][] = [];
+  type Send = (id: string, params: { events: Array<{ type: string }> }) => Promise<unknown>;
+  const events = (client as unknown as { beta: { sessions: { events: { send: Send } } } }).beta.sessions.events;
+  const deliver = events.send;
+  events.send = async (id, params) => {
+    if (params.events.some((event) => event.type === "user.custom_tool_result")) {
+      attempts.push(JSON.parse(JSON.stringify(params.events)) as unknown[]);
+      const error = errors.shift();
+      if (error !== undefined) throw error;
+    }
+    return deliver(id, params);
+  };
+  return attempts;
+}
+
+test("#40 4: an unknown/transient result-send failure resends the SAME cached bytes once; the executor never reruns", async () => {
+  const history = countingExecutor(historyExecutor("ANSWER_TEXT"));
+  const { client, session, push, sendCalls, traces } = await open(undefined, false, history.executor);
+  const attempts = interceptResultSends(client, [new APIConnectionError({ message: "socket hang up" })]);
+  push(customUse("A"), requiresAction("sevt_idle_1", "A"), customResultEcho("A"), msg("Коментар."), IDLE_OK);
+
+  assert.equal(await session.send("Що по Extract?"), `ANSWER_TEXT${PM_SEPARATOR}Коментар.`, "relay still verified");
+  assert.equal(history.calls.length, 1, "executor invocation count === distinct custom_tool_use_ids (1)");
+  assert.equal(attempts.length, 2, "one failed attempt + one resend");
+  assert.equal(JSON.stringify(attempts[1]), JSON.stringify(attempts[0]), "the resend carries byte-identical cached events");
+  assert.equal((attempts[0][0] as SentCustomResult).content[0].text, JSON.stringify({ answer_text: "ANSWER_TEXT" }));
+  assert.equal(sentCustomResults(sendCalls).length, 1, "delivered once");
+  assert.equal(traces.filter((t) => t.type === "custom_tool_result_sent").length, 1);
+  session.close();
+});
+
+test("#40 4b: a result send whose outcome stays unknown after the one resend fails visibly — bounded, no re-execution", async () => {
+  const history = countingExecutor(historyExecutor("ANSWER_TEXT"));
+  const { client, session, push, sendCalls } = await open(undefined, false, history.executor);
+  const attempts = interceptResultSends(client, [
+    new APIConnectionError({ message: "socket hang up" }),
+    new InternalServerError(500, undefined, "upstream failure", new Headers()),
+  ]);
+  push(customUse("A"), requiresAction("sevt_idle_1", "A"));
+  const error = await rejection(session.send("Що по Extract?"));
+  assert.match(error.message, /could not confirm delivery/i);
+  assert.equal(history.calls.length, 1, "executor invocation count === distinct custom_tool_use_ids (1)");
+  assert.equal(attempts.length, 2, "no retry loop beyond the one resend");
+  assert.equal(JSON.stringify(attempts[1]), JSON.stringify(attempts[0]));
+  assert.equal(sentCustomResults(sendCalls).length, 0);
+  session.close();
+});
+
+test("#40 5: a permanent 4xx rejection of the result fails visibly with no retry loop and no re-execution", async () => {
+  const history = countingExecutor(historyExecutor("ANSWER_TEXT"));
+  const { client, session, push, sendCalls } = await open(undefined, false, history.executor);
+  const attempts = interceptResultSends(client, [
+    new BadRequestError(400, { type: "error", error: { type: "invalid_request_error", message: "bad" } }, "bad", new Headers()),
+  ]);
+  push(customUse("A"), requiresAction("sevt_idle_1", "A"));
+  const error = await rejection(session.send("Що по Extract?"));
+  assert.match(error.message, /rejected the custom-tool result/);
+  assert.equal(history.calls.length, 1, "executor invocation count === distinct custom_tool_use_ids (1)");
+  assert.equal(attempts.length, 1, "no retry");
+  assert.equal(sentCustomResults(sendCalls).length, 0);
+  session.close();
+});
+
+test("#40 6: an executor that throws yields exactly one cached is_error result, the Session is unblocked, relay skipped", async () => {
+  const thrower = countingExecutor(async () => {
+    throw new Error("boom: secret internals");
+  });
+  const { session, push, sendCalls, traces } = await open(undefined, false, thrower.executor);
+  push(
+    customUse("A"),
+    requiresAction("sevt_idle_1", "A"),
+    running(),
+    requiresAction("sevt_idle_2", "A"),
+    customResultEcho("A", true),
+    msg("Історія Trello зараз недоступна."),
+    IDLE_OK,
+  );
+
+  assert.equal(await session.send("Що по Extract?"), "Історія Trello зараз недоступна.");
+  assert.equal(thrower.calls.length, 1, "executor invocation count === distinct custom_tool_use_ids (1)");
+  const results = sentCustomResults(sendCalls);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].is_error, true);
+  assert.equal(results[0].content[0].text, EXECUTOR_EXCEPTION_CONTENT);
+  assert.ok(!results[0].content[0].text.includes("secret internals"));
+  assert.deepEqual(traces.filter((t) => t.type === "custom_tool_result_sent"), [
+    { type: "custom_tool_result_sent", toolName: "trello_work_history", isError: true },
+  ]);
+  assert.deepEqual(traces.filter((t) => t.type === "work_history_relay_skipped"), [{ type: "work_history_relay_skipped" }]);
+  session.close();
+});
+
+test("#40 7: two DIFFERENT custom_tool_use_ids with byte-identical input stay two calls — two executions, ambiguous relay", async () => {
+  for (const shape of ["one idle [A,B]", "sequential idles"] as const) {
+    const history = countingExecutor(historyExecutor("ANSWER_TEXT"));
+    const { session, push, sendCalls, traces } = await open(undefined, false, history.executor);
+    if (shape === "one idle [A,B]") {
+      push(
+        customUse("A", "trello_work_history", DOCS29_INPUT),
+        customUse("B", "trello_work_history", DOCS29_INPUT),
+        requiresAction("i1", "A", "B"),
+      );
+    } else {
+      push(
+        customUse("A", "trello_work_history", DOCS29_INPUT),
+        requiresAction("i1", "A"),
+        customUse("B", "trello_work_history", DOCS29_INPUT),
+        requiresAction("i2", "B"),
+      );
+    }
+    push(customResultEcho("A"), customResultEcho("B"), msg("Коментар координатора."), IDLE_OK);
+
+    assert.equal(await session.send("Що по Extract?"), "Коментар координатора.", shape);
+    assert.equal(history.calls.length, 2, `${shape}: executor invocation count === distinct custom_tool_use_ids (2)`);
+    assert.deepEqual(sentCustomResults(sendCalls).map((r) => r.custom_tool_use_id), ["A", "B"], shape);
+    assert.deepEqual(traces.filter((t) => t.type === "work_history_relay_skipped"), [{ type: "work_history_relay_skipped" }], shape);
+    assert.equal(traces.filter((t) => t.type === "work_history_relay_composed").length, 0, shape);
+    session.close();
+  }
+});
+
+test("#40 8: a partial blocking list and its re-emitted remainder execute each distinct id exactly once", async () => {
+  const echoInput: DjonikCustomToolExecutor = async (input) => ({
+    isError: false,
+    content: JSON.stringify({ answer_text: `R:${JSON.stringify(input)}` }),
+  });
+
+  // (a) [A,B] resolved together, then the remainder [B] is re-emitted before B's echo: a no-op.
+  const both = countingExecutor(echoInput);
+  const a = await open(undefined, false, both.executor);
+  a.push(customUse("A", "trello_work_history", { n: 1 }), customUse("B", "trello_work_history", { n: 2 }), requiresAction("i1", "A", "B"));
+  a.push(customResultEcho("A"), requiresAction("i2", "B"), customResultEcho("B"), msg("OK"), IDLE_OK);
+  assert.equal(await a.session.send("x"), "OK", "two distinct ids: ambiguous, coordinator reply unchanged");
+  assert.deepEqual(both.calls, [{ n: 1 }, { n: 2 }], "executor invocation count === distinct custom_tool_use_ids (2), one per id");
+  assert.deepEqual(sentCustomResults(a.sendCalls).map((r) => r.custom_tool_use_id), ["A", "B"]);
+  a.session.close();
+
+  // (b) the provider names only A first, then [A,B]: A is not re-run; only B executes and is submitted.
+  const later = countingExecutor(echoInput);
+  const b = await open(undefined, false, later.executor);
+  b.push(customUse("A", "trello_work_history", { n: 1 }), customUse("B", "trello_work_history", { n: 2 }), requiresAction("i1", "A"));
+  b.push(requiresAction("i2", "A", "B"), customResultEcho("A"), customResultEcho("B"), msg("OK"), IDLE_OK);
+  assert.equal(await b.session.send("x"), "OK");
+  assert.deepEqual(later.calls, [{ n: 1 }, { n: 2 }], "executor invocation count === distinct custom_tool_use_ids (2)");
+  assert.deepEqual(
+    b.sendCalls.slice(1).map((call) => (call as { events: SentCustomResult[] }).events.map((event) => event.custom_tool_use_id)),
+    [["A"], ["B"]],
+    "each result submitted once, in its own resolution step",
+  );
+  b.session.close();
+});
+
+test("#40 9: a repeated requires_action across a verification-nudge rerun or a turn boundary never re-executes", async () => {
+  // (a) Nudge boundary (no echo anchoring): the re-emitted status inside the nudge rerun is a no-op,
+  // and the one history call still relays once the write is verified.
+  const nudge = countingExecutor(historyExecutor("ANSWER_TEXT"));
+  const n = await open(undefined, false, nudge.executor);
+  n.push(
+    customUse("A"),
+    requiresAction("i1", "A"),
+    toolUse("write_1", "trelloWriteCard", { action: "update", cardId: "card_A", title: "A" }),
+    toolResult("write_1", false, { id: "card_A", name: "A" }),
+    msg("Готово."),
+    IDLE_OK,
+    // --- the verification-nudge rerun ---
+    requiresAction("i2", "A"),
+    toolUse("read_1", "trelloReadCard", { action: "get", cardIdOrUrl: "card_A" }),
+    toolResult("read_1", false, { id: "card_A", name: "A" }),
+    msg("Підтверджено."),
+    IDLE_OK,
+  );
+  assert.equal(await n.session.send("Онови й покажи історію"), `ANSWER_TEXT${PM_SEPARATOR}Підтверджено.`);
+  assert.equal(nudge.calls.length, 1, "executor invocation count === distinct custom_tool_use_ids (1)");
+  assert.equal(sentCustomResults(n.sendCalls).length, 1);
+  assert.equal(n.traces.filter((t) => t.type === "verification_nudge_sent").length, 1);
+  n.session.close();
+
+  // (b) Turn boundary with strict anchoring: a stale status before the next turn's own echo is quarantined.
+  const strict = countingExecutor(historyExecutor("FIRST_ANSWER"));
+  const s = await open(undefined, true, strict.executor);
+  s.push(userEcho(1), customUse("A"), requiresAction("i1", "A"), customResultEcho("A"), IDLE_OK);
+  assert.equal(await s.session.send("Минулого тижня?"), "FIRST_ANSWER");
+  s.push(requiresAction("i_stale", "A"), userEcho(3), msg("Звичайна відповідь."), IDLE_OK);
+  assert.strictEqual(await s.session.send("Дякую"), "Звичайна відповідь.");
+  assert.equal(strict.calls.length, 1, "executor invocation count === distinct custom_tool_use_ids (1)");
+  assert.equal(sentCustomResults(s.sendCalls).length, 1);
+  assert.deepEqual(s.traces.filter((t) => t.type === "late_events_quarantined").at(-1), {
+    type: "late_events_quarantined",
+    preAnchorEvents: 1,
+    lateSpecialistResults: 0,
+  });
+  s.session.close();
+
+  // (c) Turn boundary without anchoring: the Session-scoped lifecycle alone keeps the stale status a
+  // no-op, and the earlier turn's id never becomes the later turn's #36 provenance.
+  const loose = countingExecutor(historyExecutor("FIRST_ANSWER"));
+  const l = await open(undefined, false, loose.executor);
+  l.push(customUse("A"), requiresAction("i1", "A"), IDLE_OK);
+  assert.equal(await l.session.send("Минулого тижня?"), "FIRST_ANSWER");
+  l.push(requiresAction("i_stale", "A"), msg("Звичайна відповідь."), IDLE_OK);
+  assert.strictEqual(await l.session.send("Дякую"), "Звичайна відповідь.");
+  assert.equal(loose.calls.length, 1, "executor invocation count === distinct custom_tool_use_ids (1)");
+  assert.equal(sentCustomResults(l.sendCalls).length, 1);
+  l.session.close();
+});
+
+test("#40 10: a canonical specialist thread that paused with requires_action and then reached end_turn is verified", async () => {
+  const { session, push } = await open(roster());
+  push(created(), sentTo(), childIdle("requires_action"), childResult(S), childIdle("end_turn"), msg(S), IDLE_OK);
+  assert.strictEqual(await session.send("Що по Extract?"), S);
   session.close();
 });
