@@ -3,7 +3,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { WORK_REVIEW_RUBRIC, lintWorkReviewAnswer, type RubricDimensionId } from "./workReviewRubric.js";
+import {
+  WORK_REVIEW_RUBRIC,
+  extractEvidenceTrace,
+  gradeEvidenceAcquisition,
+  lintWorkReviewAnswer,
+  type DiscoveryOutcome,
+  type RubricDimensionId,
+  type RubricVerdict,
+} from "./workReviewRubric.js";
 
 // Issue #29 (Wave C2), source-only slice: contract fixtures for the simplified
 // current-state work-review Skill and the behavioral rubric.
@@ -192,7 +200,7 @@ const FIXTURES: readonly ContractFixture[] = [
       { section: "Project scope", pattern: /Keep a single-project review inside that project/i },
       { section: "Project scope", pattern: /Cards of other projects are not named, counted or flagged, even when urgent-looking/i },
       { section: "Project scope", pattern: /do not add «а ще в іншому проєкті…»/i },
-      { section: "Project scope", pattern: /If more than one board or label plausibly matches, or none does, ask one short clarification/i },
+      { section: "Project scope", pattern: /Ask one short clarification only after that discovery, when several boards or labels plausibly match or none does/i },
       { section: "Project scope", pattern: /Do not hard-code project names/i },
       { section: "Project scope", pattern: /keep each project's facts separate/i },
     ],
@@ -241,6 +249,268 @@ for (const fixture of FIXTURES) {
   });
 }
 
+
+// ---- R16: evidence acquisition before clarification (fixtures PR-A .. PR-G) ----
+//
+// Each fixture is a SYNTHETIC event stream shaped like the real Managed Agents events (built-in tool calls are
+// `agent.tool_use`, MCP calls `agent.mcp_tool_use` with mcp_server_name "trello"), a scenario description, and the
+// verdict the rubric must give. They exercise the rubric's mechanics and the Skill text, not any model.
+
+type SyntheticEvent = Record<string, unknown>;
+const skillRead = (): SyntheticEvent[] => [
+  { type: "agent.tool_use", id: "t0", name: "read", input: { file_path: "/workspace/skills/work-review/SKILL.md" } },
+  { type: "agent.tool_result", tool_use_id: "t0", is_error: false },
+];
+const trello = (id: string, name: string, input: Record<string, unknown>): SyntheticEvent[] => [
+  { type: "agent.mcp_tool_use", id, name, input, mcp_server_name: "trello" },
+  { type: "agent.mcp_tool_result", mcp_tool_use_id: id, is_error: false },
+];
+const said = (text: string): SyntheticEvent => ({ type: "agent.message", content: [{ type: "text", text }] });
+
+interface ResolutionFixture {
+  readonly id: string;
+  readonly title: string;
+  readonly userPrompt: string;
+  readonly events: readonly SyntheticEvent[];
+  readonly entityNamed: boolean;
+  readonly exactIdentitySupplied: boolean;
+  readonly discoveryAvailable: boolean;
+  readonly discoveryOutcome?: DiscoveryOutcome;
+  readonly expected: RubricVerdict;
+  readonly expectedDiscoveryCalls: number;
+  readonly skillAssertions: readonly RegExp[];
+}
+
+const RESOLUTION_FIXTURES: readonly ResolutionFixture[] = [
+  {
+    id: "PR-A",
+    title: "Named project with a discoverable exact board: discover first",
+    userPrompt: "Дай короткий review по Extract",
+    events: [
+      ...skillRead(),
+      ...trello("m1", "trelloSearch", { action: "search_boards", query: "Extract" }),
+      ...trello("m2", "trelloReadCard", { action: "list_by_board", filter: "all" }),
+      said("Зараз у Done стоять A і B; C ще в In progress."),
+    ],
+    entityNamed: true,
+    exactIdentitySupplied: false,
+    discoveryAvailable: true,
+    discoveryOutcome: "single_match",
+    expected: "PASS",
+    expectedDiscoveryCalls: 2,
+    skillAssertions: [/Resolve the named project by looking, not by asking: search or read the boards first/i],
+  },
+  {
+    id: "PR-B",
+    title: "Named project with exactly one matching label: proceed after discovery",
+    userPrompt: "Дай короткий review по Seqthera",
+    events: [
+      ...skillRead(),
+      ...trello("m1", "trelloSearch", { action: "search_boards", query: "Seqthera" }),
+      ...trello("m2", "trelloReadBoard", { action: "list_labels" }),
+      ...trello("m3", "trelloReadCard", { action: "list_by_board", filter: "all" }),
+      said("Беру label з цією назвою. Зараз у Done стоїть A; B в In progress."),
+    ],
+    entityNamed: true,
+    exactIdentitySupplied: false,
+    discoveryAvailable: true,
+    discoveryOutcome: "single_match",
+    expected: "PASS",
+    expectedDiscoveryCalls: 3,
+    skillAssertions: [
+      /if none matches, read the shared board's labels and cards and, if exactly one label matches, scope to cards carrying it and say which label you used/i,
+    ],
+  },
+  {
+    id: "PR-C",
+    title: "Several plausible matches after discovery: one clarification is allowed",
+    userPrompt: "Дай короткий review по Alpha",
+    events: [
+      ...skillRead(),
+      ...trello("m1", "trelloSearch", { action: "search_boards", query: "Alpha" }),
+      ...trello("m2", "trelloReadBoard", { action: "list_labels" }),
+      said("Знайшов дві підходящі дошки. Яку з них взяти?"),
+    ],
+    entityNamed: true,
+    exactIdentitySupplied: false,
+    discoveryAvailable: true,
+    discoveryOutcome: "multiple_matches",
+    expected: "PASS",
+    expectedDiscoveryCalls: 2,
+    skillAssertions: [/Ask one short clarification only after that discovery, when several boards or labels plausibly match or none does/i],
+  },
+  {
+    id: "PR-D",
+    title: "Zero matches after discovery: one clarification is allowed",
+    userPrompt: "Дай короткий review по Beta",
+    events: [
+      ...skillRead(),
+      ...trello("m1", "trelloSearch", { action: "search_boards", query: "Beta" }),
+      ...trello("m2", "trelloReadBoard", { action: "list_labels" }),
+      said("Ні дошки, ні label з такою назвою не знайшов. Як саме називається проєкт?"),
+    ],
+    entityNamed: true,
+    exactIdentitySupplied: false,
+    discoveryAvailable: true,
+    discoveryOutcome: "no_match",
+    expected: "PASS",
+    expectedDiscoveryCalls: 2,
+    skillAssertions: [/Ask one short clarification only after that discovery, when several boards or labels plausibly match or none does/i],
+  },
+  {
+    id: "PR-E",
+    title: "Zero Trello calls, then an immediate clarification (shape of the first paid diagnostic)",
+    userPrompt: "Що я реально зробив цього тижня по Extract? Дай коротко.",
+    events: [
+      ...skillRead(),
+      said("Щоб дати огляд по Extract, мені треба знайти цей проєкт. Це окрема дошка або це карти з лейблом на спільній дошці?"),
+    ],
+    entityNamed: true,
+    exactIdentitySupplied: false,
+    discoveryAvailable: true,
+    expected: "FAIL",
+    expectedDiscoveryCalls: 0,
+    skillAssertions: [/Never ask first/i],
+  },
+  {
+    id: "PR-F",
+    title: "Missing Memory context alone does not justify skipping Trello discovery",
+    userPrompt: "Дай короткий review по Extract",
+    events: [
+      ...skillRead(),
+      said("У моїй пам'яті немає інформації про цей проєкт. Де він живе — окрема дошка чи label?"),
+    ],
+    entityNamed: true,
+    exactIdentitySupplied: false,
+    discoveryAvailable: true,
+    expected: "FAIL",
+    expectedDiscoveryCalls: 0,
+    skillAssertions: [/not merely because Memory does not say where the project lives/i],
+  },
+  {
+    id: "PR-G",
+    title: "Exact board identity supplied by the user: the dimension does not apply",
+    userPrompt: "Дай короткий review по цій дошці https://trello.com/b/abc123/djonik",
+    events: [...skillRead(), said("Зараз у Done стоять A і B.")],
+    entityNamed: true,
+    exactIdentitySupplied: true,
+    discoveryAvailable: true,
+    expected: "N/A",
+    expectedDiscoveryCalls: 0,
+    skillAssertions: [/Resolve the named project by looking, not by asking/i],
+  },
+];
+
+for (const f of RESOLUTION_FIXTURES) {
+  test(`fixture ${f.id} (${f.title}): the rubric grades R16 mechanically and the Skill encodes discovery-before-clarification`, () => {
+    const trace = extractEvidenceTrace(f.events);
+    assert.equal(trace.trelloDiscoveryCalls, f.expectedDiscoveryCalls, JSON.stringify(trace.trelloDiscoveryToolNames));
+    const graded = gradeEvidenceAcquisition({
+      entityNamed: f.entityNamed,
+      exactIdentitySupplied: f.exactIdentitySupplied,
+      discoveryAvailable: f.discoveryAvailable,
+      discoveryOutcome: f.discoveryOutcome,
+      trace,
+    });
+    assert.equal(graded.verdict, f.expected, graded.reason);
+    for (const pattern of f.skillAssertions) assert.match(section("Project scope"), pattern, `${f.id}: Project scope must match ${pattern}`);
+  });
+}
+
+test("R16 fixtures PR-A to PR-G are present exactly once and cover the new dimension", () => {
+  assert.deepEqual(
+    RESOLUTION_FIXTURES.map((f) => f.id),
+    ["PR-A", "PR-B", "PR-C", "PR-D", "PR-E", "PR-F", "PR-G"],
+  );
+  assert.deepEqual(
+    RESOLUTION_FIXTURES.map((f) => f.expected),
+    ["PASS", "PASS", "PASS", "PASS", "FAIL", "FAIL", "N/A"],
+  );
+});
+
+test("R16 trace counts only Trello search/read calls before the final message: a built-in Skill read is not discovery", () => {
+  const trace = extractEvidenceTrace([
+    ...skillRead(),
+    ...trello("m1", "trelloSearch", { action: "search_boards" }),
+    ...trello("m2", "trelloWriteCard", { action: "update" }),
+    said("Готово."),
+    ...trello("m3", "trelloReadBoard", { action: "list" }),
+  ]);
+  assert.deepEqual(trace.trelloDiscoveryToolNames, ["trelloSearch"]);
+  assert.equal(extractEvidenceTrace(skillRead()).trelloDiscoveryCalls, 0);
+  assert.equal(extractEvidenceTrace([...skillRead(), said("Готово.")]).finalMessageAsksQuestion, false);
+  assert.equal(extractEvidenceTrace([...skillRead(), said("Яка дошка?")]).finalMessageAsksQuestion, true);
+});
+
+test("R16 grading edges: zero-discovery answer, unjustified clarification, N/A conditions, and required outcome", () => {
+  const noCalls = extractEvidenceTrace([...skillRead(), said("Ось огляд без читання.")]);
+  const base = { entityNamed: true, exactIdentitySupplied: false, discoveryAvailable: true, trace: noCalls } as const;
+  // answering without any read is as much a failure of evidence acquisition as asking
+  assert.equal(gradeEvidenceAcquisition(base).verdict, "FAIL");
+  // asking although discovery found exactly one match is not justified by the discovery
+  const found = extractEvidenceTrace([...skillRead(), ...trello("m1", "trelloSearch", {}), said("Це та дошка?")]);
+  assert.equal(gradeEvidenceAcquisition({ ...base, trace: found, discoveryOutcome: "single_match" }).verdict, "FAIL");
+  assert.equal(gradeEvidenceAcquisition({ ...base, trace: found, discoveryOutcome: "multiple_matches" }).verdict, "PASS");
+  assert.throws(() => gradeEvidenceAcquisition({ ...base, trace: found }), /discoveryOutcome is required/);
+  // N/A conditions
+  assert.equal(gradeEvidenceAcquisition({ ...base, entityNamed: false }).verdict, "N/A");
+  assert.equal(gradeEvidenceAcquisition({ ...base, discoveryAvailable: false }).verdict, "N/A");
+  assert.equal(gradeEvidenceAcquisition({ ...base, exactIdentitySupplied: true }).verdict, "N/A");
+});
+
+test("R16 verdict is independent of Memory: the grader accepts no Memory input and PR-E and PR-F fail alike", () => {
+  const graded = RESOLUTION_FIXTURES.filter((f) => f.id === "PR-E" || f.id === "PR-F").map((f) =>
+    gradeEvidenceAcquisition({
+      entityNamed: f.entityNamed,
+      exactIdentitySupplied: f.exactIdentitySupplied,
+      discoveryAvailable: f.discoveryAvailable,
+      trace: extractEvidenceTrace(f.events),
+    }),
+  );
+  assert.deepEqual(graded.map((g) => g.verdict), ["FAIL", "FAIL"]);
+  assert.equal(graded[0].reason, graded[1].reason);
+  const params = gradeEvidenceAcquisition.toString();
+  assert.doesNotMatch(params, /memory/i);
+});
+
+test("Skill orders discovery before clarification without project names, a phrase router or a lookup table", () => {
+  const scope = section("Project scope");
+  assert.match(scope, /Resolve the named project by looking, not by asking/i);
+  assert.match(scope, /Never ask first/i);
+  assert.doesNotMatch(scope, /Extract|Seqthera|Djonik|Limen|Cossack|A1\b/);
+  assert.doesNotMatch(SKILL, /\brouter\b|\bparser\b|\bmapping table\b/i);
+  assert.ok(Buffer.byteLength(SKILL, "utf8") < 11_515);
+});
+
+test("R16 is defined in the rubric as a major, model-neutral dimension with the required PASS/FAIL/N/A semantics", () => {
+  const r16 = WORK_REVIEW_RUBRIC.find((d) => d.id === "R16");
+  assert.equal(r16?.severity, "major");
+  assert.equal(r16?.title, "Fresh evidence acquisition / premature clarification");
+  const start = RUBRIC_DOC.indexOf("### R16 —");
+  assert.ok(start >= 0);
+  const doc = RUBRIC_DOC.slice(start, RUBRIC_DOC.indexOf("## 3. Покриття"));
+  assert.match(doc, /^### R16 — Fresh evidence acquisition \/ premature clarification \(major\)/);
+  for (const marker of ["PASS:", "FAIL:", "N/A:", "нуль Trello-спроб", "відсутність Memory", "ніколи", "Чому major, а не critical", "неевідентний", "не ранжує моделі"]) {
+    assert.ok(doc.includes(marker), `R16 doc must contain «${marker}»`);
+  }
+  assert.doesNotMatch(doc, /Haiku[^.]{0,40}(гірш|кращ)|Sonnet[^.]{0,40}(гірш|кращ)/);
+});
+
+test("docs/16 records the first paid diagnostic as INCONCLUSIVE, not as a Haiku failure, and documents the next configuration without a budget", () => {
+  const report = readRepoFile("docs", "16_ISSUE_29_WORK_REVIEW_DISCOVERY_REPORT.md");
+  const start = report.indexOf("\n## 30.");
+  assert.ok(start >= 0, "docs/16 must have a §30");
+  const s30 = report.slice(start);
+  assert.match(s30, /INCONCLUSIVE — candidate setup differed materially from production context/);
+  assert.match(s30, /не є збоєм Haiku|не свідчить проти Haiku/);
+  for (const marker of ["read_only", "trelloSearch", "усі Trello writes вимкнені", "Calendar", "PH-roster", "експериментальне відхилення", "не обирається бюджет", "нова авторизація Product Owner"]) {
+    assert.ok(s30.includes(marker), `docs/16 §30 must mention «${marker}»`);
+  }
+  // the historical §29 diagnostic and the earlier failed v20 record are preserved
+  assert.match(report, /## 29\. Paid fail-fast diagnostic/);
+  assert.match(report, /## 26\. Slice 3/);
+});
+
 test("fixtures cover the required scenarios A to K exactly once and every rubric dimension at least once", () => {
   assert.deepEqual(
     FIXTURES.map((f) => f.id),
@@ -252,6 +522,9 @@ test("fixtures cover the required scenarios A to K exactly once and every rubric
     assert.ok(known.has(d), `fixture ${f.id} names unknown dimension ${d}`);
     covered.add(d);
   }
+  // the PR-A..PR-G family exercises the evidence-acquisition dimension (R16)
+  assert.ok(RESOLUTION_FIXTURES.length > 0);
+  covered.add("R16");
   for (const id of known) assert.ok(covered.has(id), `rubric dimension ${id} has no fixture`);
 });
 

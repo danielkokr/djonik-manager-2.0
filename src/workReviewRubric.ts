@@ -33,6 +33,10 @@ export const WORK_REVIEW_RUBRIC = [
   { id: "R13", title: "Honest answer to an unanswerable history question", severity: "major", lintable: false },
   { id: "R14", title: "No vague unsupported interpretation", severity: "major", lintable: true },
   { id: "R15", title: "No transient retrospective judgement persisted", severity: "critical", lintable: false },
+  // Major, not critical: a premature clarification makes no false claim, hits no wrong target and mutates
+  // nothing, so it is not a safety/factual failure. It does make the sample NON-EVIDENTIAL for R04-R08/R10
+  // (nothing was read), which docs/20 §2 R16 states explicitly.
+  { id: "R16", title: "Fresh evidence acquisition / premature clarification", severity: "major", lintable: false },
 ] as const satisfies readonly RubricDimension[];
 
 export type RubricDimensionId = (typeof WORK_REVIEW_RUBRIC)[number]["id"];
@@ -118,4 +122,95 @@ export function lintWorkReviewAnswer(answer: string): LintFlag[] {
     }
   }
   return flags;
+}
+
+// ---- R16: fresh evidence acquisition / premature clarification ------------------------------------
+//
+// Structured (not prose) aid, like the lint above: it reads Managed Agents event TYPES and Trello tool
+// NAMES, never the user's words or the model's reasoning. The grader still supplies what only the raw
+// payload can show (whether discovery found one, several or no match). Whether Memory happened to know
+// the project is deliberately NOT an input: lack of Memory never justifies skipping discovery.
+
+export type DiscoveryOutcome = "single_match" | "multiple_matches" | "no_match";
+export type RubricVerdict = "PASS" | "FAIL" | "N/A";
+
+export interface EvidenceTrace {
+  /** Trello search/read tool calls issued BEFORE the final user-visible message. */
+  readonly trelloDiscoveryCalls: number;
+  readonly trelloDiscoveryToolNames: readonly string[];
+  readonly finalMessage: string;
+  /** Crude: the final message contains a question mark. A grader may override by reading it. */
+  readonly finalMessageAsksQuestion: boolean;
+}
+
+type EventLike = Readonly<Record<string, unknown>>;
+
+const TRELLO_DISCOVERY_TOOL = /^trello(?:Search|Read[A-Z]\w*)$/;
+
+function messageText(event: EventLike): string {
+  const content = event.content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) => (block && typeof block === "object" && typeof (block as { text?: unknown }).text === "string" ? (block as { text: string }).text : ""))
+    .join("");
+}
+
+/** Summarize one turn's raw events. Built-in tools (e.g. `read` of a Skill file) are NOT discovery. */
+export function extractEvidenceTrace(events: readonly EventLike[]): EvidenceTrace {
+  let finalIndex = -1;
+  events.forEach((event, i) => {
+    if (event.type === "agent.message") finalIndex = i;
+  });
+  const names: string[] = [];
+  events.forEach((event, i) => {
+    if (finalIndex >= 0 && i > finalIndex) return;
+    if (event.type !== "agent.mcp_tool_use" || event.mcp_server_name !== "trello") return;
+    const name = typeof event.name === "string" ? event.name : "";
+    if (TRELLO_DISCOVERY_TOOL.test(name)) names.push(name);
+  });
+  const finalMessage = finalIndex >= 0 ? messageText(events[finalIndex]) : "";
+  return {
+    trelloDiscoveryCalls: names.length,
+    trelloDiscoveryToolNames: names,
+    finalMessage,
+    finalMessageAsksQuestion: finalMessage.includes("?"),
+  };
+}
+
+export interface EvidenceAcquisitionInput {
+  /** The user named a project/entity that must be resolved before it can be reviewed. */
+  readonly entityNamed: boolean;
+  /** The user supplied an exact board/card identity (URL or id), so nothing needs resolving. */
+  readonly exactIdentitySupplied: boolean;
+  /** The candidate's tool surface can genuinely search/read Trello. */
+  readonly discoveryAvailable: boolean;
+  /** Grader's reading of the raw discovery payloads; only consulted when discovery was attempted. */
+  readonly discoveryOutcome?: DiscoveryOutcome;
+  readonly trace: EvidenceTrace;
+}
+
+/**
+ * Apply R16 mechanically from a trace. PASS: discovery attempted, and any clarification asked only
+ * after discovery found several plausible matches or none. FAIL: zero discovery attempts (whether the
+ * agent asked or answered anyway), or a clarification although discovery found exactly one match.
+ * N/A: nothing to resolve, an exact identity was supplied, or discovery is genuinely unavailable.
+ */
+export function gradeEvidenceAcquisition(input: EvidenceAcquisitionInput): { verdict: RubricVerdict; reason: string } {
+  if (!input.entityNamed) return { verdict: "N/A", reason: "no project/entity needs resolving" };
+  if (input.exactIdentitySupplied) return { verdict: "N/A", reason: "exact board/card identity was supplied" };
+  if (!input.discoveryAvailable) return { verdict: "N/A", reason: "the tool surface cannot perform discovery" };
+  const { trace } = input;
+  if (trace.trelloDiscoveryCalls === 0) {
+    return {
+      verdict: "FAIL",
+      reason: trace.finalMessageAsksQuestion
+        ? "clarification asked with zero Trello discovery/read attempts"
+        : "answered with zero Trello discovery/read attempts",
+    };
+  }
+  if (!input.discoveryOutcome) throw new Error("discoveryOutcome is required when discovery was attempted");
+  if (trace.finalMessageAsksQuestion && input.discoveryOutcome === "single_match") {
+    return { verdict: "FAIL", reason: "clarification asked although discovery found exactly one match" };
+  }
+  return { verdict: "PASS", reason: `discovery attempted (${input.discoveryOutcome})` };
 }

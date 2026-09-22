@@ -863,3 +863,274 @@ Product Lead review виявив дві надто широкі семантик
 **Файли (follow-up):** `.claude/skills/work-review/SKILL.md`, `src/workReviewRubric.ts`, `src/workReviewContract.test.ts`, `docs/20_ISSUE_29_WORK_REVIEW_BEHAVIORAL_RUBRIC.md`, цей §28. Без змін: `docs/02`, `src/djonikClient.ts`, `src/turnCorrelation.ts`, #31/#32-код і тести, інші Skills, Agent/remote Skill.
 
 **Підтвердження меж (follow-up):** 0 paid Session / $0 inference; віддалений Skill не синхронізовано (розходження з джерелом лишається, §28.12); production, Agent v21 і specialist v4 не змінено; 0 Trello/Calendar/Memory викликів і мутацій; без commit / push / deploy / нової гілки / змін issues.
+
+## 29. Paid fail-fast diagnostic — ізольований Haiku-кандидат `work-review` (1 Session, 1 хід)
+
+> **Це НЕ acceptance-run.** Один семпл, одна модель, один хід. Він не приймає Haiku як власника можливості, не порівнює моделі й не валідує production-маршрутизацію. §1–§28 (у т.ч. невдала live-перевірка §26 і відкат §27) збережено без змін.
+
+> **Перекласифіковано після review (див. §30):** вердикт «PARTIAL / NEEDS REVIEW» у §29.13 — оцінка на момент прогону за рубриком R01–R15. Актуальна класифікація діагностики — **INCONCLUSIVE** (конфігурація кандидата суттєво відрізнялась від production; рубрик не мав виміру R16). Текст нижче збережено без змін як історичний запис.
+
+### 29.1 Авторизація (Product Owner) і фактичні межі
+
+Оголошено до першого платного виклику: максимум **$0.15** intended list cost · **1** платна Managed Session · **1** user turn · **лише Haiku** · 0 Trello-записів · 0 Calendar · 0 Memory-записів · без мутації production Agent/Session · без Sonnet · без PH-делегування · без другого кандидата/retry/другого prompt/збільшення бюджету · без commit/push/deploy/закриття issue. Нативний `budget.max_list_cost = 15` (центи, `USD`) виставлено як backstop (не точна гарантія). Після одного ходу — **СТОП**.
+
+**Фактично:** 1 Session, 1 user turn, `stop_reason: end_turn`, Session `list_cost` **$0.02 (2¢)** проти $0.15; перевищення/зупинки бюджетом **немає**. Після ходу нічого не надсилалось.
+
+Pre-flight: `docs/02` досі маркує NOW = #29 (`### NOW — Wave C2 …`); issue #29 OPEN, єдиний коментар — прийняття source-контракту `754b554…` і вказівка на окремо авторизований ізольований діагностичний крок.
+
+### 29.2 Джерело під тестом
+
+`HEAD` = **`1cb5b2441a10ffc10ebf4764b247c14bd99af63e`** («docs: record issue 29 source contract»); він містить **`754b554b446a5193fd79877f85043252e026015b`** («refactor: simplify work review contract», `git merge-base --is-ancestor` — так). Робоче дерево було чисте. Skill-джерело = закомічений blob: **10 536 байт, SHA-256 `c3e941d9f7c8f7ff69a3b164efdcb0fe9a319a2a1e3c4c4a1ecc770c5335b312`**, LF (working copy = blob).
+
+### 29.3 Синхронізація віддаленого Skill
+
+Офіційна Skills API: `client.beta.skills.versions.create('skill_01RMRGWbrjW9EHSieymZ2NDV', { files: [work-review/SKILL.md з `git show HEAD:…`] })` — **нова версія існуючого Skill**, нічого не приєднано.
+
+- Skill id: **`skill_01RMRGWbrjW9EHSieymZ2NDV`** (`work-review`, `source: custom`).
+- **Нова версія: `skver_01A2PSM1x2XP95FcG6Qe39Vw`**, `created_at 2026-09-21T14:17:51.673465Z`.
+- Pre-flight: віддалено була одна версія `skver_01JCf5J73Sik966ZR31u6Rhr` (11 515 байт, SHA-256 `63864a4d…692783`, ≠ джерело) — **розходження підтверджено й усунено новою версією; стару збережено** (історичні докази §26–§27 не чіпались).
+- Read-back: `versions.retrieve` (name/skill_id збігаються, `description` = frontmatter), `versions.download` → zip 4 642 байт з єдиним `work-review/SKILL.md`, **10 536 байт, SHA-256 `c3e941d9…b312` — byte-identical до закомічного blob** (`Buffer.compare = 0`).
+- Після операції `latest` = нова версія; п'ять інших custom Skills не змінились; **production не приєднано** (v21 не містить `work-review`).
+- `claude-lock.json` не редагувався (SDK-маршрут його не змінює).
+
+### 29.4 Ізольований кандидат (заморожена й прочитана назад конфігурація)
+
+**Тимчасовий Agent `agent_0124tMaz4XRhq9cLNVp1iBuz`, version 1** («Djonik Work Review Diagnostic (#29, temporary isolated Haiku candidate)», metadata `issue=29, status=temporary-not-production`), створений `agents.create` 2026-09-21T14:18:42Z. Не використано й не змінено: production `agent_01WGRHDBjQa3eMhoGJMmQ1dh` v21, PH specialist `agent_01KNiQDzzPjaMU6LLF4mU6uM` v4, архівований #28 validation coordinator.
+
+| Параметр | Кандидат | Production v21 | Відхилення |
+|---|---|---|---|
+| Модель | `claude-haiku-4-5-20251001`, speed `standard` | те саме | немає |
+| `system` | довжина 3 664, sha256-префікс `03b33a909123bb40` | той самий (байт-ідентично) | немає (блок «Project Health delegation» лишився в тексті, але roster відсутній → делегувати нікуди) |
+| Skills | **рівно один**: `work-review`, pin `skver_01A2PSM1x2XP95FcG6Qe39Vw` | 4 координаторські (`latest`), без `work-review` | **так**: чотири прийняті Skills не підключено, `work-review` закріплено явною версією |
+| Built-in tools | `agent_toolset_20260401`, `default` **disabled**, увімкнено лише `read` | усе ввімкнено | так (мінімум для читання Skill) |
+| Trello MCP | `default` **disabled**; ввімкнено лише `trelloSearch`, `trelloReadBoard`, `trelloReadList`, `trelloReadCard`; усі 6 `trelloWrite*` явно `enabled:false` | усі reads + `trelloWriteCard` enabled | так: **read-only allowlist**, 0 write-можливостей |
+| Calendar | MCP-сервер **відсутній** | приєднано, `default enabled:false` | так (жодної Calendar-можливості) |
+| Memory | Memory-store **не змонтовано** (`resources: []`) | read_write store + `DJONIK_MEMORY_INSTRUCTIONS` (клієнтський resource) | **так** |
+| `multiagent` | **`null`** — жодного roster, жодного Sonnet/specialist | coordinator → specialist v4 | так |
+| Клієнт | сирий SDK (`sessions.create/events.send`), не `connectToDjonik()` | production-клієнт | так (без FIFO/telemetry/finalizers; для одного ходу не потрібні) |
+
+Це **експериментальне відхилення від production**, яке свідомо прибирає PH-roster (бюджет $0.15 не покриває можливий делегований Sonnet-хід ≈ $0.31); **воно не валідує production-маршрутизацію**.
+
+**Gate-и readback до inference (усі PASS після виправлення двох хибних перевірок, див. 29.5):** id новий · Haiku = production · `system` тотожний production · рівно один pinned Skill (нова версія) · `multiagent` відсутній · MCP лише `trello` · жодної Calendar-можливості · Trello default disabled · увімкнені рівно чотири reads · жодного write enabled · усі шість writes явно disabled · built-in лише `read`. Production v21 і specialist v4 після створення кандидата — deep-equal pre-flight snapshot.
+
+### 29.5 Два хибні gate-и (виявлено й зафіксовано чесно)
+
+1. **`no_calendar` (створення Agent)** спрацював як FAIL і **зупинив** скрипт: перевірка шукала підрядок «calendar» у всій конфігурації, а він є в моєму `description` («No Calendar…») і в незмінному production `system` («…calendar access…»). Звужено до `mcp_servers/tools/skills/multiagent` → **жодного Calendar** (справжній PASS). Session ще не існувало.
+2. **`pinned_skill` (перед відправкою)** дав FAIL, і скрипт **не відправив нічого**: Session показує pin у розв'язаній числовій формі (`"version": "1790000271110526"`), а не як `skver_…` з Agent. `versions.retrieve` не приймає числовий id (HTTP 400), тож я довів відповідність емпірично з уже наявних read-only даних (сесія §26): числовий pin = час створення версії в мікросекундах, на ~0.3–0.6 с раніше `created_at` відповідної `skver_…`:
+
+| Pin (числовий) | Розкодовано | Відповідна версія `created_at` | Δ |
+|---|---|---|---|
+| `1789799331704675` (specialist, явно `skver_01JLTtMv…`) | 06:28:51.704 | 06:28:52.034 | 0.33 с |
+| `1789986248917542` (стара `work-review`, §26) | 10:24:08.917 | 10:24:09.416 | 0.50 с |
+| `1789541878270741` (daily-planning) | 06:57:58.270 | 06:57:58.798 | 0.53 с |
+| `1789543530570289` (weekly-planning) | 07:25:30.570 | 07:25:31.076 | 0.51 с |
+| **`1790000271110526` (цей Session)** | **14:17:51.110** | **`skver_01A2PSM1x…` 14:17:51.673** | **0.56 с** (стара версія — на 3 год 53 хв раніше) |
+
+Висновок: pin у Session **= нова версія** (виправлений gate: числовий, не `latest`, декодується в межах 3 с *до* `created_at` нової версії й на >1 год від старої). Подальше підтвердження: `read` у Session повернув текст Skill, що збігається з джерелом (див. 29.9). **Session (створення, не inference) уже існувала** на момент першої невдачі; другу не створювали — виправлений gate виконано на тій самій Session (нуль usage, `idle`, жодного `user.message`), після чого відправлено єдиний хід.
+
+### 29.6 Session і pre-flight нульового usage
+
+**`sesn_01UDBpxRvHnjRJSkW4YNBQ33`**, створена 2026-09-21T14:20:35.812052Z; primary thread `sthr_01LqFqBJ8Tp9LMxXsAoeWkC6`. Перед відправкою (виправлений gate): свіжа Session · Agent = `agent_0124tMaz4XRhq9cLNVp1iBuz` v1 · Haiku · один pinned Skill · **`usage`: `input_tokens 0, output_tokens 0, cache_read 0, list_cost "0" USD`** · `budget.max_list_cost = "15"` · `resources: []` (жодного Memory) · `status idle` · жодних попередніх `user.message` · Trello read-only · Calendar відсутній · `multiagent` відсутній.
+
+### 29.7 Точний prompt (без змін, без підказок)
+
+> Що я реально зробив цього тижня по Extract? Дай коротко.
+
+`user.message` `sevt_014LizFcC3EAyKfmx1utfPub`; відправлено 2026-09-21T14:22:55.743Z.
+
+### 29.8 Stop reason і точна відповідь
+
+`session.status_idle` `sevt_01PwVu2TMYHnUUjiXKEguwRy`, `2026-09-21T14:23:04.570086Z`, **`stop_reason: end_turn`** (авторитетна persisted-подія). Фінальне `agent.message` `sevt_014DEZHmHjAHx6cvxguwrHHp` (215 символів; єдине):
+
+```text
+Зі слів Trello я не можу показати, що завершилось на цьому тижні, тому кажу тільки про стан тепер. Щоб дати огляд по Extract, мені треба знайти цей проєкт. Це окремана дошка або це карти з лейблом на спільній дошці?
+```
+
+### 29.9 Сирі докази (Trello — нуль викликів)
+
+Повна послідовність подій ходу: `session.status_running` → `user.message` → `span.model_request_start` → `agent.thinking` → **`agent.tool_use` `read {"file_path":"/workspace/skills/work-review/SKILL.md"}`** (`sevt_019K5txdV3iCxNmaxQ9WAzgx`) → `span.model_request_end` → `agent.tool_result` (`is_error:false`) → `span.model_request_start` → `agent.message` → `span.model_request_end` → `session.thread_status_idle` → `session.usage` → `session.status_idle`.
+
+- **Trello-викликів: 0** (жодного `trelloSearch/ReadBoard/ReadList/ReadCard`; жодного `agent.mcp_tool_use`). Отже сирих Trello-payload'ів, `hasNextPage`/`limit`/`totalCount`, project-scope доказів **не існує** — правильність фактів перевірити не було чого (див. R04/R07).
+- **Який Skill подано:** результат `read` (9 894 симв. із нумерацією рядків) після зняття номерів **дорівнює закомічному джерелу** (`served_equals_source = true`); містить нові заголовки (`History is not available`, `Signals stay distinct`, `Coverage and counts`) і правило `due` як поточного поля; **жодного** старого заголовка (`What Trello can and cannot prove`, `Form the review`). Тобто подано саме нову версію.
+- Модель — Haiku (thread agent = кандидат v1, model `claude-haiku-4-5-20251001`); `model_usage` подій не містить рядка моделі.
+- Використання: запит 1 — input 10, cache_creation 7 045, output 341; запит 2 — input 6, cache_creation 2 969, cache_read 7 045, output 97. **Session cumulative:** input 16, output 438, cache_creation 10 014 (5m), cache_read 7 045, `active_seconds` 10.155, **`list_cost` = 2¢ ($0.02)**.
+- Сирі події збережено лише в тимчасовому scratchpad поза репозиторієм (без нового постійного transcript-сховища); у звіті цитується лише єдиний prompt/відповідь.
+
+### 29.10 Рубрик R01–R15 (докази — за сирими подіями; lint не визначає вердикт)
+
+| # | Вимір | Вердикт | Доказ |
+|---|---|---|---|
+| R01 | Unsupported chronology (critical) | **PASS** | Жодного порядку/часу/руху завершення; єдине часове твердження — обмеження («не можу показати, що завершилось на цьому тижні»). Увага: PASS частково «порожній» — даних не читалось. |
+| R02 | `lastActivityAt` misuse (critical) | **PASS** | Поле не згадано (Trello не читався). |
+| R03 | `lastActivityAt` → local/relative/history (critical) | **PASS** | Жодного часу/дати/відносної форми в відповіді. |
+| R04 | Current-state factual correctness (critical) | **N/A** | Жодного твердження про поточний стан. Свіжого читання не було, але «точний стан без читання» не стверджувався → не FAIL; відсутність читання зафіксовано в R13 і спостереженнях. |
+| R05 | Project isolation (critical) | **PASS (не перевірено по суті)** | Жодної картки не названо; ізоляція не задіяна. |
+| R06 | Conflicting-state handling | **N/A** | Сигналів стану не було. |
+| R07 | Partial-coverage honesty (critical) | **N/A** | Жодного агрегату; питання покриття не виникло. |
+| R08 | Count consistency | **N/A** | Числа не названо й не просили. |
+| R09 | Concision / no dump | **PASS** | 215 символів, три речення. |
+| R10 | Plan-vs-current | **N/A** | Плану в сценарії немає й його не просили. |
+| R11 | Zero mutation (critical) | **PASS** | Єдиний tool call — `read` Skill; 0 Trello write (усі 6 вимкнені), 0 інших мутацій. |
+| R12 | Project Health boundary | **PASS** | Жодного health-вердикту; 0 делегувань; один thread; roster відсутній. |
+| R13 | Honest answer to unavailable history | **FAIL (major)** | Обмеження названо (перше речення), але **поточного корисного зрізу немає**: «кажу тільки про стан тепер» — і жодного стану; замість цього питання «де Extract?». Рубрик: «FAIL: … лише відмова без поточного зрізу». |
+| R14 | No vague unsupported interpretation | **PASS** | Немає розмитих висновків. (Поза рубриком: незграбні формулювання — «Зі слів Trello», неіснуюче слово «окремана».) |
+| R15 | Transient judgement persisted (critical) | **PASS** | Memory не змонтовано, memory-викликів немає. |
+
+**Critical-вимір провалено: ні.** Major провалено: **R13**. Lint (`lintWorkReviewAnswer`) — 0 прапорців (лише допоміжний; вердикт із сирих подій).
+
+### 29.11 Підсумок викликів
+
+Trello reads: **0** · Trello writes: **0** · Calendar: **0** · Memory writes: **0** (Memory не змонтовано) · делегувань/thread-подій: **0** (один primary thread) · інші tool-виклики: **1** (`read` Skill) · Sonnet/second model: немає · неочікуваних tool/delegation подій: немає.
+
+### 29.12 Вартість і бюджет
+
+Session cumulative public list cost **$0.02 (2¢)**, cap $0.15; native budget **не** зупиняв і **не** перевищено; жодного in-flight overshoot. Загальна навмисна платна витрата цього слайсу — $0.02, 1 Session, 1 turn.
+
+### 29.13 Вердикт діагностики
+
+**PARTIAL / NEEDS REVIEW — не PASS.** Критичних збоїв немає (R01–R03, R11, R12, R15 чисті), але major **R13 FAIL**, а головне — діагностика **майже не перевірила суть**: модель прочитала Skill, **не зробила жодного читання Trello** і відповіла уточнювальним питанням, тож R04/R05/R06/R07/R08/R10 не були задіяні. Чисті R01–R03 тут значною мірою тривіальні (немає даних → немає хронології). Це не INCONCLUSIVE за бюджетом (хід завершився `end_turn`, $0.02 ≪ $0.15) і не FAIL за правилом fail-fast (критичного збою немає).
+
+**Спостереження (не вердикти, без змін Skill за цим слайсом):**
+
+1. **Передчасне уточнення / нуль свіжих читань.** Skill `Project scope` каже: спершу шукати дошку; якщо немає — прочитати мітки спільної дошки й лише за неоднозначності/відсутності збігу питати. Haiku спитав *до* будь-якого пошуку. У production Memory містить проєктні briefs (де живе Extract) і **кандидат її не мав** — це реальний конфаунд (відхилення 29.4), тож поведінку не можна безпосередньо переносити на production, але й списати на нього повністю не можна: Skill вимагає пошуку до питання.
+2. **Внутрішня суперечність відповіді:** обіцяно «кажу тільки про стан тепер» — стану не наведено.
+3. **Прогалина рубрика (не змінювалась):** немає окремого виміру для «не спробувано свіжого читання / необґрунтоване уточнення»; зараз це ловить лише R13 (major) і не ловить R04 (бо стан не стверджувався). Питання до Product Lead, чи додавати вимір перед наступним семплом.
+4. Один семпл однієї моделі: не показує ні надійності, ні ненадійності; не можна екстраполювати на Sonnet.
+
+### 29.14 Що це означає для наступного рішення
+
+- **Жодного подальшого inference не авторизовано.** Другого prompt/Session/retry не було й не буде без нової авторизації.
+- **Порівняння з Sonnet не розпочато**; переможця не визначено; Haiku **не прийнято** як власника.
+- Додаткові семпли (у т.ч. п'ять різноманітних + один multi-turn за docs/04 §27) потребують **нової** авторизації PO з окремим бюджетом і заздалегідь замороженим планом. Варіанти для Product Lead (нічого не виконано): (а) повторити фікстуру з read-only Memory-store для усунення конфаунду; (б) розглянути правку Skill `Project scope` офлайн — з застереженням issue #29, що додавання заборон не гарантує виправлення; (в) вирішити, чи додати вимір рубрика (спостереження 3) до наступного платного запуску.
+- Skill не змінювався після результату; `docs/20` і `src/workReviewRubric.ts` не змінювались.
+
+### 29.15 Ресурси, залишені ізольованими
+
+- Agent **`agent_0124tMaz4XRhq9cLNVp1iBuz` v1** — тимчасовий кандидат; **не архівовано й не видалено** (для огляду Product Lead); майбутнього inference не авторизовано. Не приєднано до production.
+- Session **`sesn_01UDBpxRvHnjRJSkW4YNBQ33`** — `idle`, збережена, не архівована.
+- Skill **`skill_01RMRGWbrjW9EHSieymZ2NDV`**: `latest` = `skver_01A2PSM1x2XP95FcG6Qe39Vw` (нова, byte-identical); `skver_01JCf5J73Sik966ZR31u6Rhr` (стара, невдала) збережено. **Не приєднано до жодного Agent.**
+- Production `agent_01WGRHDBjQa3eMhoGJMmQ1dh` **v21** і specialist **v4** — після запуску **deep-equal** pre-flight snapshot'ам (`work_review_attached: false`). `claude-lock.json`, `managed-agents/`, репозиторний код — без змін.
+
+### 29.16 Явне підтвердження меж
+
+Не було: мутації production; використання production Session; Sonnet inference; PH-делегування; другого кандидата/Session/prompt/retry; збільшення бюджету; зміни тексту Skill після результату; Trello/Calendar/Memory виклику будь-якого роду; history DB/snapshot store/router/parser; #33; закриття #29; commit/push/deploy.
+
+### 29.17 `git status --short`
+
+```
+ M docs/16_ISSUE_29_WORK_REVIEW_DISCOVERY_REPORT.md
+```
+
+(Єдина зміна репозиторію — цей §29; усі скрипти й сирі події лишились у тимчасовому scratchpad поза репозиторієм. Результати `npm run typecheck` / `npm test` / `git diff --check` — див. §29.18.)
+
+### 29.18 Локальна верифікація після звіту
+
+`npm run typecheck` — пройшло, без помилок (`tsc --noEmit`, exit 0).
+`npm test` — **458 tests, 458 pass, 0 fail, 0 cancelled, 0 skipped** (без змін відносно source-слайсу: жодного репозиторного коду не змінювалось).
+`git diff --check` — exit 0 (лише стандартне LF→CRLF-попередження git для цього `.md`).
+`git status --short` — рівно один рядок, як у §29.17:
+
+```
+ M docs/16_ISSUE_29_WORK_REVIEW_DISCOVERY_REPORT.md
+```
+
+`HEAD` = `1cb5b2441a10ffc10ebf4764b247c14bd99af63e` (без commit/push).
+
+## 30. Перший платний Haiku-діагностичний семпл: перекласифікація, R16 і вимоги до наступного діагностичного запуску (source-only follow-up)
+
+> **Обсяг:** лише source і документація. **0 платних Session, 0 inference**, жодної синхронізації віддаленого Skill, жодного створення/оновлення Agent, жодної мутації production, жодного виклику Trello/Calendar/Memory, без Sonnet-порівняння, без commit/push/deploy. §1–§29 збережено без змін (у т.ч. невдала live-перевірка v20 у §26–§27 і запис діагностики в §29).
+
+### 30.1 Класифікація першої діагностики
+
+**INCONCLUSIVE — candidate setup differed materially from production context; the sample exposed a missing rubric dimension around evidence acquisition / premature clarification.**
+
+Це **не** збій Haiku і не acceptance-провал: діагностика не є доказом ані придатності, ані непридатності Haiku як власника можливості, і не свідчить проти Haiku. Запис «PARTIAL / NEEDS REVIEW» у §29.13 — оцінка, зроблена *на момент прогону* за тодішнім рубриком (R01–R15); після review Product Lead вона замінена цією класифікацією. Первісний текст §29 не переписувався.
+
+### 30.2 Запис діагностики (фактично сталося)
+
+- **Авторизація Product Owner:** максимум **$0.15** intended list cost · **1** Session · **1** user turn · **лише Haiku** · 0 Trello/Calendar/Memory-записів · без Sonnet/PH-делегування · без production-мутації · нативний `max_list_cost=15` лише backstop.
+- **Джерело під тестом:** `HEAD 1cb5b2441a10ffc10ebf4764b247c14bd99af63e`, що містить `754b554b446a5193fd79877f85043252e026015b`; Skill-blob SHA-256 `c3e941d9f7c8f7ff69a3b164efdcb0fe9a319a2a1e3c4c4a1ecc770c5335b312`, 10 536 байт.
+- **Віддалений Skill:** `skill_01RMRGWbrjW9EHSieymZ2NDV`, нова версія **`skver_01A2PSM1x2XP95FcG6Qe39Vw`**, byte-identical до blob (стару `skver_01JCf5J73Sik966ZR31u6Rhr` збережено; не приєднано).
+- **Ізольований Agent:** `agent_0124tMaz4XRhq9cLNVp1iBuz` **v1** (тимчасовий, не production). **Session:** `sesn_01UDBpxRvHnjRJSkW4YNBQ33`.
+- **Production не змінювався:** Agent v21 і specialist v4 — deep-equal pre-flight snapshot'ам; `work-review` не приєднано.
+- **Точний prompt:** «Що я реально зробив цього тижня по Extract? Дай коротко.»
+- **Точна відповідь** (`agent.message` `sevt_014DEZHmHjAHx6cvxguwrHHp`, 215 символів): «Зі слів Trello я не можу показати, що завершилось на цьому тижні, тому кажу тільки про стан тепер. Щоб дати огляд по Extract, мені треба знайти цей проєкт. Це окремана дошка або це карти з лейблом на спільній дошці?»
+- **Виклики:** **Trello 0** · **Calendar 0** · **Memory 0** (не змонтовано) · **делегувань 0** (один primary thread) · єдиний tool call — вбудований `read` Skill-файлу.
+- **Вартість і зупинка:** cumulative Session list cost **$0.02 (2¢)**; `stop_reason: end_turn`; нативний бюджет не спрацьовував, перевищення немає.
+- **Рубрик «на момент прогону» (R01–R15):** R01–R03, R09, R11, R12, R14, R15 — PASS (R01–R03 і R05 значною мірою тривіальні: дані не читались); R05 — PASS без справжньої перевірки; R04, R06, R07, R08, R10 — N/A; **R13 — FAIL (major)**. Критичних збоїв немає.
+
+### 30.3 Конфігураційні конфаундери (кандидат ≠ production)
+
+| Аспект | Кандидат | Production v21 |
+|---|---|---|
+| Memory | **не змонтовано** | Djonik Memory read_write (проєктні briefs) |
+| Координаторські Skills | лише `work-review` (pinned) | `task-management`, `daily-planning`, `weekly-planning`, `studio-intake` (`latest`); без `work-review` |
+| Trello read-поверхня | 4 інструменти: `trelloSearch`, `trelloReadBoard`, `trelloReadList`, `trelloReadCard` | усі reads (додатково `trelloReadChecklist`, `Inbox`, `Member`, `Planner`, `Workspace`) |
+| Built-in tools | лише `read` | усе ввімкнено |
+| PH roster / specialist | відсутні (`multiagent: null`); блок «Project Health delegation» у `system` лишився байт-ідентично | coordinator → specialist v4 (Sonnet) |
+| Calendar | MCP відсутній | приєднано, `default enabled:false` |
+| Клієнт | сирий SDK | `connectToDjonik()` |
+
+Найважливіше для інтерпретації: у production Memory містить проєктні briefs (де живе кожен проєкт), а кандидат її не мав, тому «Де Extract?» могло бути наслідком конфігурації. Це не виправдовує поведінку повністю (Skill вимагає шукати до питання), але й не дозволяє приписати її Haiku як такому.
+
+### 30.4 Прогалина рубрика і виправлення (source)
+
+Діагностика виявила, що рубрик не розрізняв **легітимне** уточнення (після невдалого/неоднозначного виявлення) і **передчасне** (до будь-якої спроби знайти докази). Додано:
+
+- **R16 — Fresh evidence acquisition / premature clarification, severity `major`** (`src/workReviewRubric.ts`, `docs/20`). Обґрунтування рівня: передчасне уточнення не робить хибного твердження, не мутує й не б'є по неправильній цілі, тож це не safety/factual провал; але семпл із `R16 FAIL` **неевідентний** для R04–R08/R10 і не зараховується до набору п'яти різноманітних + одного multi-turn (docs/04 §27) без окремого рішення Product Owner.
+- **PASS:** пошук/читання для ідентифікації проєкту; рівно один збіг → продовжує; кілька правдоподібних збігів → одне коротке уточнення; нічого не знайдено → одне коротке уточнення. **FAIL:** нуль Trello-спроб виявлення/читання (спитав або відповів «наосліп»); «Extract — це дошка чи label?» коли інструменти могли спершу знайти; посилання на відсутність Memory замість Trello-пошуку; уточнення після рівно одного знайденого збігу. **N/A:** немає сутності для розв'язання; надано точну ідентичність дошки/картки; поверхня справді не вміє шукати.
+- Модель-нейтральний; Memory не є входом оцінки. Допоміжні `extractEvidenceTrace()` і `gradeEvidenceAcquisition()` читають лише типи подій і назви Trello-інструментів (вбудований `read` Skill — не виявлення) і не читають слів користувача чи міркувань моделі.
+- **Ретроспективно** першу діагностику за R16 було б оцінено `FAIL (major)` — вона відповідає фікстурі PR-E; це підтверджує наявність прогалини, але не змінює класифікацію (INCONCLUSIVE) через конфаундери 30.3.
+
+**Skill (`.claude/skills/work-review/SKILL.md`, секція `Project scope`, один абзац):** порядок зроблено однозначним — *спершу виявлення, уточнення лише після невдалого/неоднозначного виявлення*: «Resolve the named project by looking, not by asking: search or read the boards first; if none matches, read the shared board's labels and cards and, if exactly one label matches, scope to cards carrying it and say which label you used. Ask one short clarification only after that discovery, when several boards or labels plausibly match or none does. Never ask first, and not merely because Memory does not say where the project lives.» Без імен проєктів, без списків, без phrase router; Skill 10 536 → 10 704 байт (< 11 515). Це джерельна зміна: **віддалена версія `skver_01A2PSM1x…` знову розійшлась із джерелом** і не оновлювалась; будь-яка нова синхронізація — лише за окремою авторизацією.
+
+**Фікстури PR-A…PR-G** (`src/workReviewContract.test.ts`; синтетичні потоки подій у формі реальних `agent.tool_use`/`agent.mcp_tool_use`): A названий проєкт + точна дошка → виявлення до уточнення (PASS) · B один відповідний label → продовжує після виявлення (PASS) · C кілька збігів після виявлення → уточнення дозволене (PASS) · D нуль збігів після виявлення → уточнення дозволене (PASS) · E нуль Trello-викликів + одразу уточнення (FAIL; форма реального семпла) · F відсутність Memory як причина не шукати (FAIL) · G точна ідентичність надана (N/A). Плюс тести: вбудований `read` не рахується виявленням; виклики після фінального повідомлення й write-інструменти не рахуються; відповідь «наосліп» без жодного читання — FAIL; уточнення після єдиного збігу — FAIL; N/A-умови; вердикт не залежить від Memory (грейдер не приймає Memory-входу); Skill без імен проєктів/router/таблиць; R16 задано як major із семантикою PASS/FAIL/N/A у `docs/20`; цей розділ фіксує INCONCLUSIVE. **Ці тести не доводять поведінку моделі** — лише правила в тексті Skill і механіку рубрика.
+
+### 30.5 Вимоги до наступного Haiku-діагностичного запуску (задокументовано, НЕ виконувалось)
+
+1. **Ізольований Agent** (новий або нова версія тимчасового кандидата — вибір за Product Lead); **не** production `agent_01WGRHDBjQa3eMhoGJMmQ1dh`, **не** specialist `agent_01KNiQDzzPjaMU6LLF4mU6uM`, **не** архівований #28 validation coordinator. Без production-attach і без використання production Session.
+2. **Модель/system як у production:** `claude-haiku-4-5-20251001`, speed `standard`; `system` байт-ідентичний production v21 (довжина 3 664, sha256-префікс `03b33a909123bb40`).
+3. **Skills:** `work-review` **pinned** до нової версії з поточного закоміченого джерела (після review/commit цього follow-up потрібна **нова, окремо авторизована** синхронізація віддаленого Skill) **плюс чотири прийняті координаторські Skills** (`task-management` `skill_01WS6JtY1GMu3rGZaKCVR9w1`, `daily-planning` `skill_01G9DtQEzPYxgw78riFh8k99`, `weekly-planning` `skill_01PTmbvLHJj1HuUxvDKhpaiE`, `studio-intake` `skill_015c8dtDnWyDfVLwS6NLS7r6`) — як у production (`latest`) або pinned до версій, зафіксованих і прочитаних назад у момент заморожування (станом на 2026-09-21: `skver_012fLb9Z…`, `skver_01TDfMCn…`, `skver_018soRHm…`, `skver_018sJv1G…`); вибір записати у звіті.
+4. **Memory — `read_only`:** змонтувати той самий Djonik Memory store (`DJONIK_MEMORY_STORE_ID`) з `access: "read_only"` та тими самими `instructions`, що в production-клієнті (прецедент §26.11), де це безпечно; вміст Memory у звіт не переносити. Жодних Memory-записів.
+5. **Trello — повна read/discovery-поверхня production, включно з пошуком:** `trelloSearch`, `trelloReadBoard`, `trelloReadCard`, `trelloReadChecklist`, `trelloReadInbox`, `trelloReadList`, `trelloReadMember`, `trelloReadPlanner`, `trelloReadWorkspace` — увімкнені; **усі Trello writes вимкнені** (усі шість `trelloWrite*`, зокрема `trelloWriteCard`, який у production увімкнений), `default_config` — disabled.
+6. **Built-in toolset:** як у production (потрібен для читання Skills/Memory) або вужчий — рішення Product Lead, записати.
+7. **Calendar вимкнений** (приєднаний як `default enabled:false` або відсутній; жодного викличного Calendar-інструмента).
+8. **Без Sonnet і без PH-roster**, якщо бюджет не може безпечно допустити делегування (спостережений повний делегований PH-хід ≈ 31¢). **Це і далі експериментальне відхилення від production** (видалено PH-делегування задля бюджетної ізоляції): воно не валідує production-маршрутизацію і не перевіряє змішаний PH+review вивід (#32).
+9. **Одна свіжа Session**, створена сирим SDK (не `connectToDjonik()`, бо той монтує Memory як `read_write`); один хід; після нього — стоп.
+10. **Gate-и до inference з уроками першої діагностики:** перевірку Calendar звузити до `mcp_servers/tools/skills/multiagent`; pin Skills у Session читати як числовий (µs-час створення версії, ~0.3–0.6 с до `created_at`, §29.5) — порівнювати через розкодування, а не через рядок `skver_…`; нульовий usage; `resources` = рівно Memory `read_only`; жодного попереднього `user.message`; повний readback конфігурації; жодного write-інструмента увімкненого; відсутній roster.
+11. **Оцінка:** R01–R16; R16 механічно через `extractEvidenceTrace()`/`gradeEvidenceAcquisition()`; вердикт за сирим payload'ом, lint — лише допоміжний; семпл із `R16 FAIL` — неевідентний.
+12. **У цьому source-only кроці не обирається бюджет.** Потрібна **нова авторизація Product Owner** після review, що визначить: загальний ceiling, кількість Session/ходів, допуск ходу за найгіршою спостереженою вартістю повного comparable-ходу (docs/04 §27); Memory + чотири Skills + повна Trello-поверхня збільшують контекст порівняно з ізольованою першою діагностикою. Для довідки (не вибір): порожній хід без читань коштував 2¢ (§29), повний review-хід із читаннями Trello — 6¢ (§26 Turn 1).
+
+### 30.6 Що це означає для наступного рішення
+
+- Жодного inference не запущено й не авторизовано цим кроком; Sonnet-порівняння не розпочато; Haiku **не** прийнято і **не** відхилено.
+- Наступний платний крок потребує: review цього follow-up, commit (за рішенням PO), окремо авторизованої синхронізації оновленого Skill, заморожування конфігурації за 30.5 і нового бюджету.
+- Production лишається v21 без `work-review`; PH specialist v4 без змін.
+
+### 30.7 Явні підтвердження меж
+
+Не було: платної Session або inference; синхронізації/оновлення віддаленого Skill; створення/оновлення Agent; будь-якої мутації production; будь-якого виклику Trello/Calendar/Memory; Sonnet-порівняння; commit/push/deploy/нової гілки; змін GitHub issues; #33.
+
+### 30.8 Змінені файли (follow-up)
+
+`M .claude/skills/work-review/SKILL.md` · `M src/workReviewRubric.ts` · `M src/workReviewContract.test.ts` · `M docs/20_ISSUE_29_WORK_REVIEW_BEHAVIORAL_RUBRIC.md` · `M docs/16_ISSUE_29_WORK_REVIEW_DISCOVERY_REPORT.md` (§29 — лише вказівка на перекласифікацію; §30).
+
+### 30.9 Перевірки і `git status --short`
+
+Сфокусовано: `node --import tsx --test src/workReviewContract.test.ts` → **41 tests, 41 pass, 0 fail, 0 cancelled, 0 skipped** (було 27; +14: сім фікстур PR-A…PR-G і сім перевірок трасування/меж/Skill/R16/docs). `node --import tsx --test src/workReviewContract.test.ts src/skills.test.ts` → **126 tests, 126 pass, 0 fail, 0 cancelled, 0 skipped**.
+`npm run typecheck` — пройшло, без помилок (exit 0).
+`npm test` — **472 tests, 472 pass, 0 fail, 0 cancelled, 0 skipped** (458 + 14). Регресії #31/#32 (`trelloMutationLedger`, `turnCorrelation`, `turnCompletion`, `djonikClient`) не змінювались і проходять.
+`git diff --check` — exit 0 (лише стандартні git-попередження LF→CRLF).
+**Перевірка «зубатості»:** 10 мутацій (видалення по одному нового правила Skill — «looking, not asking», «Never ask first», «only after that discovery», застереження про Memory; додавання жорстко закодованого імені проєкту; зламана логіка нульового виявлення; зламане правило «уточнення після єдиного збігу»; вбудований `read`, зарахований як виявлення; втрата N/A для точної ідентичності; пониження R16 до critical) — **усі 10 виявлені**; файли відновлено побайтно (`cmp`).
+
+`git status --short`:
+
+```
+ M .claude/skills/work-review/SKILL.md
+ M docs/16_ISSUE_29_WORK_REVIEW_DISCOVERY_REPORT.md
+ M docs/20_ISSUE_29_WORK_REVIEW_BEHAVIORAL_RUBRIC.md
+ M src/workReviewContract.test.ts
+ M src/workReviewRubric.ts
+```
+
+`HEAD` = `1cb5b2441a10ffc10ebf4764b247c14bd99af63e`; без commit/push. (Зауваження: §29 з попереднього кроку теж був незакомічений — він входить у зміну `docs/16`.)

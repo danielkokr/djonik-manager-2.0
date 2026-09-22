@@ -61,7 +61,7 @@ If no accepted plan is available, or it looks cancelled, superseded or of unclea
 
 ## Project scope
 
-Keep a single-project review inside that project. Look for a board first; if none matches, read the shared board's labels and cards and, if exactly one label matches, scope to cards carrying it and say which label you used. Cards of other projects are not named, counted or flagged, even when urgent-looking; do not add «а ще в іншому проєкті…». If more than one board or label plausibly matches, or none does, ask one short clarification. Do not hard-code project names. If Daniel asks across several projects, keep each project's facts separate. A label's use count can include archived cards.
+Keep a single-project review inside that project. Resolve the named project by looking, not by asking: search or read the boards first; if none matches, read the shared board's labels and cards and, if exactly one label matches, scope to cards carrying it and say which label you used. Ask one short clarification only after that discovery, when several boards or labels plausibly match or none does. Never ask first, and not merely because Memory does not say where the project lives. Cards of other projects are not named, counted or flagged, even when urgent-looking; do not add «а ще в іншому проєкті…». Do not hard-code project names. If Daniel asks across several projects, keep each project's facts separate. A label's use count can include archived cards.
 
 ## Shape of the answer
 
