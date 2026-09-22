@@ -11,7 +11,7 @@ Before implementation:
 3. `docs/02_DEVELOPMENT_ROADMAP.md`
 4. `docs/03_TARGET_CAPABILITIES.md`
 5. `CLAUDE.md`
-6. `docs/17_DJONIK_V1_ARCHITECTURE_AUDIT.md` (accepted decisions, evidence and handoff) and `docs/21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md` (#29 supersession, work-history evidence decision)
+6. `docs/17_DJONIK_V1_ARCHITECTURE_AUDIT.md` (accepted decisions, evidence and handoff), `docs/21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md` (#29 supersession, work-history evidence decision) and `docs/30_RUNTIME_EVENT_LOOP_AUDIT.md` (custom-tool continuation runtime decision, #40)
 7. `docs/04_MANAGED_AGENT_TOKEN_COST_AUDIT.md` §27 (current validation policy)
 8. the GitHub issue that roadmap marks as canonical NOW and its latest comments.
 
@@ -32,6 +32,15 @@ Do not determine NOW from issue number, date, memory or another conversation.
 - External writes must be bounded and verified.
 - Do not expose unrestricted low-level APIs where a semantic tool can be used.
 - Do not prebuild speculative Skills, subagents or integrations.
+
+## Runtime reliability — custom tools
+
+Canonical rule: `docs/01_CLAUDE_NATIVE_ARCHITECTURE.md` §13 (evidence: `docs/30`).
+
+- A repeated `session.status_idle{requires_action}` is never permission to execute the same `custom_tool_use_id` again; custom-tool lifecycle is tracked per provider event id.
+- Test duplicate/repeated status delivery offline before any live validation.
+- Do not add a side-effecting custom tool without an idempotency strategy (target-enforced key or durable intent) and postcondition verification.
+- Do not hide generic runtime fixes inside a product capability issue. When a measured failure moves below the product layer, create or promote a bounded reliability issue instead of endlessly hardening prompts or renderers.
 
 ## Scope discipline
 

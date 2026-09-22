@@ -189,6 +189,14 @@ The initial product does not require Neon, a custom vector store, a custom conve
 
 Add infrastructure only after a concrete capability, correctness, scalability or observability need is demonstrated.
 
+**Conversational PM, not a deterministic chatbot (2026-09-22).** Claude stays free to interpret natural language, reason, make PM judgements, phrase answers naturally and keep useful durable context through the accepted Memory mechanisms. Deterministic application code is used only for measured hard boundaries:
+- external side-effect safety and idempotency;
+- verified writes;
+- exact, externally authoritative factual blocks where model rewriting has measured failures (e.g. #28 Project Health relay, #36 work-history facts);
+- transport/runtime correctness (e.g. #32 turn completion, #40 custom-tool continuation).
+
+Normal PM conversation does not become templates or deterministic phrase routing. Freedom in judgement and wording is desirable; freedom to invent hard facts or duplicate external actions is not.
+
 ## 12. Legacy relationship
 
 `danielkokr/djonik-manager` is a reference archive for product learnings, failure modes and previously explored capabilities.

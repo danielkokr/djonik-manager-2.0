@@ -10,7 +10,9 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 Foundations 1–12, studio intake Wave B and Project Health #28 retain their historical acceptance. #29 discovery/source work was accepted but its production attach failed live behavior; recorded Agent v21 rolled back to the accepted v19 configuration, with PH specialist v4. Work-review is retained remotely but unattached and unaccepted. An already-serving Telegram Session has not been attested by this audit.
 
-**Update 2026-09-22 — #29 superseded (Product Owner decision; [docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)).** #29 asked a current-state-only review to answer a weekly question the connected tool surface cannot evidence. The second production-like Haiku diagnostic (`docs/16` §31) failed on due-time rendering, concision and a vague actor claim, after correct discovery. The architecture audit found that Trello itself records an authoritative action history (REST board actions: list moves, archive, `dueComplete`, time, actor) that only the official Trello MCP does not yet expose. #29 is closed as superseded; its discovery, rubric and live evidence remain historical record. The zero-inference spike returned GO ([docs/23](23_WORK_HISTORY_SPIKE_REPORT.md)) and canonical NOW is [#36](https://github.com/danielkokr/djonik-manager-2.0/issues/36). GitHub texts: [docs/22](22_ISSUE_29_SUPERSESSION_DRAFTS.md).
+**Update 2026-09-22 — #29 superseded (Product Owner decision; [docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)).** #29 asked a current-state-only review to answer a weekly question the connected tool surface cannot evidence. The second production-like Haiku diagnostic (`docs/16` §31) failed on due-time rendering, concision and a vague actor claim, after correct discovery. The architecture audit found that Trello itself records an authoritative action history (REST board actions: list moves, archive, `dueComplete`, time, actor) that only the official Trello MCP does not yet expose. #29 is closed as superseded; its discovery, rubric and live evidence remain historical record. The zero-inference spike returned GO ([docs/23](23_WORK_HISTORY_SPIKE_REPORT.md)) and canonical NOW became [#36](https://github.com/danielkokr/djonik-manager-2.0/issues/36) (now blocked by #40; see the runtime-audit update below). GitHub texts: [docs/22](22_ISSUE_29_SUPERSESSION_DRAFTS.md).
+
+**Update 2026-09-22 — runtime audit; canonical NOW is #40 (Product Owner decision; [docs/30](30_RUNTIME_EVENT_LOOP_AUDIT.md)).** The latest #36 live diagnostic ([docs/29](29_ISSUE_36_FACTUAL_RELAY_LIVE_DIAGNOSTIC.md)) proved the deterministic Variant-B work-history facts correct and the visible reply beginning with them exactly. It also exposed a generic runtime defect below the product layer: the client executed the same custom-tool event twice after two legitimate `session.status_idle{requires_action}` events named the same unresolved `custom_tool_use_id`. The independent audit (decision **B — refactor the custom-tool continuation abstraction**) keeps the persistent stream / FIFO / anchoring architecture and requires a per-id continuation lifecycle ([docs/01](01_CLAUDE_NATIVE_ARCHITECTURE.md) §13). That runtime problem is owned only by [#40](https://github.com/danielkokr/djonik-manager-2.0/issues/40), which is now the sole NOW item; #36 is blocked by it.
 
 The [architecture audit](17_DJONIK_V1_ARCHITECTURE_AUDIT.md) exposes uncovered deterministic verification/completion/relay cases despite 330 passing baseline tests. These are reachable offline failures, not a claim of production frequency. Fix those boundaries before further review-model experimentation. #18 conditional fresh-read enforcement, due-clearing provider limitations, disabled Calendar and previously accepted intake caveats remain unchanged.
 
@@ -53,15 +55,32 @@ Verified outcome:
 | 1 | [#31 — Trello mutation verification](https://github.com/danielkokr/djonik-manager-2.0/issues/31) | DONE |
 | 2 | [#32 — Turn completion and specialist results](https://github.com/danielkokr/djonik-manager-2.0/issues/32) | DONE |
 | ~~—~~ | ~~[#29 — Current-state review and ownership validation](https://github.com/danielkokr/djonik-manager-2.0/issues/29)~~ | Superseded 2026-09-22 by #36 ([docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)) |
-| 3 | **NOW — [#36 — Weekly work review from Trello action history](https://github.com/danielkokr/djonik-manager-2.0/issues/36)** | Source-first DONE (`e106a2e`, [docs/26](26_ISSUE_36_SOURCE_FIRST_IMPLEMENTATION_REPORT.md)); remaining: separately authorized isolated Haiku live gate (docs/04 §27); promotion via #33 |
-| 4 | [#37 — Project label on create + Memory hygiene](https://github.com/danielkokr/djonik-manager-2.0/issues/37) | Source-first may start in parallel with the #36 live gate; Memory diff needs Daniel's approval |
-| 5 | [#38 — Voice and Telegram UX](https://github.com/danielkokr/djonik-manager-2.0/issues/38) | After #37 source; brings the coordinator system prompt into `managed-agents/djonik.md` |
-| 6 | [#33 — Pinned release, always-on host, serving Session](https://github.com/danielkokr/djonik-manager-2.0/issues/33) | Promotes accepted #36/#37/#38 together; always-on adapter host and secrets (see #33 comments) |
-| 7 | [#34 — Commitments, waiting and follow-up](https://github.com/danielkokr/djonik-manager-2.0/issues/34) | After #33; accepted plan items keep Trello card ID/project; check dates feed #39 |
-| 8 | [#39 — Working rhythm: brief, Monday plan, Friday review, exception signals](https://github.com/danielkokr/djonik-manager-2.0/issues/39) | After #33 (host) and #34; design in [docs/25](25_PM_AGENT_BEHAVIOR_AUDIT.md) §5 and [docs/01](01_CLAUDE_NATIVE_ARCHITECTURE.md) §10 |
-| 9 | [#35 — Working-rhythm pilot (≈ two working weeks)](https://github.com/danielkokr/djonik-manager-2.0/issues/35) | After #39; Daniel decides what works and what to change next |
+| 3 | **NOW — [#40 — Idempotent Managed Agents custom-tool continuation by event id](https://github.com/danielkokr/djonik-manager-2.0/issues/40)** | Source-first, offline only; decision record [docs/30](30_RUNTIME_EVENT_LOOP_AUDIT.md); stop rules below |
+| 4 | [#36 — Weekly work review from Trello action history](https://github.com/danielkokr/djonik-manager-2.0/issues/36) | RESUMES after #40 source acceptance: exactly one separately authorized live diagnostic (docs/04 §27); stop rules below |
+| 5 | [#37 — Project label on create + Memory hygiene](https://github.com/danielkokr/djonik-manager-2.0/issues/37) | After #36 is accepted; Memory diff needs Daniel's approval |
+| 6 | [#38 — Voice and Telegram UX](https://github.com/danielkokr/djonik-manager-2.0/issues/38) | After #37 source; brings the coordinator system prompt into `managed-agents/djonik.md` |
+| 7 | [#33 — Pinned release, always-on host, serving Session](https://github.com/danielkokr/djonik-manager-2.0/issues/33) | Promotes the accepted #40 runtime revision together with accepted #36/#37/#38; always-on adapter host and secrets (see #33 comments) |
+| 8 | [#34 — Commitments, waiting and follow-up](https://github.com/danielkokr/djonik-manager-2.0/issues/34) | After #33; accepted plan items keep Trello card ID/project; check dates feed #39 |
+| 9 | [#39 — Working rhythm: brief, Monday plan, Friday review, exception signals](https://github.com/danielkokr/djonik-manager-2.0/issues/39) | Depends on #40; after #33 (host) and #34; design in [docs/25](25_PM_AGENT_BEHAVIOR_AUDIT.md) §5 and [docs/01](01_CLAUDE_NATIVE_ARCHITECTURE.md) §10 |
+| 10 | [#35 — Working-rhythm pilot (≈ two working weeks)](https://github.com/danielkokr/djonik-manager-2.0/issues/35) | After #39; Daniel decides what works and what to change next |
 
-Only one item is NOW. The next item starts when this roadmap is updated. Source-first work on #37 may overlap the #36 live gate because they touch different files; live runs still follow docs/04 §27 one at a time.
+Only one item is NOW. The next item starts when this roadmap is updated. There is no parallel source work: we intentionally return to one NOW item to reduce variables. Live runs follow docs/04 §27 one at a time.
+
+### Stop rules — #40 (NOW) and the post-#40 #36 diagnostic
+
+**#40:**
+- one principal implementation pass, plus at most one bounded follow-up after Product Lead review;
+- offline reproduction first: the exact docs/29 event sequence must fail on the pre-fix runtime before the fix;
+- no paid inference while implementing;
+- if the deterministic per-id lifecycle cannot close the exact reproduction inside that boundary, stop for architecture review — no ad-hoc guards.
+
+**#36 after #40 source acceptance:**
+- #36 product/source work is **not** redesigned while #40 is NOW; the runtime problem is owned only by #40;
+- one isolated live Session and one visible work-review turn (the real-provider smoke for #40 as well);
+- no return to renderer/prompt hardening, and no restoration of the old five-sample synthetic #36 matrix;
+- PASS → accept/close #36;
+- a new runtime semantic not covered by docs/30 → stop and architecture-review; do not start another remediation loop;
+- ordinary PM wording variation is not a hard factual failure.
 
 Scope promotion requires updating this roadmap; an open/closed issue or larger number never selects the next task by itself. Share later authorized smoke evidence where sufficient instead of duplicating paid runs. The current [validation policy](04_MANAGED_AGENT_TOKEN_COST_AUDIT.md#27-development--validation-spend-guardrail-issue-21) requires explicit budget, candidate isolation, full-turn admission reserve and stop reasons; this governance change authorizes no paid experiment.
 
@@ -400,9 +419,13 @@ Measured live validation changed the implementation direction:
 - **Wave C1 implementation, live acceptance and administrative closeout are COMPLETE.** #28 is closed as completed; capability order in `docs/03` is not execution order;
 - the accepted #18 same-turn fresh-read platform limitation is unchanged and remains an accepted platform limitation, not something this cutover fixes.
 
-### NOW — Wave C2: Weekly work review from Trello action history (#36)
+### NOW — Runtime reliability: idempotent Managed Agents custom-tool continuation by event id (#40)
 
-Canonical bounded issue: [#36](https://github.com/danielkokr/djonik-manager-2.0/issues/36). Read-only custom tool `trello_work_history` + deterministic digest (Kyiv week window, one net transition per card, noise rule, coverage, Kyiv formatting) + thin `work-review` Skill v2 narrated by the Haiku coordinator. Source first; live gate under docs/04 §27 needs separate authorization; production promotion only via #33. It is part of the working PM baseline (Product Owner decision 2026-09-22, docs/00). **Source-first DONE** at `e106a2e` ([docs/26](26_ISSUE_36_SOURCE_FIRST_IMPLEMENTATION_REPORT.md)): Trello REST digest, custom-tool continuation, Skill v2; 446 tests. Remaining: isolated Haiku live gate, then promotion via #33. Evidence: [docs/23](23_WORK_HISTORY_SPIKE_REPORT.md).
+Canonical bounded issue: [#40](https://github.com/danielkokr/djonik-manager-2.0/issues/40). Decision record: [docs/30](30_RUNTIME_EVENT_LOOP_AUDIT.md); architecture rule: [docs/01](01_CLAUDE_NATIVE_ARCHITECTURE.md) §13. Session-scoped per-`custom_tool_use_id` lifecycle (`OBSERVED → EXECUTING → RESULT_READY → SUBMITTED / SEND_UNKNOWN → RESOLVED`), cached results, resolution by result echo, per-id provenance for the #36 relay, plus the audit's bounded adjacent hardening (specialist thread idle is last-wins; same-id MCP replay does not overwrite the #31 ledger). Source-first and offline; stop rules above. Not implemented yet.
+
+### BLOCKED BY #40 — Wave C2: Weekly work review from Trello action history (#36)
+
+Canonical bounded issue: [#36](https://github.com/danielkokr/djonik-manager-2.0/issues/36). Read-only custom tool `trello_work_history` computes the facts deterministically (Kyiv week window, one net transition per card, noise rule, coverage, Kyiv formatting) and renders the Variant-B factual answer; the thin client exact-relays a successful current-turn `answer_text` by event provenance, and the Haiku coordinator adds a separate `PM-висновок` ([docs/28](28_ISSUE_36_FACTUAL_OUTPUT_BOUNDARY_REPORT.md), [docs/01](01_CLAUDE_NATIVE_ARCHITECTURE.md)). Part of the working PM baseline (Product Owner decision 2026-09-22, docs/00). Source history: [docs/26](26_ISSUE_36_SOURCE_FIRST_IMPLEMENTATION_REPORT.md) (source-first `e106a2e`), [docs/27](27_ISSUE_36_LIVE_VALIDATION_REPORT.md) (narration candidates failed), [docs/28](28_ISSUE_36_FACTUAL_OUTPUT_BOUNDARY_REPORT.md) (factual relay `d9b3496`), [docs/29](29_ISSUE_36_FACTUAL_RELAY_LIVE_DIAGNOSTIC.md) (live diagnostic: facts and exact prefix correct; duplicate custom-tool execution → #40). Remaining: after #40 source acceptance, exactly one separately authorized live diagnostic (stop rules above), then promotion via #33. Evidence: [docs/23](23_WORK_HISTORY_SPIKE_REPORT.md).
 
 ### DONE — Wave C2 spike: Trello work-history evidence (GO, 2026-09-22)
 
@@ -418,7 +441,7 @@ Bounded goal: **establish, with zero model inference and zero mutation, whether 
 
 **Spike result 2026-09-22 ([docs/23](23_WORK_HISTORY_SPIKE_REPORT.md)): GO — technical criteria passed and the Product Owner judged the offline digest useful.** 508 board actions since board creation (08.09), one page, 6 GETs, $0. All four known Extract Done cards show timed Done transitions, including reopen; `Брендбук` due confirmed as Fri 25.09 18:00 Kyiv. Limits: every action is attributed to the same Trello account (Djonik's MCP writes are not distinguishable from Daniel's), validation test cards add noise, and the digest must show one net transition per card per window. Follow-ups after GO (both now scoped together in #36):
 1. read-only custom tool `trello_work_history` + deterministic digest (window, transitions, counts, coverage, Kyiv formatting) and client handling of custom tool calls consistent with #32;
-2. thin `work-review` Skill v2 over that tool, then one isolated Haiku diagnostic and the §27 five-plus-one gate.
+2. thin `work-review` Skill v2 over that tool, then one isolated Haiku diagnostic and the §27 five-plus-one gate (the five-plus-one gate is superseded for #36 by the post-#40 single-diagnostic stop rule above).
 
 Boundaries: no Managed Agent/Skill/Memory change, no paid Session, no Trello mutation, no event store, webhooks, snapshot store or episodic journal in this spike. After GO the Product Owner added the weekly transitions review to the working PM baseline (2026-09-22).
 

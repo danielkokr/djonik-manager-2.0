@@ -104,7 +104,15 @@ Djonik should eventually answer evidence-based questions such as:
 
 Use the simplest reliable evidence source available rather than creating an event platform prematurely.
 
-Evidence order ([docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)): the owning system's own history (Trello action log) → accepted plan with card identity from Memory → current state. Dates, week windows, counts and coverage are computed deterministically; the model narrates. Djonik does not maintain its own event log for Trello work. Work outside Trello (calls, sent designs) is a later, measured candidate for explicit user-stated journal entries in Memory.
+Evidence order ([docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)): the owning system's own history (Trello action log) → accepted plan with card identity from Memory → current state.
+
+- Trello action history owns the evidence.
+- Code computes windows, counts, categories and coverage.
+- For the factual review block, code renders and exact-relays the authoritative facts where that boundary is required (#36, [docs/28](28_ISSUE_36_FACTUAL_OUTPUT_BOUNDARY_REPORT.md)).
+- Claude remains free to add a clearly separate PM judgement/conclusion and owns normal conversation.
+- This is not a general rule that all PM outputs become deterministic ([docs/00](00_DJONIK_PRODUCT_CONTRACT.md) §11).
+
+Djonik does not maintain its own event log for Trello work. Work outside Trello (calls, sent designs) is a later, measured candidate for explicit user-stated journal entries in Memory.
 
 ## 9. Proactive PM
 
