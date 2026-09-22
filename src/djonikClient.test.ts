@@ -322,6 +322,32 @@ test("connectToDjonik attaches the Djonik Memory Store and Vault at session crea
   session.close();
 });
 
+test("connectToDjonik supports a read-only Memory mount and whole-Session validation budget", async () => {
+  const { client, createCalls } = createFakeClient([IDLE]);
+  const session = await connectToDjonik(
+    client,
+    "agent_validation",
+    "env_x",
+    "memstore_x",
+    "vlt_x",
+    undefined,
+    undefined,
+    "unknown",
+    undefined,
+    {
+      memoryAccess: "read_only",
+      maxListCostUsdCents: "80",
+    },
+  );
+
+  const created = createCalls[0] as { resources: Array<{ access: string }>; budget: unknown; title?: unknown; metadata?: unknown };
+  assert.equal(created.resources[0]?.access, "read_only");
+  assert.deepEqual(created.budget, { type: "limit", max_list_cost: { amount: "80", currency: "USD" } });
+  assert.equal(created.title, undefined);
+  assert.equal(created.metadata, undefined);
+  session.close();
+});
+
 test("a retrying session.error does not abort a turn that goes on to succeed", async () => {
   const { client } = createFakeClient([retryingError(), AGENT_MESSAGE, IDLE]);
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");

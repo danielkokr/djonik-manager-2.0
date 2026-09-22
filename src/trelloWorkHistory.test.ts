@@ -55,26 +55,77 @@ test("#36 collapses rapid moves, preserves reopen/re-Done, isolates current proj
     { pagesRead: 2, truncated: false, oldestActionReached: true },
     NOW,
   );
-  assert.deepEqual(digest.counts, { reached_done: 2, returned_from_done: 1, created: 0, archived: 0, moved: 0 });
-  assert.equal(digest.reached_done?.length, 1, "one net card item despite two Done entries");
-  assert.equal(digest.reached_done?.[0].occurrences, 2);
-  assert.equal(digest.reached_done?.[0].transition, "In progress → Done");
-  assert.equal(digest.returned_from_done?.[0].card, "Анонімна картка");
-  assert.equal(digest.reached_done?.[0].due, "пт 27.03, 18:00");
+  assert.equal(digest.reached_done?.total, 2, "reached-Done total counts event occurrences, not net cards");
+  assert.equal(digest.reached_done?.total_kind, "event_occurrences");
+  assert.equal(digest.reached_done?.shown, 2);
+  assert.equal(digest.reached_done?.omitted, 0);
+  assert.equal(digest.reached_done?.items.length, 1, "one net card item represents two Done entries");
+  assert.equal(digest.reached_done?.items[0].occurrences, 2);
+  assert.equal(digest.reached_done?.items[0].transition, "In progress → Done");
+  assert.equal(digest.returned_from_done?.total, 1);
+  assert.equal(digest.returned_from_done?.total_kind, "event_occurrences");
+  assert.equal(digest.returned_from_done?.items[0].card, "Анонімна картка");
+  assert.equal(digest.reached_done?.items[0].due, "пт 27.03, 18:00");
   assert.equal(digest.coverage.pagesRead, 2);
   assert.doesNotMatch(JSON.stringify(digest), /card_extract|lastActivityAt|""/);
   const board = buildWorkHistoryDigest({ window: { kind: "this_week" }, scope: { kind: "board" } }, history, cards, { pagesRead: 1, truncated: false, oldestActionReached: true }, NOW);
-  assert.equal(board.counts.reached_done, 3, "whole-board scope includes the other labelled card");
+  assert.equal(board.reached_done?.total, 3, "whole-board scope includes the other labelled card");
 });
 
 test("#36 concise digest limits each named category to five items and formats Kyiv actions", () => {
   const manyCards = Array.from({ length: 6 }, (_, index) => ({ id: `id_${index}`, name: `Картка ${index}`, labels: [{ name: "Extract" }] }));
   const manyActions = manyCards.map((card, index) => action(`a_${index}`, `2026-03-23T0${index}:00:00Z`, "updateCard", { card, listBefore: { name: "In progress" }, listAfter: { name: "Done" } }));
   const digest = buildWorkHistoryDigest({ window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" } }, manyActions, manyCards, { pagesRead: 1, truncated: true, oldestActionReached: false }, NOW);
-  assert.equal(digest.counts.reached_done, 6);
-  assert.equal(digest.reached_done?.length, 5);
+  assert.equal(digest.reached_done?.total, 6);
+  assert.equal(digest.reached_done?.shown, 5);
+  assert.equal(digest.reached_done?.omitted, 1);
+  assert.equal(digest.reached_done?.items.length, 5);
   assert.equal(digest.coverage.truncated, true);
   assert.equal(formatKyivDateTime("2026-03-23T08:00:00Z"), "пн 23.03, 10:00");
+});
+
+test("#36 regression: concise project digest makes seven moved cards and five named examples unambiguous", () => {
+  const movedCards = Array.from({ length: 7 }, (_, index) => ({ id: `moved_${index}`, name: `Рух ${index + 1}`, labels: [{ name: "Extract" }] }));
+  const movedActions = movedCards.map((card, index) =>
+    action(`move_${index}`, `2026-03-23T${String(index + 1).padStart(2, "0")}:00:00Z`, "updateCard", {
+      card,
+      listBefore: { name: "Backlog" },
+      listAfter: { name: "This week" },
+    }),
+  );
+  const digest = buildWorkHistoryDigest(
+    { window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" }, response_format: "concise" },
+    movedActions,
+    movedCards,
+    { pagesRead: 1, truncated: false, oldestActionReached: true },
+    NOW,
+  );
+  assert.equal(digest.moved?.total, 7);
+  assert.equal(digest.moved?.total_kind, "cards");
+  assert.equal(digest.moved?.shown, 5);
+  assert.equal(digest.moved?.omitted, 2);
+  assert.equal(digest.moved?.items.length, 5);
+  assert.equal(digest.reached_done, undefined, "empty categories stay absent");
+  assert.doesNotMatch(JSON.stringify(digest), /moved_\d|lastActivityAt/);
+});
+
+test("#36 detailed digest retains every item with authoritative total and no omitted subset", () => {
+  const manyCards = Array.from({ length: 6 }, (_, index) => ({ id: `detail_${index}`, name: `Деталь ${index}`, labels: [{ name: "Extract" }] }));
+  const manyActions = manyCards.map((card, index) =>
+    action(`detail_action_${index}`, `2026-03-23T${String(index + 1).padStart(2, "0")}:00:00Z`, "updateCard", {
+      card,
+      listBefore: { name: "Backlog" },
+      listAfter: { name: "This week" },
+    }),
+  );
+  const digest = buildWorkHistoryDigest(
+    { window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" }, response_format: "detailed" },
+    manyActions,
+    manyCards,
+    { pagesRead: 1, truncated: false, oldestActionReached: true },
+    NOW,
+  );
+  assert.deepEqual(digest.moved && { total: digest.moved.total, shown: digest.moved.shown, omitted: digest.moved.omitted, items: digest.moved.items.length }, { total: 6, shown: 6, omitted: 0, items: 6 });
 });
 
 test("#36 reports ordinary creation and archival independently when they are not same-window noise", () => {
@@ -90,10 +141,10 @@ test("#36 reports ordinary creation and archival independently when they are not
     { pagesRead: 1, truncated: false, oldestActionReached: true },
     NOW,
   );
-  assert.equal(digest.counts.created, 1);
-  assert.equal(digest.counts.archived, 1);
-  assert.equal(digest.created?.[0].card, "Нова картка");
-  assert.equal(digest.archived?.[0].card, "Архівна картка");
+  assert.deepEqual(digest.created && { total: digest.created.total, shown: digest.created.shown, omitted: digest.created.omitted, total_kind: digest.created.total_kind }, { total: 1, shown: 1, omitted: 0, total_kind: "cards" });
+  assert.equal(digest.archived?.total, 1);
+  assert.equal(digest.created?.items[0].card, "Нова картка");
+  assert.equal(digest.archived?.items[0].card, "Архівна картка");
 });
 
 test("#36 read-only REST paging uses since/before and reports coverage without credentials in requests or errors", async () => {

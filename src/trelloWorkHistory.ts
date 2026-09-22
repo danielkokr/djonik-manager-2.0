@@ -65,20 +65,33 @@ export interface WorkHistoryItem {
   card: string;
   at?: string;
   transition?: string;
+  /** Number of same-kind events represented by this card when it is greater than one. */
   occurrences?: number;
   due?: string;
+}
+
+/**
+ * A self-contained model-facing category. `total` is always authoritative;
+ * `items` are only the named representatives. For event categories, one item
+ * may represent several occurrences, as declared by its `occurrences` field.
+ */
+export interface WorkHistoryCategory {
+  total: number;
+  total_kind: "event_occurrences" | "cards";
+  shown: number;
+  omitted: number;
+  items: WorkHistoryItem[];
 }
 
 export interface WorkHistoryDigest {
   window: { from: string; to: string; label: string };
   scope: { kind: "board" } | { kind: "project"; label: string };
   coverage: HistoryCoverage;
-  counts: { reached_done: number; returned_from_done: number; created: number; archived: number; moved: number };
-  reached_done?: WorkHistoryItem[];
-  returned_from_done?: WorkHistoryItem[];
-  created?: WorkHistoryItem[];
-  archived?: WorkHistoryItem[];
-  moved?: WorkHistoryItem[];
+  reached_done?: WorkHistoryCategory;
+  returned_from_done?: WorkHistoryCategory;
+  created?: WorkHistoryCategory;
+  archived?: WorkHistoryCategory;
+  moved?: WorkHistoryCategory;
 }
 
 export const TRELLO_WORK_HISTORY_TOOL = {
@@ -214,9 +227,16 @@ function isDone(name: string | undefined): boolean {
   return name?.trim().toLocaleLowerCase("uk-UA") === "done";
 }
 
-function limitItems(items: WorkHistoryItem[], format: WorkHistoryFormat): WorkHistoryItem[] | undefined {
+function categoryFor(
+  items: WorkHistoryItem[],
+  total_kind: WorkHistoryCategory["total_kind"],
+  format: WorkHistoryFormat,
+): WorkHistoryCategory | undefined {
   if (items.length === 0) return undefined;
-  return format === "concise" ? items.slice(0, 5) : items;
+  const shownItems = format === "concise" ? items.slice(0, 5) : items;
+  const total = total_kind === "event_occurrences" ? items.reduce((count, item) => count + (item.occurrences ?? 1), 0) : items.length;
+  const shown = total_kind === "event_occurrences" ? shownItems.reduce((count, item) => count + (item.occurrences ?? 1), 0) : shownItems.length;
+  return { total, total_kind, shown, omitted: total - shown, items: shownItems };
 }
 
 interface CardFacts {
@@ -299,20 +319,17 @@ export function buildWorkHistoryDigest(
     window: { from: formatKyivDateTime(window.from), to: formatKyivDateTime(window.to), label: window.label },
     scope: input.scope.kind === "board" ? { kind: "board" } : { kind: "project", label: input.scope.label },
     coverage,
-    counts: {
-      reached_done: reachedDone.reduce((count, item) => count + (item.occurrences ?? 1), 0),
-      returned_from_done: returnedFromDone.reduce((count, item) => count + (item.occurrences ?? 1), 0),
-      created: created.length,
-      archived: archived.length,
-      moved: moved.length,
-    },
   };
-  const sections: Array<[keyof Pick<WorkHistoryDigest, "reached_done" | "returned_from_done" | "created" | "archived" | "moved">, WorkHistoryItem[]]> = [
-    ["reached_done", reachedDone], ["returned_from_done", returnedFromDone], ["created", created], ["archived", archived], ["moved", moved],
+  const sections: Array<[keyof Pick<WorkHistoryDigest, "reached_done" | "returned_from_done" | "created" | "archived" | "moved">, WorkHistoryItem[], WorkHistoryCategory["total_kind"]]> = [
+    ["reached_done", reachedDone, "event_occurrences"],
+    ["returned_from_done", returnedFromDone, "event_occurrences"],
+    ["created", created, "cards"],
+    ["archived", archived, "cards"],
+    ["moved", moved, "cards"],
   ];
-  for (const [key, items] of sections) {
-    const limited = limitItems(items, format);
-    if (limited) digest[key] = limited;
+  for (const [key, items, totalKind] of sections) {
+    const category = categoryFor(items, totalKind, format);
+    if (category) digest[key] = category;
   }
   return digest;
 }

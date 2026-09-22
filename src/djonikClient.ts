@@ -715,6 +715,14 @@ type SendableEvent = { type: "user.message"; content: SendableContentBlock[] };
 /** Injected in local tests only; production uses the bounded environment-backed executor. */
 export type DjonikCustomToolExecutor = (input: unknown) => Promise<CustomToolExecutionResult>;
 
+/** Narrow Session-creation controls for isolated validation. Production callers retain the defaults. */
+export interface DjonikSessionOptions {
+  /** Validation may inspect durable context without granting the candidate a Memory write path. */
+  memoryAccess?: "read_write" | "read_only";
+  /** Optional whole-Session public-list-cost backstop, expressed as USD cents. */
+  maxListCostUsdCents?: string;
+}
+
 /** How one submitted `user.message` ended (#32). Only `end_turn` is a completed turn. */
 type TurnEnd =
   | { completed: true; reply: string }
@@ -749,8 +757,9 @@ function submittedUserEventId(response: unknown): string | null {
  * message history.
  *
  * The Djonik Memory Store is attached as a `memory_store` session resource
- * with `read_write` access, since memory stores can only be attached at
- * session creation time (not added to a running session).
+ * with `read_write` access by default, since memory stores can only be attached at
+ * session creation time (not added to a running session). An isolated validation may
+ * explicitly use a `read_only` mount without changing this production default.
  *
  * The Djonik Personal Vault is passed via `vault_ids` so the session's
  * attached MCP servers (Trello, Google Calendar) can authenticate; without
@@ -767,16 +776,21 @@ export async function connectToDjonik(
   onTurnTelemetry?: (telemetry: DjonikTurnTelemetry) => void,
   turnSource: DjonikTurnSource = "unknown",
   customToolExecutor: DjonikCustomToolExecutor = executeTrelloWorkHistoryFromEnvironment,
+  sessionOptions: DjonikSessionOptions = {},
 ): Promise<DjonikSessionHandle> {
+  const memoryAccess = sessionOptions.memoryAccess ?? "read_write";
   const session = await client.beta.sessions.create({
     agent: agentId,
     environment_id: environmentId,
     vault_ids: [vaultId],
+    ...(sessionOptions.maxListCostUsdCents === undefined
+      ? {}
+      : { budget: { type: "limit" as const, max_list_cost: { amount: sessionOptions.maxListCostUsdCents, currency: "USD" as const } } }),
     resources: [
       {
         type: "memory_store",
         memory_store_id: memoryStoreId,
-        access: "read_write",
+        access: memoryAccess,
         instructions: DJONIK_MEMORY_INSTRUCTIONS,
       },
     ],
