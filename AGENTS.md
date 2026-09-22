@@ -11,7 +11,7 @@ Before implementation:
 3. `docs/02_DEVELOPMENT_ROADMAP.md`
 4. `docs/03_TARGET_CAPABILITIES.md`
 5. `CLAUDE.md`
-6. `docs/17_DJONIK_V1_ARCHITECTURE_AUDIT.md` (accepted decisions, evidence and handoff)
+6. `docs/17_DJONIK_V1_ARCHITECTURE_AUDIT.md` (accepted decisions, evidence and handoff) and `docs/21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md` (#29 supersession, work-history evidence decision)
 7. `docs/04_MANAGED_AGENT_TOKEN_COST_AUDIT.md` §27 (current validation policy)
 8. the GitHub issue that roadmap marks as canonical NOW and its latest comments.
 

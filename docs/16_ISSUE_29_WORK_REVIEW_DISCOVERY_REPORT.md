@@ -1271,3 +1271,14 @@ Critical dimension failed: **yes (R04)**. Major dimensions also failed: R09 and 
 ```
 
 No commit or push is authorized.
+
+## 32. Закриття напряму #29 — замінено spike-ом історії дій Trello (2026-09-22)
+
+> **Рішення Product Owner:** #29 замінено. Підстава — архітектурний аудит [docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md). §1–§31 збережено без змін як історичний запис.
+
+- **Чому.** Контракт #29 обіцяв огляд поточного стану як відповідь на питання «що я зробив цього тижня», хоча доступні інструменти не мають потрібних даних. Три живі прогони (§26 FAIL, §29 INCONCLUSIVE, §31 FAIL) виміряли переважно обчислювальні збої: часовий пояс, лічильники, порядок із `lastActivityAt`, дамп.
+- **Уточнення до §0/§17.** Висновок «history-tool не існує в провайдера» правильний для **офіційного Trello MCP** (Activity & History — у розділі «What's coming»). Сам **Trello** веде авторитетний журнал дій, доступний через REST: `GET /1/boards/{id}/actions` з `filter`, `since`/`before`, `limit` ≤ 1000, `page`. У `updateCard` є `data.old` для `idList`/`closed`/`dueComplete`, плюс час і автор.
+- **Що далі.** Нуль-вартісний spike перевіряє журнал дій для дошки Djonik на відомих картках Extract, глибину зберігання історії і корисність детермінованого дайджесту для Daniel (docs/02, NOW). Якщо GO: read-only інструмент `trello_work_history` і тонкий Skill v2. Якщо NO-GO: work-review не входить у v1. **Результат (docs/23): GO**; реалізація — [#36](https://github.com/danielkokr/djonik-manager-2.0/issues/36). #29 закрито як superseded.
+- **Стан ресурсів без змін.** Production v21 без `work-review`; PH specialist v4; віддалений Skill `work-review` (latest `skver_01DKVpMwAE5JGDg2NqnGbuqh`) не приєднаний, нових синхронізацій немає. Тимчасовий кандидат `agent_0124tMaz4XRhq9cLNVp1iBuz` v2 і його Session лишаються ізольованими; їх архівація — окрема дія, лише за авторизацією.
+- **Що перевикористовується.** Рубрик docs/20 (R01–R03, R05, R11, R15) — як регресії для майбутнього інструмента. R04, R07, R08 переходять у детерміновані тести дайджесту.
+- **Цей запис** не запускав inference, не змінював GitHub, Agent, Skill, Memory чи Trello.

@@ -8,7 +8,7 @@
 
 Recorded Agent v21 is rollback-equivalent to accepted v19; PH specialist remains v4. This is not an attestation of an already-running Telegram Session. Its model/system/Skills are resolved at creation; an Agent update does not automatically change it. #33 will pin accepted Skill versions and verify the actual serving tuple at a completed-turn transition, without replaying external mutations.
 
-#29 now simplifies current-state review and validates ownership in isolation after #31/#32. Haiku remains the coordinator; a bounded extension of the existing read-only Sonnet role is a candidate, not an accepted configuration. No new production specialist is authorized. Source text checks do not prove model behavior.
+~~#29 now simplifies current-state review and validates ownership in isolation after #31/#32.~~ **Superseded 2026-09-22 ([docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)):** work history is read from the owning system, not reconstructed by the model or stored by Djonik. Trello's action history is the evidence source; if the spike is GO, a single read-only custom tool returns a deterministic digest (Kyiv week window, transitions, counts, coverage, local formatting) and the Haiku coordinator narrates it. No event store, webhook pipeline, snapshot store or episodic journal; no Sonnet ownership change without measured need. No new production specialist is authorized. Source text checks do not prove model behavior.
 
 ## 1. Target shape
 

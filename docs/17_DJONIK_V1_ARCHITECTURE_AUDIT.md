@@ -116,6 +116,8 @@ console.log(JSON.stringify({label:'R7',actual:resolveProjectHealthSpecialistName
 
 ## 4. Current-state review and model ownership
 
+> **Superseded 2026-09-22 by [docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md).** Two further Haiku diagnostics (`docs/16` §29 INCONCLUSIVE, §31 FAIL) confirmed that the remaining failures were computation/formatting/selection over data that cannot answer the weekly question. The "missing action history" is missing only from the Trello MCP; Trello's REST action log records it. The next step is a zero-inference spike on that log, not an ownership comparison. The text below is preserved as the 2026-09-21 decision.
+
 #29 must simplify the promised output and validate capability ownership after #31/#32. Do not pay to rediscover missing action history or add another blanket prompt-hardening round as the assumed fix.
 
 Fresh current Done/list/closed/dueComplete state is not a completion timeline. Treat conflicting signals and incomplete query coverage explicitly. lastActivityAt is not progress, actor, move, reopen or completion evidence. Compare accepted plan identity with current evidence only when the match is clear; no “completed this week” from current state alone. Useful concise facts can stand without a forced PM takeaway.
@@ -133,7 +135,7 @@ Align weekly-planning semantics in that issue: current source labels due-this-we
 After v1, consider only with measured need and a separate bounded issue:
 
 - **Proactive PM:** native Scheduled Deployments first, after checking workspace availability. A thin delivery boundary handles SEND/SILENT, run/outcome deduplication, snooze/resolution and ambiguous-send recovery. No blind retry after uncertain delivery. Share tested finalization with scheduled execution, which bypasses connectToDjonik. Delivery metadata is not a history database. Native schedule jitter up to nine minutes means it is unsuitable for exact-minute promises.
-- **History observations:** only if current-state review is insufficient in actual use, try one-project event-driven accepted-plan/review observations in native Memory with timestamps, source and explicit partial coverage. Differences between observations are not proof of intervening transitions. No periodic checkpoint store by default.
+- **History observations:** only if current-state review is insufficient in actual use, try one-project event-driven accepted-plan/review observations in native Memory with timestamps, source and explicit partial coverage. Differences between observations are not proof of intervening transitions. No periodic checkpoint store by default. *(Amended 2026-09-22, [docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md): the first history step is reading Trello's own action log through one read-only tool; Memory observations are reserved for work outside Trello and only after #35 shows the need.)*
 - **Calendar:** only when a measured planning/scheduling need warrants the bounded integration; currently disabled.
 - **More specialists:** only after a measured benefit; no roster expansion merely because it exists.
 
@@ -146,7 +148,7 @@ Canonical execution state is [docs/02](02_DEVELOPMENT_ROADMAP.md), not this hist
 | [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) | This governance handoff | PO-authorized docs/issues change |
 | [#31](https://github.com/danielkokr/djonik-manager-2.0/issues/31) | Per-mutation identity/result verification | Governance docs available |
 | [#32](https://github.com/danielkokr/djonik-manager-2.0/issues/32) | Turn completion/correlation and safe specialist composition | #31 source fixes |
-| [#29](https://github.com/danielkokr/djonik-manager-2.0/issues/29) | Current-state review contract and isolated ownership validation | #31/#32; declared live gate |
+| [#29](https://github.com/danielkokr/djonik-manager-2.0/issues/29) | Current-state review contract and isolated ownership validation — **superseded 2026-09-22** by the Trello work-history spike (see docs/02) | #31/#32; declared live gate |
 | [#33](https://github.com/danielkokr/djonik-manager-2.0/issues/33) | Pin accepted tuple and attest serving Telegram Session | Preparation may precede #29; promotion follows accepted candidate |
 | [#34](https://github.com/danielkokr/djonik-manager-2.0/issues/34) | Conversational commitment/waiting/follow-up lifecycle | #33 |
 | [#35](https://github.com/danielkokr/djonik-manager-2.0/issues/35) | Working-week pilot and v1 accept/hold decision | All required capability/reliability gates |

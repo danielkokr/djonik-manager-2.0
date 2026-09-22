@@ -10,6 +10,8 @@ Build Djonik as a Claude-native conversational PM, adding one working capability
 
 Foundations 1–12, studio intake Wave B and Project Health #28 retain their historical acceptance. #29 discovery/source work was accepted but its production attach failed live behavior; recorded Agent v21 rolled back to the accepted v19 configuration, with PH specialist v4. Work-review is retained remotely but unattached and unaccepted. An already-serving Telegram Session has not been attested by this audit.
 
+**Update 2026-09-22 — #29 superseded (Product Owner decision; [docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)).** #29 asked a current-state-only review to answer a weekly question the connected tool surface cannot evidence. The second production-like Haiku diagnostic (`docs/16` §31) failed on due-time rendering, concision and a vague actor claim, after correct discovery. The architecture audit found that Trello itself records an authoritative action history (REST board actions: list moves, archive, `dueComplete`, time, actor) that only the official Trello MCP does not yet expose. #29 is closed as superseded; its discovery, rubric and live evidence remain historical record. The zero-inference spike returned GO ([docs/23](23_WORK_HISTORY_SPIKE_REPORT.md)) and canonical NOW is [#36](https://github.com/danielkokr/djonik-manager-2.0/issues/36). GitHub texts: [docs/22](22_ISSUE_29_SUPERSESSION_DRAFTS.md).
+
 The [architecture audit](17_DJONIK_V1_ARCHITECTURE_AUDIT.md) exposes uncovered deterministic verification/completion/relay cases despite 330 passing baseline tests. These are reachable offline failures, not a claim of production frequency. Fix those boundaries before further review-model experimentation. #18 conditional fresh-read enforcement, due-clearing provider limitations, disabled Calendar and previously accepted intake caveats remain unchanged.
 
 Governance [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) records this authorized docs/issues handoff. Documents are local until explicitly committed/published; a fresh checkout with the old roadmap must obtain this change before implementing the new queue. #30 stays open pending publication/PO closeout; its open state does not select implementation scope.
@@ -48,9 +50,10 @@ Verified outcome:
 |---|---|---|
 | 1 | [#31 — Trello mutation verification](https://github.com/danielkokr/djonik-manager-2.0/issues/31) | Governance handoff available; source fixes first |
 | 2 | [#32 — Turn completion and specialist results](https://github.com/danielkokr/djonik-manager-2.0/issues/32) | #31 source checks pass; correlate late/reused child results and preserve mixed answers |
-| 3 | [#29 — Current-state review and ownership validation](https://github.com/danielkokr/djonik-manager-2.0/issues/29) | #31/#32; simplify contract before an authorized isolated experiment |
-| 4 | [#33 — Pinned release and serving Telegram Session](https://github.com/danielkokr/djonik-manager-2.0/issues/33) | Preparation may precede #29 experiments; actual promotion follows accepted candidate and explicit rollout authorization |
-| 5 | [#34 — Conversational commitment/waiting/follow-up](https://github.com/danielkokr/djonik-manager-2.0/issues/34) | #33; extend accepted #13 and align deadline/waiting semantics |
+| ~~3~~ | ~~[#29 — Current-state review and ownership validation](https://github.com/danielkokr/djonik-manager-2.0/issues/29)~~ | **Superseded 2026-09-22** by the work-history spike ([docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)); not a v1 gate |
+| 3 | **NOW — [#36 — Weekly work review from Trello action history](https://github.com/danielkokr/djonik-manager-2.0/issues/36)** | Spike GO 2026-09-22 ([docs/23](23_WORK_HISTORY_SPIKE_REPORT.md)); source-first tool + digest + thin Skill; live gate separately authorized; v1 inclusion is a PO decision in docs/00 |
+| 4 | [#33 — Pinned release and serving Telegram Session](https://github.com/danielkokr/djonik-manager-2.0/issues/33) | No longer waits for a #29 candidate; promotes the accepted v21 / PH v4 / four-Skill tuple. A future work-history tool is a separate later promotion |
+| 5 | [#34 — Conversational commitment/waiting/follow-up](https://github.com/danielkokr/djonik-manager-2.0/issues/34) | #33; extend accepted #13 and align deadline/waiting semantics; accepted plan items keep the Trello card ID/project when known (plan side of a later plan-vs-actual) |
 | 6 | [#35 — Daily-use v1 acceptance](https://github.com/danielkokr/djonik-manager-2.0/issues/35) | Required gates accepted; working-week pilot and PO accept/hold |
 
 Scope promotion requires updating this roadmap; an open/closed issue or larger number never selects the next task by itself. Share later authorized smoke evidence where sufficient instead of duplicating paid runs. The current [validation policy](04_MANAGED_AGENT_TOKEN_COST_AUDIT.md#27-development--validation-spend-guardrail-issue-21) requires explicit budget, candidate isolation, full-turn admission reserve and stop reasons; this governance change authorizes no paid experiment.
@@ -390,9 +393,33 @@ Measured live validation changed the implementation direction:
 - **Wave C1 implementation, live acceptance and administrative closeout are COMPLETE.** #28 is closed as completed; capability order in `docs/03` is not execution order;
 - the accepted #18 same-turn fresh-read platform limitation is unchanged and remains an accepted platform limitation, not something this cutover fixes.
 
-### NOW — Wave C2: Reliable current-state work review and capability ownership validation (#29)
+### NOW — Wave C2: Weekly work review from Trello action history (#36)
 
-Canonical bounded issue: #29 (open). `docs/03_TARGET_CAPABILITIES.md` §8 — Work history and reviews.
+Canonical bounded issue: [#36](https://github.com/danielkokr/djonik-manager-2.0/issues/36). Read-only custom tool `trello_work_history` + deterministic digest (Kyiv week window, one net transition per card, noise rule, coverage, Kyiv formatting) + thin `work-review` Skill v2 narrated by the Haiku coordinator. Source first; live gate under docs/04 §27 needs separate authorization; production promotion only via #33. Whether it is part of the v1 boundary is an open PO decision (docs/00). Evidence: [docs/23](23_WORK_HISTORY_SPIKE_REPORT.md).
+
+### DONE — Wave C2 spike: Trello work-history evidence (GO, 2026-09-22)
+
+Executed from the PO-approved plan without a separate GitHub issue (draft body kept in [docs/22](22_ISSUE_29_SUPERSESSION_DRAFTS.md) §2). Decision record: [docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md). `docs/03_TARGET_CAPABILITIES.md` §8.
+
+Bounded goal: **establish, with zero model inference and zero mutation, whether Trello's own action history can answer "what changed on project X this week" reliably enough for Daniel.**
+
+- Read-only Trello REST board actions (`filter`, `since`/`before`, `limit`, `page`) for the Djonik board over the current and previous Kyiv week; separately authorized read-only token kept only in local environment, never committed.
+- Check against known facts: the four Extract cards currently in Done, `Брендбук` in This week (`docs/16` §26/§31) — list-move, `closed`, `dueComplete` actions with time and actor.
+- Measure retention depth, actions per week, payload size, pagination; confirm that label changes are not returned by nested actions (project = current label).
+- Build an offline deterministic digest (Kyiv-local time/weekday, transitions, coverage flags, no `lastActivityAt`) in scratch only, and ask Daniel whether it answers the weekly question.
+- **GO:** Done transitions with time for all four known cards, retention ≥ 2 weeks, Daniel judges the digest useful → open the follow-up issues below. **NO-GO:** v1 ships without a work-review capability; current state stays with Project Health / task-management; the existing `work-review` Skill is not attached.
+
+**Spike result 2026-09-22 ([docs/23](23_WORK_HISTORY_SPIKE_REPORT.md)): GO — technical criteria passed and the Product Owner judged the offline digest useful.** 508 board actions since board creation (08.09), one page, 6 GETs, $0. All four known Extract Done cards show timed Done transitions, including reopen; `Брендбук` due confirmed as Fri 25.09 18:00 Kyiv. Limits: every action is attributed to the same Trello account (Djonik's MCP writes are not distinguishable from Daniel's), validation test cards add noise, and the digest must show one net transition per card per window. Follow-ups after GO (both now scoped together in #36):
+1. read-only custom tool `trello_work_history` + deterministic digest (window, transitions, counts, coverage, Kyiv formatting) and client handling of custom tool calls consistent with #32;
+2. thin `work-review` Skill v2 over that tool, then one isolated Haiku diagnostic and the §27 five-plus-one gate.
+
+Boundaries: no Managed Agent/Skill/Memory change, no paid Session, no Trello mutation, no event store, webhooks, snapshot store or episodic journal in this spike. Adding a weekly transitions review to v1 needs a separate Product Owner decision in `docs/00` after GO.
+
+### SUPERSEDED 2026-09-22 — Wave C2: Reliable current-state work review and capability ownership validation (#29)
+
+Superseded by the work-history spike above ([docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)). The record below is preserved as history; it no longer selects scope.
+
+Canonical bounded issue (historical): #29. `docs/03_TARGET_CAPABILITIES.md` §8 — Work history and reviews.
 
 Bounded goal: **support honest evidence-based work reviews from the history/current-state evidence the existing Trello surface actually exposes, without inventing chronology or adding history infrastructure prematurely.**
 
@@ -414,6 +441,8 @@ Current accepted progress:
 - **Recorded Agent configuration after rollback (serving Session not attested):** Djonik **v21 / Haiku**; Project Health remains delegated to specialist **v4 / Sonnet** with the accepted #28 reply-boundary safeguard.
 - **Source-only current-state review contract + behavioral rubric: DONE / accepted**, committed at `754b554b446a5193fd79877f85043252e026015b`. The `work-review` Skill is simplified around current-state evidence; the rubric is model-neutral and covers unsupported chronology, `lastActivityAt`, current-state correctness, project isolation, conflicting completion signals, partial coverage, counts, concision, plan-vs-current, zero mutation, Project Health ownership, honest history limits, vague interpretation and transient-Memory persistence. Source tests passed 27/27 focused, 112/112 with Skill tests, full suite 458/458; typecheck and `git diff --check` passed.
 - **First isolated Haiku diagnostic: INCONCLUSIVE; evidence-acquisition gate follow-up DONE / accepted**, committed at `67173957b7f5c3b1e68c2e4edf63fcec873f92f6`. The first paid sample exposed a setup confound (candidate materially poorer than production context) and a missing rubric dimension rather than proving Haiku unsuitable. R16 now requires Trello discovery/read before clarification when the named project can be resolved; clarification is allowed only after ambiguous/failed discovery. Focused tests passed 41/41 and 126/126 with Skill tests; full suite 472/472; typecheck and `git diff --check` passed. **NEXT:** one fresh, separately authorized Haiku diagnostic using a closer-to-production isolated candidate: same Haiku/system, read-only production Memory context where safely possible, the four accepted coordinator Skills, full Trello read/discovery surface including search, all writes disabled, Calendar disabled, and no PH/Sonnet roster for budget isolation. Production remains unchanged and Sonnet comparison has not started.
+- **Second isolated Haiku diagnostic: FAIL** (`docs/16` §31, $0.06, `end_turn`). Production-like candidate (same Haiku/system, five pinned Skills, production Memory read-only, full Trello read surface, all writes disabled, no PH roster). Discovery succeeded (R16 PASS), zero mutation, no `lastActivityAt` misuse or fake chronology; but R04 critical (raw UTC due `2026-09-25T15:00Z` rendered as «25 вересня о 15:00», Kyiv is 18:00), R09 (all 12 Extract cards despite «Дай коротко») and R14 («Зробив що-небудь на цих картах»). Haiku was not accepted and no Sonnet comparison started.
+- **Superseded 2026-09-22** by the architecture audit in `docs/21`; see the NOW section above.
 - A weekly journal/checkpoint or other persisted history mechanism is **not part of the current #29 implementation by default**. It may be considered only after live acceptance demonstrates a measured product gap that the bounded current-state review cannot satisfy; any persistent snapshot/journal/history mechanism requires a separate bounded architecture decision rather than being added implicitly here.
 - The accepted #18 same-turn fresh-read limitation is unchanged.
 - The 2026-09-21 governance decision supersedes the former rule that #29 must close before other work; the canonical queue above now selects reliability first.
@@ -438,7 +467,7 @@ Boundaries remain those of GitHub issue #29:
 ### Wave C — Project health and reviews
 - project-health capability (accepted, Wave C1);
 - bounded Sonnet Project Health specialist behind the primary Haiku coordinator (accepted, Wave C1);
-- current-state work review (queued #29, Wave C2); historical chronology remains deferred;
+- weekly transitions review from Trello's own action history (Wave C2 spike; replaces #29 current-state review); historical trend analytics remain deferred;
 - stale/blocked/risk judgement;
 - meaningful follow-up lifecycle.
 

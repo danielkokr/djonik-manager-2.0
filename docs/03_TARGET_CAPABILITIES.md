@@ -104,6 +104,8 @@ Djonik should eventually answer evidence-based questions such as:
 
 Use the simplest reliable evidence source available rather than creating an event platform prematurely.
 
+Evidence order ([docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)): the owning system's own history (Trello action log) → accepted plan with card identity from Memory → current state. Dates, week windows, counts and coverage are computed deterministically; the model narrates. Djonik does not maintain its own event log for Trello work. Work outside Trello (calls, sent designs) is a later, measured candidate for explicit user-stated journal entries in Memory.
+
 ## 9. Proactive PM
 
 Djonik should eventually wake for bounded scheduled/triggered reviews and decide whether intervention is useful.
