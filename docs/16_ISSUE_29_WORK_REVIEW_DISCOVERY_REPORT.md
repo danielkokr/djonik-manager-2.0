@@ -1134,3 +1134,140 @@ Session cumulative public list cost **$0.02 (2¢)**, cap $0.15; native budget **
 ```
 
 `HEAD` = `1cb5b2441a10ffc10ebf4764b247c14bd99af63e`; без commit/push. (Зауваження: §29 з попереднього кроку теж був незакомічений — він входить у зміну `docs/16`.)
+
+## 31. Другий платний fail-fast Haiku-діагностичний семпл — production-like isolated context (2026-09-22)
+
+> **Вердикт: FAIL.** Рівно один авторизований хід завершився `end_turn`; після критичного R04 FAIL inference зупинено. Це не acceptance і не вибір власника можливості.
+
+### 31.1 Авторизація і source baseline
+
+- Авторизація Product Owner: intended public list-cost максимум **$0.15**, максимум **1** Managed Session і **1** user turn, Haiku-only; 0 Trello writes, 0 Calendar calls/writes, 0 Memory writes; без production mutation/Session, Sonnet, PH-roster, retry, другого prompt/candidate/budget increase, commit/push/deploy/issue close.
+- `HEAD` до remote work: `551d578d6a80b708db10c2a755a1eeb1d3c1744c`; він містить усі потрібні source commits: `754b554b446a5193fd79877f85043252e026015b`, `67173957b7f5c3b1e68c2e4edf63fcec873f92f6`, `551d578d6a80b708db10c2a755a1eeb1d3c1744c` (`git merge-base --is-ancestor` → 0 для кожного).
+- Canonical NOW повторно підтверджено з `docs/02_DEVELOPMENT_ROADMAP.md` і live GitHub #29 (latest owner comment 2026-09-22): **#29**.
+
+### 31.2 Remote Skill readback and immutable sync
+
+- Existing remote `work-review` Skill: `skill_01RMRGWbrjW9EHSieymZ2NDV`; its previous latest `skver_01A2PSM1x2XP95FcG6Qe39Vw` downloaded as 10,536 bytes / SHA-256 `c3e941d9f7c8f7ff69a3b164efdcb0fe9a319a2a1e3c4c4a1ecc770c5335b312`.
+- Current committed `.claude/skills/work-review/SKILL.md` is 10,704 bytes / SHA-256 `3912822858475320e66ecabb9595f5afa7486b5793eb8094387b41cc6db654f9`; therefore the old remote version was not byte-identical (the R16 follow-up was missing).
+- Created a **new immutable version** of the same Skill only: `skver_01DKVpMwAE5JGDg2NqnGbuqh`, created `2026-09-22T07:07:19.534205Z`. The historical versions were not overwritten.
+- Download/readback of `skver_01DKVpMwAE5JGDg2NqnGbuqh`: 10,704 bytes, SHA-256 `3912822858475320e66ecabb9595f5afa7486b5793eb8094387b41cc6db654f9`, byte-identical to current committed source. It was never attached to production.
+
+### 31.3 Isolated production-like candidate and readback gate
+
+Existing temporary isolated Agent `agent_0124tMaz4XRhq9cLNVp1iBuz` was updated from v1 to **v2**; no new candidate resource was created. It is not production, not the PH specialist, and not the archived #28 coordinator. Production `agent_01WGRHDBjQa3eMhoGJMmQ1dh` was read before and after: it remains **v21**, Haiku, same system hash, and has no `work-review` attachment.
+
+| Gate | Readback | Result |
+|---|---|---|
+| Model/system | `claude-haiku-4-5-20251001` / standard; system 3,686 bytes, SHA-256 `03b33a909123bb40d56415fee7b4a4b95071e5e6a4a31a70b16c3f6d6a283899`, byte-identical to production v21 | PASS |
+| Five Skills, all explicit pins | work-review `skill_01RMRGWbrjW9EHSieymZ2NDV` / `skver_01DKVpMwAE5JGDg2NqnGbuqh`; task-management `skill_01WS6JtY1GMu3rGZaKCVR9w1` / `skver_012fLb9ZFpL4mjqybAZ7KtmU`; daily-planning `skill_01G9DtQEzPYxgw78riFh8k99` / `skver_01TDfMCnuv5LkQN4WvtwBzXW`; weekly-planning `skill_01PTmbvLHJj1HuUxvDKhpaiE` / `skver_018soRHmcAn6onE8DpHScFbf`; studio-intake `skill_015c8dtDnWyDfVLwS6NLS7r6` / `skver_018sJv1GCnzfZRG4NbExbAzj` | PASS |
+| Trello surface | `default_config.enabled=false`; reads explicitly enabled: `trelloSearch`, `trelloReadBoard`, `trelloReadCard`, `trelloReadChecklist`, `trelloReadInbox`, `trelloReadList`, `trelloReadMember`, `trelloReadPlanner`, `trelloReadWorkspace` | PASS |
+| Trello mutation boundary | `trelloWriteBoard`, `trelloWriteCard`, `trelloWriteChecklist`, `trelloWriteInbox`, `trelloWriteList`, `trelloWritePlanner` each explicitly `enabled=false` | PASS |
+| Calendar | Same Calendar MCP server retained only for production similarity; its toolset `default_config.enabled=false`, no enabled override | PASS (disabled) |
+| Memory | Production `memstore_01WViYK3WQvGEgojB2GiaDFq` attached to the Session only as `read_only`; same 992-character production Memory instructions | PASS |
+| Multi-agent/Sonnet | `multiagent=null`; no roster, advisor, self entry, or Sonnet path | PASS |
+
+Deliberate deviations from production v21: `work-review` is additionally attached (needed for the experiment); the four production `latest` Skills are frozen at the exact versions above; all Trello writes are disabled instead of production's `trelloWriteCard`; Memory is read-only instead of read-write; Calendar remains attached but disabled; and the production PH specialist roster is absent, so this does **not** validate PH routing or mixed PH+review behavior.
+
+### 31.4 Single Session preflight
+
+- Fresh Session: `sesn_01HFEFCS367cPRsNCnWugbYJ`; primary thread `sthr_01NYkep7HBaLbgJswhsrLgnE`.
+- Resolved Agent: `agent_0124tMaz4XRhq9cLNVp1iBuz` v2; Haiku/system and the five pins above were read back. Session-resolved numeric pins correspond to the frozen Agent v2 snapshot; `work-review` resolves to timestamp pin `1790060839176301` (the new 2026-09-22 version), not `latest`.
+- Pre-send status `idle`; no events, no `user.message`; cumulative usage input/output/cache/list-cost all zero.
+- Native backstop: `budget.max_list_cost = { amount: "15", currency: "USD" }` ($0.15). Resources contained exactly the production Memory Store with `access: "read_only"`; no writable mount existed.
+
+### 31.5 Exact one-turn evidence and stop
+
+Exact prompt (no added instruction or rubric hint):
+
+> Що я реально зробив цього тижня по Extract? Дай коротко.
+
+The turn produced five user-visible `agent.message` events; all are recorded because the interim messages are also user-visible:
+
+1. `Зрозумів. Знайду Extract і дам коротко, з поточним станом.`
+2. `Дай мені огляд по своїм дошкам, щоб розібрати, де Extract живе.`
+3. `Змініть запит - це шукав карти, не дошки. Давайте по-іншому.`
+4. `Є у вас одна дошка — "Djonik". Шукаю в ній Extract.`
+5. Final:
+
+```text
+Дякую. Огляд по Extract на цей тиждень:
+
+Trello не показує, коли карти перейшли в Done, тож «цього тижня» я підтвердити не можу.
+
+Але зараз у Done стоять по Extract:
+- **Коментарі по пінкам**
+- **Кохаю пінка**
+- **Білі аромати 3D відео**
+- **Автоматизація рендеру**
+
+У In progress:
+- **Чорні аромати 100 ML**
+- **Флакони 1.5 ML**
+
+У This week (активні):
+- **Крем для рук**
+- **Білі аромати 50 ML**
+- **Міні-парфуми адаптація**
+- **Флакони 7.5 ML**
+- **Брендбук** (до 25 вересня о 15:00)
+- **Підготувати Invoice**
+
+Це те, що Extract показує зараз. Зробив що-небудь на цих картах, але точно коли — Trello не розповідає.
+```
+
+Persisted terminal event: `session.status_idle`, `stop_reason: end_turn`. Stop reason for the experiment: the sole authorized turn completed; its R04 critical failure then ends the run. No resend, retry, correction, second Session, second candidate or Sonnet comparison was started.
+
+### 31.6 Trello and tool evidence
+
+Raw event evidence (38 events, including raw tool-result payloads) was retained only in temporary scratch at `C:\Users\adobe\AppData\Local\Temp\djonik-issue29-diagnostic-run\events.json`; no transcript database was created. Discovery/read sequence, in order:
+
+1. `trelloSearch { action: "search_boards", query: "Extract" }` → successful, `cards.nodes=[]`, `totalCount=0`, `hasNextPage=false`.
+2. `trelloReadBoard { action: "list", limit: 50 }` → successful, one `Djonik` board, `totalCount=1`, `hasNextPage=false`.
+3. `trelloReadWorkspace { action: "list", limit: 50 }` → successful, one workspace, `hasMore=false`.
+4. `trelloReadBoard { action: "list_by_workspace", limit: 50, workspaceId: "ari:cloud:trello::workspace/6aa00b1e1ea493a95808aa9d" }` → successful, the same one board, `totalCount=1`, `hasNextPage=false`.
+5. `trelloReadCard { action: "list_by_board", boardIdOrUrl: "https://trello.com/b/ap5HqDHO/djonik" }` → successful, 31 cards returned, `totalCount=31`, `nodes.length=31`, `hasNextPage=false`; labels include Extract, Cossack Labs, Limen, A1 and Seqthera.
+
+The direct-card payload proves the 12 Extract-labelled cards named in the final answer: four current Done (`Коментарі по пінкам`, `Кохаю пінка`, `Білі аромати 3D відео`, `Автоматизація рендеру`), two current In progress (`Чорні аромати 100 ML`, `Флакони 1.5 ML`), and six current This week cards. All four named Done cards have `closed=false` and `dueComplete=true`; there is no Extract completion-signal conflict in this retrieved set. `Брендбук` has raw `due="2026-09-25T15:00:00.000Z"`, `dueComplete=false`.
+
+Tool totals from the raw log: Trello reads/discovery **5**, Trello writes **0**, Calendar **0**, Memory writes **0** (only `read` of `/workspace/skills/work-review/SKILL.md`; no Memory-path tool event), delegations **0** (one primary thread; no child/thread-created/delegation events). No `lastActivityAt` value was mentioned in the answer.
+
+### 31.7 Rubric grading (R01–R16)
+
+| ID | Verdict | Evidence |
+|---|---|---|
+| R01 | PASS | It says the period cannot be confirmed and makes no completion ordering, movement, reopen, or completion-time claim. |
+| R02 | PASS | `lastActivityAt` is not used or mentioned. |
+| R03 | PASS | No activity timestamp is converted into local/relative/history wording. |
+| R04 | **FAIL (critical)** | List/project facts match the direct payload, but `Брендбук` raw due is `2026-09-25T15:00:00.000Z`. The answer renders unzoned `25 вересня о 15:00`; for the user’s Kyiv context that instant is 18:00 EEST. It neither says UTC nor renders Kyiv time correctly, so the current due fact is not exact. |
+| R05 | PASS | Every named work card has the Extract label; no other-project card appears. |
+| R06 | N/A | The returned Extract Done cards have aligned current list / `closed=false` / `dueComplete=true`; no material conflict required explanation. |
+| R07 | N/A | The direct list returned all 31 reported cards (`nodes=31`, `totalCount=31`, `hasNextPage=false`) and the answer gives no unsupported total/all-cards aggregate. |
+| R08 | N/A | No requested or asserted card count. |
+| R09 | **FAIL (major)** | Asked for `коротко`, but the response names all 12 Extract cards (4 Done + 2 In progress + 6 This week) rather than a few strongest facts; it is a near-full project dump. |
+| R10 | N/A | No accepted-plan comparison was requested or claimed. |
+| R11 | PASS | Five Trello read/discovery calls; zero `trelloWrite*` calls; zero Calendar calls. |
+| R12 | PASS | No health/risk/blocking/staleness judgement and no PH delegation/output. |
+| R13 | PASS | It gives a concise history limitation and a useful present-state slice. |
+| R14 | **FAIL (major)** | `Зробив що-небудь на цих картах` is an unsupported, vague actor/activity claim: current card state does not establish that Daniel worked on them. |
+| R15 | PASS | Production Memory was structurally mounted read-only; no Memory write/tool event occurred. |
+| R16 | PASS | Fresh discovery preceded the final message: search found no Extract board, board/workspace discovery found one Djonik board, and the card read found the Extract label; the final message asked no clarification. |
+
+Critical dimension failed: **yes (R04)**. Major dimensions also failed: R09 and R14. Optional lint is not used as the verdict; raw payload/event evidence above is the basis.
+
+### 31.8 Cost, result, and decision boundary
+
+- Final cumulative Session public list cost: **$0.06** (`amount: "6"`, USD); input 41, output 1,098, cache creation 36,786, cache read 112,959, active 72.309 s.
+- Budget status: under the $0.15 intended ceiling; native backstop did not trigger; no overshoot.
+- **Verdict: FAIL.** R04 is critical, so the fail-fast stop rule applies. Haiku is neither accepted nor compared with Sonnet.
+- Versus diagnostic #1: production-like context did eliminate premature clarification as the terminal behavior (R16 PASS), and Haiku did acquire fresh discovery/read evidence and produce a current-state review. It did **not** produce an acceptable concise/correct review: it made a critical due-time rendering error and dumped the whole Extract slice.
+- Next decision boundary: no further inference is authorized; no Sonnet comparison has begun; no post-result Skill edit occurred; any additional sample, configuration change, or acceptance work requires new Product Owner authorization.
+
+### 31.9 Local checks and exact working state
+
+`npm run typecheck` → exit 0. `npm test` → **472 tests, 472 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo**. The first `git diff --check` found only the trailing space in the verbatim-looking answer transcription above; it was removed without changing the answer's content or any source behavior. Final `git diff --check` → exit 0. Final `git status --short`:
+
+```text
+ M docs/16_ISSUE_29_WORK_REVIEW_DISCOVERY_REPORT.md
+```
+
+No commit or push is authorized.
