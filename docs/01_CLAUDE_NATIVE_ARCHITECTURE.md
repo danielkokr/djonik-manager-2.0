@@ -8,7 +8,7 @@
 
 Recorded Agent v21 is rollback-equivalent to accepted v19; PH specialist remains v4. This is not an attestation of an already-running Telegram Session. Its model/system/Skills are resolved at creation; an Agent update does not automatically change it. #33 will pin accepted Skill versions and verify the actual serving tuple at a completed-turn transition, without replaying external mutations.
 
-~~#29 now simplifies current-state review and validates ownership in isolation after #31/#32.~~ **Superseded 2026-09-22 ([docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)):** work history is read from the owning system, not reconstructed by the model or stored by Djonik. Trello's action history is the evidence source; if the spike is GO, a single read-only custom tool returns a deterministic digest (Kyiv week window, transitions, counts, coverage, local formatting) and the Haiku coordinator narrates it. No event store, webhook pipeline, snapshot store or episodic journal; no Sonnet ownership change without measured need. No new production specialist is authorized. Source text checks do not prove model behavior.
+~~#29 now simplifies current-state review and validates ownership in isolation after #31/#32.~~ **Superseded 2026-09-22 ([docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)):** work history is read from the owning system, not reconstructed by the model or stored by Djonik. Trello's action history is the evidence source; the spike was GO (docs/23) and #36 source-first is implemented (`e106a2e`, docs/26): a single read-only custom tool returns a deterministic digest (Kyiv week window, transitions, counts, coverage, local formatting) and the Haiku coordinator narrates it. No event store, webhook pipeline, snapshot store or episodic journal; no Sonnet ownership change without measured need. No new production specialist is authorized. Source text checks do not prove model behavior.
 
 ## 1. Target shape
 
@@ -92,7 +92,7 @@ Initial strategy:
 - create the smallest suitable Environment;
 - validate a real multi-turn Session in Claude Console before writing integration code;
 - later map the primary Telegram conversation to a long-lived Djonik Session strategy;
-- do not invent a custom transcript store in v1;
+- do not invent a custom transcript store;
 - define rollover/recovery only after real session behavior demonstrates a need.
 
 Session history is conversational context, not authority over fresh Trello/Calendar state.
@@ -112,7 +112,7 @@ Memory Stores are attached to Sessions and may contain focused text documents fo
 
 Memory must not become a stale mirror of live Trello task state.
 
-Start with a small number of focused stores. Do not introduce Neon/vector DB/custom RAG in v1 unless a measured gap requires it.
+Start with a small number of focused stores. Do not introduce Neon/vector DB/custom RAG unless a measured gap requires it.
 
 ## 7. Skills
 
@@ -195,25 +195,38 @@ Rules for that specialist:
 
 Future specialists may still be justified for research/context retrieval, studio intake analysis, or historical/weekly review, but each requires its own measured benefit before introduction.
 
-## 10. Proactive work
+## 10. Proactive work — working rhythm (#39)
 
-Claude does not need a custom PM rules engine to be proactive.
+Claude does not need a custom PM rules engine to be proactive. Design source: [docs/25](25_PM_AGENT_BEHAVIOR_AUDIT.md) §5–§6; implementation issue: [#39](https://github.com/danielkokr/djonik-manager-2.0/issues/39) (after #33 hosting and #34 commitments).
 
-After v1, prefer official [Scheduled Deployments](https://platform.claude.com/docs/en/managed-agents/scheduled-deployments) before adding a custom scheduler. They support cron/timezone and bounded per-run resources/budgets; workspace availability must be checked. Timing may jitter by up to nine minutes, so do not promise exact-minute delivery.
-
-A thin channel boundary should handle SEND/SILENT, delivery deduplication, snooze/resolution and ambiguous-send recovery. Scheduled execution bypasses the current connectToDjonik entry point, so reuse tested turn/write/reply finalization before delivering its output. This is deferred design, not an implemented scheduler or notification system. For example:
+**Decision 2026-09-22.** The schedule runs inside the always-on Telegram adapter (#33 host), not in native Scheduled Deployments.
+- The `trello_work_history` custom tool (#36) executes in that adapter, and scheduled Sessions would bypass it.
+- The adapter already owns tested turn completion and relay (#32).
+- Scheduled Deployments remain an option if the adapter model changes; their timing jitter is up to nine minutes.
 
 ```text
-schedule
+adapter clock (Europe/Kyiv) / deterministic signal detected
+  ↓ limits: quiet hours, daily cap, no repeat of unchanged facts, suppressed keys
+"Run the morning brief" / "Signal: …"
   ↓
-"Run the morning PM review"
+Djonik uses Memory + Skills + fresh tools (+ #36 digest)
   ↓
-Djonik uses memory + skills + fresh tools
+Djonik decides SEND or SILENT and phrases one short message with one easy action
   ↓
-Djonik decides whether something deserves a Telegram message
+idempotent Telegram delivery (outbox intent before send; no blind resend)
 ```
 
-Scheduling is external timing. PM judgement remains in Claude.
+Code detects signals and applies limits; Claude judges whether to speak and how. Autonomous turns are read-only: any Trello change is proposed and executed only after Daniel replies, through the verified write path.
+
+**Where the instructions live (so Daniel can find and edit them):**
+
+| What | Where | How it changes |
+|---|---|---|
+| When and how often: ritual times/days, quiet hours, daily cap, on/off, signal thresholds | Memory `/rhythm.md` (small structured block; read deterministically by the adapter via the Memory API) | By voice in Telegram or in Claude Console → Memory; no deploy. Invalid values fall back to safe defaults |
+| What to say and how: brief/review content, format, tone | Skill `.claude/skills/pm-rhythm/SKILL.md` | Repo edit → authorized sync + Agent update |
+| What counts as a problem: signal rules | Pure functions in `src/` | Code change via an issue |
+| Djonik's overall voice | `managed-agents/djonik.md` (#38) | Repo edit → authorized Agent update |
+| Personal priorities | Memory `priorities.md` | Voice or Console |
 
 ## 11. Initial technology choices
 

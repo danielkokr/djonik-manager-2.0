@@ -22,13 +22,43 @@ Djonik should:
 - follow up on important unresolved outcomes;
 - eventually operate proactively when useful.
 
-## v1 release boundary — accepted 2026-09-21
+## Working PM baseline — Product Owner decision 2026-09-22 (replaces the 2026-09-21 "v1 release boundary")
 
-The first release is a useful conversational PM for Daniel's design work: natural text and rich intake, bounded verified task operations, realistic daily/weekly priorities, current project health/review, a short weekly work review from Trello's action history (#36; added by Product Owner decision 2026-09-22), accepted commitments, and conversational waiting/follow-up. Daniel initiates the conversation in v1. The bot must preserve all parts of mixed requests, admit unavailable evidence, and distinguish an interrupted action from verified success.
+There is no "v1 release" milestone. The goal is a normal, useful PM agent for Daniel's daily work, built capability by capability. Behaviour, proactivity and voice are defined by [the PM-agent audit](25_PM_AGENT_BEHAVIOR_AUDIT.md).
 
-This is a release scope, not a claim that every capability is already reliable. [The architecture audit](17_DJONIK_V1_ARCHITECTURE_AUDIT.md) records uncovered reliability gaps and the accepted delivery decision; [the roadmap](02_DEVELOPMENT_ROADMAP.md) alone chooses current work. Release acceptance is approximately one real working week / 20–30 substantive natural turns with adequate scenario coverage, no known critical failures, and a Product Owner accept/hold decision (#35). It is not a statistical reliability guarantee.
+**Baseline Djonik must provide:**
+- natural text and rich intake that become tasks in the right project;
+- bounded, verified task operations;
+- realistic daily and weekly priorities;
+- project health;
+- a short weekly work review from Trello's action history (#36);
+- accepted commitments, waiting and follow-up (#34);
+- **a working rhythm (#39):**
+  - a short morning brief on work days;
+  - a Monday week plan;
+  - a Friday review;
+  - at most a couple of well-timed exception messages.
 
-Scheduled proactive delivery, Calendar and historical work analytics follow v1 only when separately justified. Current-state review cannot prove completion or movement within a past period without historical evidence. Such evidence exists in Trello's own action history (not yet exposed by the Trello MCP); the zero-inference spike returned GO ([docs/23](23_WORK_HISTORY_SPIKE_REPORT.md)), and on 2026-09-22 the Product Owner **included the weekly transitions review in v1** ("what moved to Done / back / into work this week", Kyiv time, one net transition per card, from Trello's log; #36). It reports board events, not who performed them. Trend analytics, effort/time accounting and work outside Trello remain after v1 ([docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)). Memory can retain an accepted plan; fresh connected tools own current facts. Due dates are not automatically hard client commitments, and waiting is not automatically blocked.
+Djonik speaks as a concise PM colleague (#38). It preserves every part of mixed requests, admits unavailable evidence and distinguishes an interrupted action from verified success.
+
+**Proactivity rules:**
+- predictable rhythm over spontaneous pings;
+- quiet hours (default 20:00–09:30 Europe/Kyiv, per Daniel's preference);
+- a small daily limit on unsolicited messages;
+- no repeats of unchanged facts;
+- "не нагадуй" is respected;
+- every proactive message ends with one easy action;
+- autonomous turns never change Trello — they propose, and Daniel confirms.
+
+**Success is judged by use, not by a release:** a pilot of about two working weeks with the rhythm on (#35). The brief and review are useful, no commitment is lost, project labels are right, noise stays low and cost is known. Daniel decides whether it works and what to change next. It is not a statistical reliability guarantee.
+
+**Still out of scope until a measured need appears:**
+- Calendar integration (Cossack Labs Tue/Thu syncs come from Memory for now);
+- automatic client contact;
+- trend analytics and effort/time accounting;
+- work outside Trello.
+
+History comes from Trello's own action log ([docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md), [docs/23](23_WORK_HISTORY_SPIKE_REPORT.md)) and reports board events, not who performed them. Memory retains stable context and accepted plans; fresh connected tools own current facts. Due dates are not automatically hard client commitments, and waiting is not automatically blocked.
 
 ## 2. Core PM control loop
 

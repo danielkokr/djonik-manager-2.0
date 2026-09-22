@@ -2,7 +2,7 @@
 
 > This is a product capability map, **not execution order**. Current execution order lives only in `02_DEVELOPMENT_ROADMAP.md`.
 
-The map includes long-term capabilities and is not a v1 completion checklist. The current [v1 release boundary](00_DJONIK_PRODUCT_CONTRACT.md#v1-release-boundary--accepted-2026-09-21) and [audit decisions](17_DJONIK_V1_ARCHITECTURE_AUDIT.md) prioritize conversational usefulness and reliability. Current-state review and a weekly work review from Trello's action history (#36) are in v1; scheduled proactive delivery, Calendar and historical trend analytics are deferred. Accepted commitments already exist (#13); #34 extends their conversational lifecycle.
+The map includes long-term capabilities and is not a completion checklist. The [working PM baseline](00_DJONIK_PRODUCT_CONTRACT.md#working-pm-baseline--product-owner-decision-2026-09-22-replaces-the-2026-09-21-v1-release-boundary) and the [PM-agent audit](25_PM_AGENT_BEHAVIOR_AUDIT.md) define what comes first. It includes the weekly work review from Trello's action history (#36) and a working rhythm with bounded proactivity (#39). Calendar, client communication and trend analytics wait for a measured need. Accepted commitments already exist (#13); #34 extends their conversational lifecycle.
 
 ## 1. Conversational PM core
 
@@ -108,7 +108,7 @@ Evidence order ([docs/21](21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md)): the 
 
 ## 9. Proactive PM
 
-Djonik should eventually wake for bounded scheduled/triggered reviews and decide whether intervention is useful.
+Djonik should wake for bounded scheduled/triggered reviews and decide whether intervention is useful (#39; design in [docs/25](25_PM_AGENT_BEHAVIOR_AUDIT.md) §5).
 
 Examples:
 
