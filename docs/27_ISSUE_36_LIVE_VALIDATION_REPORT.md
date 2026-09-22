@@ -664,3 +664,158 @@ git status --short
 ### Explicit next step
 
 No paid inference occurred in this iteration. The next step is **one isolated Haiku diagnostic** against this deterministic-`answer_text` source, built as a fresh, separately frozen candidate (not a reuse or modification of candidates #1, #2, or #3) — **only after Product Lead acceptance of this remediation and separate Product Owner authorization** of the paid run under docs/04 §27 (declared cost ceiling, session count, expected evidence, and stop condition, all declared before the first Session is created). No candidate was created, no production configuration was changed, and no commit, push, or issue close occurred in this iteration.
+
+## 14. Final current-strategy diagnostic — commit cee0e2c
+
+Date: 2026-09-22. **This is the declared final fail-fast diagnostic of the current #36 strategy**, run under an explicit Product-Lead stop rule: if this candidate produces any substantive factual/semantic failure that would require another Skill rule, result-shape change, deterministic rendering layer, client guard, or similar local remediation, #36 implementation work stops and a fundamental architecture audit is required instead of a fourth local fix.
+
+### 1. Stop-rule context (declared before the paid turn)
+
+Per the Product Lead's instruction for this iteration: a substantive failure here is not to be met with another Skill edit, another `trelloWorkHistory.ts` change, a `djonikClient.ts` guard, exact-deterministic-relay design, or a fourth candidate. It is to be recorded as exhaustion of the current local-remediation strategy, with the next step being an independent architecture audit — not performed in this iteration.
+
+### 2. Commit under test
+
+`cee0e2ca05f4f97ca3384da7dbf2d7d012640dcd` — *fix: render concise work review answer deterministically*. Confirmed as `HEAD` before any paid call; working tree was clean; `npm test` (454/454), `npm run typecheck`, and `git diff --check` all passed pre-diagnostic.
+
+### 3. New candidate identity/config (frozen before the paid turn, read back unmodified after)
+
+| Item | Frozen value |
+|---|---|
+| Candidate Agent / version | `agent_01KSpwh2WJyKQEMcMXAmxtMm` / 1 |
+| Candidate model | `claude-haiku-4-5-20251001`, `standard` |
+| Coordinator system identity | SHA-256 `03b33a909123bb40d56415fee7b4a4b95071e5e6a4a31a70b16c3f6d6a283899` — byte-identical to production's current system prompt |
+| Coordinator Skills (pinned, not `latest`) | `task-management` `skill_01WS6JtY1GMu3rGZaKCVR9w1` / `skver_012fLb9ZFpL4mjqybAZ7KtmU`; `daily-planning` `skill_01G9DtQEzPYxgw78riFh8k99` / `skver_01TDfMCnuv5LkQN4WvtwBzXW`; `weekly-planning` `skill_01PTmbvLHJj1HuUxvDKhpaiE` / `skver_018soRHmcAn6onE8DpHScFbf`; `studio-intake` `skill_015c8dtDnWyDfVLwS6NLS7r6` / `skver_018sJv1GCnzfZRG4NbExbAzj` — the same four skill IDs/versions production currently resolves to |
+| Candidate work-review Skill (new, isolated) | `skill_01NtqV4kfsZsCeBEDPJ45JxE` / `skver_01Rin3rEGhMKzbkRwMbLWLhK`; committed-body SHA-256 `e00863e3d6e99f749dfef04362f8138a6eaeef41648ba23d50f5d874da8f588e` (1,908 bytes) — matches the exact `.claude/skills/work-review/SKILL.md` body at `cee0e2c` |
+| Project Health roster | `agent_01KNiQDzzPjaMU6LLF4mU6uM`, pinned version 4 — identical to production's roster |
+| Custom tool | `trello_work_history`; input-schema SHA-256 `ff820032911734a0fc63bdf2d2e941994d28241614cca812fbd353b4bc1a7921` — identical to candidates #1–#3, confirming only the tool's return shape changed at `cee0e2c`, not its input contract |
+| Memory | production `Djonik Memory`, attached `read_only` |
+| Permissions | Trello read surface only; **every** `trelloWrite*` tool, including `trelloWriteCard`, explicitly `enabled:false`; Calendar toolset `enabled:false` |
+
+Created via `client.beta.agents.create()` from a fresh read-back of production's `tools`/`mcp_servers`/`system`/`model`/`multiagent`, with the same two declared changes as prior candidates (six Trello writes forced `enabled:false`; one custom tool and one new isolated Skill appended). No source file was edited to run this diagnostic.
+
+### 4. Proof the three previous candidates remain untouched
+
+Read directly from the API immediately before this candidate's creation:
+
+| Candidate | id | version | `updated_at` |
+|---|---|---|---|
+| #1 (§4–§9) | `agent_01EeGJTjuKWZa3LuRaHBjj8k` | 1 (unchanged) | `2026-09-22T09:17:17.156563Z` |
+| #2 (§10) | `agent_01G9i5vhv4oNcp14rXyvTyRc` | 1 (unchanged) | `2026-09-22T09:56:40.493927Z` |
+| #3 (§12) | `agent_01QiZTseJY6HnixDsBhRgwTU` | 1 (unchanged) | `2026-09-22T10:32:02.945050Z` |
+
+None was retrieved for any purpose beyond this read-only check; none was updated, reused, or referenced by the new candidate.
+
+### 5. Proof production is unchanged
+
+`client.beta.agents.retrieve()` on `agent_01WGRHDBjQa3eMhoGJMmQ1dh` immediately before candidate creation returned **version 21**, model `claude-haiku-4-5-20251001` / `standard`, and system SHA-256 `03b33a909123bb40d56415fee7b4a4b95071e5e6a4a31a70b16c3f6d6a283899` — identical to every prior report in this file. No Agent, Skill, Session, Memory, Trello, Calendar, or vault configuration was modified before, during, or after this diagnostic. The official Managed Agents SDK/API (`@anthropic-ai/sdk` 0.125, beta `managed-agents-2026-04-01`) resolved every call normally; no incompatibility was encountered.
+
+### 6. Exact user prompt
+
+```
+А минулого тижня по Extract? Теж коротко.
+```
+
+Sent exactly once, as the single `user.message` of Session `sesn_01Kb2RGMiMXsG8a3b4CBwDmY`.
+
+### 7. Exact custom-tool input
+
+Blocking event `sevt_01DYc6LjYstNHAAQx3h9BDEw` (`agent.custom_tool_use`, tool `trello_work_history`):
+
+```json
+{"response_format":"concise","scope":{"kind":"project","label":"Extract"},"window":{"kind":"last_week"}}
+```
+
+Correct project, correct window, correct format.
+
+### 8. Exact deterministic `answer_text` (verbatim, from the real live Trello REST GETs, zero mutation)
+
+```json
+{
+  "window": {"from": "пн 14.09, 00:00", "to": "пн 21.09, 00:00", "label": "Минулий тиждень"},
+  "scope": {"kind": "project", "label": "Extract"},
+  "coverage": {"pagesRead": 1, "truncated": false, "oldestActionReached": true},
+  "answer_text": "Минулого тижня по Extract на дошці в Done перейшло 4 події, 2 події повернулося з Done, створено 6 карток та ще 5 карток перемістилися між іншими списками. У Done перейшли «Кохаю пінка», «Білі аромати 3D відео», «Автоматизація рендеру» та «Коментарі по пінкам». Із Done повернулися «Білі аромати 3D відео» та «Коментарі по пінкам». У короткому огляді перелічено не всі створені картки."
+}
+```
+
+### 9. Exact visible answer (verbatim)
+
+```
+Минулого тижня по Extract:
+- **Завершено** 4 карти (Кохаю пінка, Білі аромати 3D відео, Автоматизація рендеру, Коментарі по пінкам)
+- **Повернулось з Done** 2 карти (Білі аромати 3D і Коментарі по пінкам)
+- **Створено** 6 нових карток
+- Ще 5 карток перемістилися між списками
+
+Був рух туди-назад по двох картах на відеозйомці та коментарях.
+```
+
+### 10. Claim-by-claim comparison
+
+| `answer_text` claim | Visible answer | Verdict |
+|---|---|---|
+| "в Done перейшло 4 події" + 4 named cards | "Завершено 4 карти" + same 4 names, same order | **Pass on substance.** Unit noun shifted from "події" (events) to "карти" (cards) and the verb from neutral "перейшло" to interpretive "Завершено" ("completed"), but the number and every name are unchanged and no actor is named. Borderline paraphrase, not a factual error. |
+| "2 події повернулося з Done" + 2 named cards | "Повернулось з Done 2 карти" + same 2 names (one truncated: "Білі аромати 3D" drops "відео") | **Pass on substance.** Same count, same two cards recognizably named; the dropped word is a trivial truncation, not a different or invented card. |
+| "створено 6 карток" | "Створено 6 нових карток" | **Pass.** Same number; "нових" adds no new claim. |
+| "ще 5 карток перемістилися між іншими списками" | "Ще 5 карток перемістилися між списками" | **Pass.** Same number and verb; "іншими" dropped without changing meaning. |
+| "У короткому огляді перелічено не всі створені картки." (coverage-honesty caveat) | *(absent — no equivalent sentence anywhere)* | **Fail.** The one sentence disclosing that created cards were not individually listed was dropped entirely, not merely reworded. |
+| *(no such claim anywhere in `answer_text` — movement direction/pattern is deliberately never computed or stated)* | **"Був рух туди-назад по двох картах на відеозйомці та коментарях."** — an entirely new closing sentence characterizing the two returned-from-Done cards as exhibiting "back-and-forth movement" | **Critical fail.** This is new, unsupported interpretive content with no counterpart in `answer_text`: it reinterprets the two named return-from-Done facts into a pattern/characterization ("рух туди-назад") that the deterministic renderer deliberately never states, for exactly the reason this whole remediation line was built — to prevent Haiku from adding its own gloss on *why* or *how* something moved. It is not a "trivial punctuation/formatting change" and not the one permitted "brief non-factual conversational wrapper" (that allowance requires "no new factual interpretation"); it is a factual-sounding interpretive addition placed at the end of the answer, in the same rhetorical position as candidate #3's "потребували правок" and "тиждень був активний". |
+
+All four required counts (reached-Done, returned, created, moved) were preserved correctly, project/window were correct, and no actor attribution, invented transition, wrong category, or wrong direction occurred. But this run reproduces the **same underlying defect class as candidate #3** — Haiku adding unsupported interpretive/causal framing beyond the deterministic content — through a new concrete instance ("рух туди-назад…") despite `answer_text` now being the complete, ready-to-send answer with nothing left for Haiku to summarize. It also dropped one factual-coverage sentence outright.
+
+### 11. `agent.custom_tool_use` / `user.custom_tool_result` correlation
+
+- Blocking use: `sevt_01DYc6LjYstNHAAQx3h9BDEw` (`agent.custom_tool_use`, `trello_work_history`), `session_thread_id: null`.
+- `session.status_idle` → `stop_reason: {"type":"requires_action","event_ids":["sevt_01DYc6LjYstNHAAQx3h9BDEw"]}`.
+- Result submitted as `user.custom_tool_result` with `custom_tool_use_id: "sevt_01DYc6LjYstNHAAQx3h9BDEw"` (exact match, never `session_thread_id`); provider-assigned id of that submission: `sevt_01CPSt6N2JziwEx2NgSy6RBm`.
+- Final visible message: `sevt_01DZxETGLQRqrrwL9zMzAw3e` (`agent.message`).
+
+### 12. `end_turn` evidence
+
+`session.status_idle` → `stop_reason: {"type":"end_turn"}` immediately after the final `agent.message`. Exactly one `requires_action` pause occurred, resolved by exactly one correlated result; no retry, no second tool call, no budget pause.
+
+### 13. Zero-write evidence
+
+The candidate's `trelloWriteCard` and every other `trelloWrite*` tool were `enabled:false` at the tool-configuration level, Calendar was `enabled:false`, and Memory was mounted `read_only`. The full event log contains exactly one tool interaction: the single `trello_work_history` custom-tool round trip. No MCP tool-use event, no write, and no Memory-write event occurred.
+
+### 14. Deliberate cost
+
+Authoritative cumulative Session usage after `end_turn` (`client.beta.sessions.retrieve()`): `input_tokens: 15`, `cache_creation.ephemeral_5m_input_tokens: 18,365`, `cache_read_input_tokens: 17,711`, `output_tokens: 554`, **`list_cost: $0.03`**. Within the declared $0.12 ceiling, using 1 of 1 authorized paid Session and 1 of 1 authorized visible paid turn.
+
+### 15. Result
+
+**FAIL — current #36 strategy exhausted; fundamental audit required.**
+
+### 16. No second paid turn
+
+Exactly one visible paid turn was sent in exactly one paid Session, as authorized. No second prompt, no retry, no follow-up question, and no additional Session were sent or created.
+
+---
+
+## CURRENT #36 STRATEGY EXHAUSTED — FUNDAMENTAL ARCHITECTURE AUDIT REQUIRED
+
+Per this iteration's explicit Product-Lead stop rule, no further local remediation is proposed or attempted. Recorded for the record:
+
+1. #29 consumed many iterations without delivering reliable work-review.
+2. #36 then moved through, in order: authoritative Trello history (spike, GO) → a structured digest with category totals/items → category-local authoritative totals (`total`/`shown`/`omitted`) → deterministic `fact_lines` (every quantitative claim pre-rendered as text) → a fully deterministic, ready-to-send `answer_text` (this commit, `cee0e2c`).
+3. Despite progressively removing model reasoning responsibility at every step — arithmetic, then category/total narration, then sentence composition itself — the current Haiku coordinator path still fails the behavioral requirement: this final diagnostic's Haiku candidate appended an unsupported interpretive sentence ("Був рух туди-назад…") not present anywhere in the already-complete deterministic answer, and separately dropped a factual coverage-honesty sentence, even though it had nothing left to compute, summarize, or narrate.
+4. Local remediation has reached the agreed stopping point for this iteration. No further Skill rule, JSON/result-shape change, deterministic rendering layer, client guard, post-processing rule, model switch, or new candidate is proposed here.
+5. **Next action:** an independent, fundamental architecture audit by a stronger model, covering the full #29 → #36 history, is required before further #36 implementation work continues. That audit is explicitly out of scope for this iteration and was not performed here. It should be free to question, among other things: Haiku coordinator ownership of this capability; whether Managed Agents is the right execution boundary for it; whether custom-tool → model narration is the appropriate pattern even with a fully pre-rendered answer; whether exact deterministic relay (bypassing model narration entirely for this one tool) is actually simpler and more correct; whether Sonnet or another model should own this capability instead; whether work-review belongs in the coordinator at all; whether the current acceptance criteria reflect actual product value; and whether the #29/#36 pattern indicates a broader architecture problem in Djonik beyond this one capability.
+
+### Local checks
+
+```text
+npm test
+454 passed, 0 failed, 0 skipped, 0 cancelled
+
+npm run typecheck
+passed
+
+git diff --check
+passed (only non-fatal CRLF warnings)
+
+git status --short
+(clean before this report's own edit)
+```
+
+No source change was made or is proposed by this diagnostic. No commit, push, deploy, production configuration change, roadmap update, or issue close occurred.
