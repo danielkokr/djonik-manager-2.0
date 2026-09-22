@@ -30,6 +30,16 @@ test("#36 work-review Skill is thin, history-first, actor-safe and read-only", (
   assert.match(skill, /Do not make Project Health judgements, productivity scores, effort\/time claims, trend analysis/i);
 });
 
+// docs/28 #36 fact-skeleton remediation: two live candidates rewrote authoritative category
+// totals while narrating them, so the Skill must point the coordinator at pre-rendered
+// `fact_lines` instead of asking it to reason from total/shown/omitted/items.length.
+test("#36 work-review Skill treats fact_lines as authoritative and forbids recomputing numbers", () => {
+  assert.match(skill, /fact_lines/);
+  assert.match(skill, /authoritative/i);
+  assert.match(skill, /never recompute, rephrase into a different number, or drop a quantitative claim/i);
+  assert.match(skill, /infer a total from how many named examples appear/i);
+});
+
 test("#36 exports one bounded custom-tool schema with semantic window, scope and format inputs", () => {
   assert.equal(TRELLO_WORK_HISTORY_TOOL.type, "custom");
   assert.equal(TRELLO_WORK_HISTORY_TOOL.name, "trello_work_history");

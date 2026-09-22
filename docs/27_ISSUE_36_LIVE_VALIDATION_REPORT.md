@@ -243,3 +243,139 @@ passed (only non-fatal CRLF/global-ignore warnings)
 git status --short
  M docs/27_ISSUE_36_LIVE_VALIDATION_REPORT.md
 ```
+
+## 11. Second source-only remediation — deterministic fact-skeleton fallback (docs/21 §10)
+
+Date: 2026-09-22. This is a **source-only** iteration after the second live revalidation above. No Managed Agent inference, candidate creation, Trello request, remote configuration change, commit, push, deploy, or issue close was performed.
+
+### Measured root cause
+
+Both live failures used a frozen candidate with the corrected §9 category-local `{total, total_kind, shown, omitted, items}` contract, which already removed the original competing global `counts` object. The second failure (§10 T2) nonetheless answered "3 completed" against `reached_done.total: 4` and "5 created" against `created.total: 6` (`shown: 5`, `omitted: 1`). This proves the remaining defect is not JSON ambiguity: Haiku is rewriting an authoritative numeric field while narrating it, sometimes substituting a displayed/selected subset (`shown`/`items.length`) for `total`, and sometimes producing a number that matches neither.
+
+### Why another Skill/prompt-hardening iteration was rejected
+
+Prompt-only correctness has already failed twice on this exact defect class (§9, §10), and docs/17 §2 records the same pattern for `work-review` generally: added prohibitions did not change behavior in three prior rounds. Canonical docs/21 §10 anticipates exactly this outcome and names the fallback: **a deterministic fact skeleton, where the tool itself renders every quantitative claim into text, and Haiku adds at most a small conversational layer.** That is implemented here instead of a fourth wording iteration.
+
+### New deterministic fact-skeleton contract
+
+`trelloWorkHistory.ts` keeps its existing action-history extraction, Kyiv week/DST arithmetic, and per-card net-transition collapsing unchanged. What changed is the **model-facing return shape**:
+
+```ts
+export interface WorkHistoryFactSkeleton {
+  window: { from: string; to: string; label: string };
+  scope: { kind: "board" } | { kind: "project"; label: string };
+  coverage: HistoryCoverage;
+  fact_lines: string[];
+}
+```
+
+`fact_lines` is a flat array of already-rendered Ukrainian sentences. There is no parallel numeric field (no `total`, `shown`, `omitted`, or `items` reaching the model) for a count to conflict with — the exact defect class in both live failures. The former per-category `{total, total_kind, shown, omitted, items}` shape (`WorkHistoryCategory`/`WorkHistoryCategories`) is retained **internally only**, exported solely for tests/debugging (`buildWorkHistoryCategories`), and is never sent to the model. The illustrative contract in the governing instructions also sketched a separate `examples` array; that field was deliberately dropped in favor of folding every named example into `fact_lines` as its own sentence, per the same instructions' fallback license ("if exposing both structured categories and fact_lines would again invite conflicting interpretation, prefer sending only the minimum fact skeleton required for narration") — a second numeric-bearing array is exactly the risk being removed.
+
+Per category, code renders:
+- one **total sentence** stating the authoritative count with correct Ukrainian one/few/many agreement (e.g. `"У Done перейшло 4 події."`, `"Створено 6 карток."`);
+- one **named-example sentence** per shown item, with Kyiv date/time, a repeated-occurrence suffix when `occurrences > 1`, and the card's current due date when present;
+- when `omitted > 0`, one **overflow sentence** stating the omitted amount as its own fact (e.g. `"Ще 2 переміщення не перелічені в короткому огляді."`), never left for the model to compute as `total − items.length`.
+
+Event-vs-card semantics are encoded in the sentence's noun, not a side channel: `reached_done`/`returned_from_done` use "подія/події/подій" (event occurrences), `created`/`archived`/`moved` use "картка/картки/карток" (cards). An incomplete-coverage caveat is appended as its own sentence only when `coverage.truncated` or `!coverage.oldestActionReached`; complete coverage adds nothing. If a scope has no activity and coverage is complete, the skeleton falls back to one sentence, `"За цей період суттєвих змін не зафіксовано."`, so the model is never handed an empty array.
+
+### Example output for both observed live failures
+
+**Fixture A (first failure — `docs/27` §5, `moved.total: 7`, `shown: 5`):**
+
+```text
+"Між іншими списками переміщено 7 карток."
+"«Рух 1» перейшла Backlog → This week — пн 23.03, 03:00."
+"«Рух 2» перейшла Backlog → This week — пн 23.03, 04:00."
+"«Рух 3» перейшла Backlog → This week — пн 23.03, 05:00."
+"«Рух 4» перейшла Backlog → This week — пн 23.03, 06:00."
+"«Рух 5» перейшла Backlog → This week — пн 23.03, 07:00."
+"Ще 2 переміщення не перелічені в короткому огляді."
+```
+
+**Fixture B (second failure — `docs/27` §10 T2, `reached_done.total: 4`, `created.total: 6`/`shown: 5`/`omitted: 1`):**
+
+```text
+"У Done перейшло 4 події."
+"У Done перейшла «Завершення 1» — ..."
+"У Done перейшла «Завершення 2» — ..."
+"У Done перейшла «Завершення 3» — ..."
+"У Done перейшла «Завершення 4» — ..."
+"Створено 6 карток."
+"Створено «Нова картка 1» — ..."
+"Створено «Нова картка 2» — ..."
+"Створено «Нова картка 3» — ..."
+"Створено «Нова картка 4» — ..."
+"Створено «Нова картка 5» — ..."
+"Ще 1 картка не перелічена в короткому огляді."
+```
+
+In both fixtures, the number Haiku must narrate for "how many" is already written into a complete sentence; there is no `items.length` or `shown` value beside it to substitute.
+
+### What remains Claude-owned vs deterministic
+
+Deterministic (code): action extraction, net-transition collapse, Kyiv week/DST boundaries, per-card due formatting, category totals, named-example selection and its concise/detailed cutoff, the omitted-example sentence, the incomplete-coverage sentence, the zero-activity fallback sentence, and all Ukrainian number agreement.
+
+Claude-owned: deciding to call `trello_work_history` and with which window/scope/`response_format`; ordering and lightly connecting the given `fact_lines` into 2–4 Ukrainian sentences; adding at most one brief introductory or concluding sentence; combining the answer with an accepted Memory plan (plan-side comparison only, per the existing Skill boundary); routing Project Health/task-management questions elsewhere; and reporting a tool error or unavailable history honestly.
+
+### Concise / detailed behavior
+
+Concise (default): each category is capped at 5 named examples; a non-zero remainder produces exactly one deterministic overflow sentence per category, never per item. Detailed: every item is named (`shown === total`, `omitted === 0` internally), so no category emits an overflow sentence.
+
+### Coverage wording
+
+One deterministic sentence, `"Історія за цей період може бути неповною: частину дій не вдалося прочитати повністю."`, is appended only when the internal `coverage.truncated` is true or `coverage.oldestActionReached` is false. Complete coverage adds no sentence, matching the "omit zero/irrelevant categories" requirement.
+
+### Reopen / re-Done handling
+
+Unchanged in substance from §7/§9: a card that left and re-reached Done within the window still contributes to both `reached_done` and `returned_from_done`, and a repeated reached-Done/returned-from-Done event on the same card renders as one named sentence with an `(N разів)`-style occurrence suffix rather than duplicate lines.
+
+### Skill v2 update
+
+`.claude/skills/work-review/SKILL.md` replaced its `total`/`total_kind`/`shown`/`omitted`/`items.length` language with: treat `fact_lines` as authoritative, preserve their content, reorder or lightly connect them, add at most one brief sentence, but never recompute, rephrase into a different number, or drop a quantitative claim; don't infer a total from how many named examples appear. The file stays thin at 2,087 bytes (limit 3,072), with no added list of prohibitions beyond the one existing paragraph.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `src/trelloWorkHistory.ts` | Model-facing return shape is now `WorkHistoryFactSkeleton` (`window`/`scope`/`coverage`/`fact_lines`); added `buildWorkHistoryCategories` (internal/debug), `renderCategoryFactLines`, Ukrainian one/few/many pluralization, and `buildWorkHistoryFactSkeleton` (renamed from `buildWorkHistoryDigest`). `TrelloWorkHistoryClient.execute` returns the fact skeleton. |
+| `src/trelloWorkHistory.test.ts` | Replaced category-shape assertions with fact-line assertions; added the two required failure-reproduction fixtures, a zero-activity fallback test, and a detailed-mode/no-overflow test. Existing window/paging/credential tests are unchanged. |
+| `.claude/skills/work-review/SKILL.md` | Points the coordinator at `fact_lines` as the authoritative narration source instead of `total`/`total_kind`/`shown`/`omitted`. |
+| `src/workReviewContract.test.ts` | Added one assertion that the Skill references `fact_lines`/"authoritative" and forbids recomputing a different number; existing assertions are unchanged and still pass. |
+| `src/djonikClient.ts`, `src/djonikClient.test.ts`, `src/turnCompletion.test.ts` | Not changed. The Session client only forwards `JSON.stringify(await client.execute(...))` as an opaque string; it has no dependency on the digest's internal field names. |
+
+### Focused test results
+
+```text
+node --import tsx --test src/trelloWorkHistory.test.ts src/workReviewContract.test.ts
+18 passed, 0 failed
+
+node --import tsx --test src/djonikClient.test.ts src/turnCompletion.test.ts
+174 passed, 0 failed
+```
+
+### Full test result
+
+```text
+npm test
+453 passed, 0 failed, 0 skipped, 0 cancelled
+```
+
+### Typecheck and diff check
+
+```text
+npm run typecheck
+passed
+
+git diff --check
+passed (only non-fatal CRLF warnings, same as every prior report in this file)
+
+git status --short
+ M .claude/skills/work-review/SKILL.md
+ M src/trelloWorkHistory.test.ts
+ M src/trelloWorkHistory.ts
+ M src/workReviewContract.test.ts
+```
+
+### Remaining next step
+
+No paid inference occurred in this iteration; both prior live candidates (§9 first failure, §10 second failure) remain failed historical evidence and are not superseded by this source-only change. The next step is a **new isolated live candidate**, built from this fact-skeleton source, **only after Product Lead acceptance** of this remediation and separate Product Owner authorization of the paid run under docs/04 §27 (declared ceiling, session count, expected evidence, stop condition before the first Session is created). No production promotion, roadmap update, issue closure, commit, or push occurred in this iteration.

@@ -71,9 +71,11 @@ export interface WorkHistoryItem {
 }
 
 /**
- * A self-contained model-facing category. `total` is always authoritative;
- * `items` are only the named representatives. For event categories, one item
- * may represent several occurrences, as declared by its `occurrences` field.
+ * Internal-only intermediate shape, kept for tests/debugging (docs/28 #36 fact-skeleton
+ * remediation). `total` is authoritative and `items` are named representatives, but this
+ * shape is deliberately NOT sent to the model: two live candidates rewrote `total` into a
+ * different number by treating `items.length` as the total. The model-facing contract is
+ * `WorkHistoryFactSkeleton.fact_lines`, which renders every quantitative claim as text.
  */
 export interface WorkHistoryCategory {
   total: number;
@@ -83,15 +85,25 @@ export interface WorkHistoryCategory {
   items: WorkHistoryItem[];
 }
 
-export interface WorkHistoryDigest {
-  window: { from: string; to: string; label: string };
-  scope: { kind: "board" } | { kind: "project"; label: string };
-  coverage: HistoryCoverage;
+export interface WorkHistoryCategories {
   reached_done?: WorkHistoryCategory;
   returned_from_done?: WorkHistoryCategory;
   created?: WorkHistoryCategory;
   archived?: WorkHistoryCategory;
   moved?: WorkHistoryCategory;
+}
+
+/**
+ * The model-facing #36 contract. Every quantitative claim (counts, omitted-example
+ * amounts, coverage limitation) is already rendered into Ukrainian text in `fact_lines`.
+ * Claude narrates these lines; it does not need `window`/`scope`/`coverage` to produce the
+ * normal concise answer, and there is no parallel numeric field for a count to conflict with.
+ */
+export interface WorkHistoryFactSkeleton {
+  window: { from: string; to: string; label: string };
+  scope: { kind: "board" } | { kind: "project"; label: string };
+  coverage: HistoryCoverage;
+  fact_lines: string[];
 }
 
 export const TRELLO_WORK_HISTORY_TOOL = {
@@ -239,6 +251,102 @@ function categoryFor(
   return { total, total_kind, shown, omitted: total - shown, items: shownItems };
 }
 
+/** Ukrainian one/few/many noun selection for a count-agreeing phrase ("1 картка", "2 картки", "5 карток"). */
+function ukrainianPlural(n: number, forms: readonly [one: string, few: string, many: string]): string {
+  const [one, few, many] = forms;
+  const mod100 = n % 100;
+  const mod10 = n % 10;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)) return few;
+  return many;
+}
+
+/** The predicate agreeing with a counted noun is singular only for exactly 1; every other count takes the plural form. */
+function notListedPredicate(n: number, gender: "fem" | "neut"): string {
+  if (n === 1) return gender === "fem" ? "не перелічена" : "не перелічене";
+  return "не перелічені";
+}
+
+type CategoryKey = keyof WorkHistoryCategories;
+
+interface CategoryNarration {
+  /** Renders the authoritative total sentence, e.g. "У Done перейшло 4 події." */
+  total: (n: number) => string;
+  /** Renders one named example sentence for a single item. */
+  item: (item: WorkHistoryItem) => string;
+  /** Noun forms and gender used for the "N more not listed" overflow sentence. */
+  overflowNoun: readonly [one: string, few: string, many: string];
+  overflowGender: "fem" | "neut";
+}
+
+function occurrenceSuffix(item: WorkHistoryItem): string {
+  if (!item.occurrences || item.occurrences <= 1) return "";
+  return ` (${item.occurrences} ${ukrainianPlural(item.occurrences, ["раз", "рази", "разів"])})`;
+}
+
+function dueSuffix(item: WorkHistoryItem): string {
+  return item.due ? `, due ${item.due}` : "";
+}
+
+const CATEGORY_NARRATION: Record<CategoryKey, CategoryNarration> = {
+  reached_done: {
+    total: (n) => `У Done перейшло ${n} ${ukrainianPlural(n, ["подія", "події", "подій"])}.`,
+    item: (item) => `У Done перейшла «${item.card}»${item.at ? ` — ${item.at}` : ""}${occurrenceSuffix(item)}${dueSuffix(item)}.`,
+    overflowNoun: ["подія", "події", "подій"],
+    overflowGender: "fem",
+  },
+  returned_from_done: {
+    total: (n) => `Із Done повернулося ${n} ${ukrainianPlural(n, ["подія", "події", "подій"])}.`,
+    item: (item) => `Із Done повернулася «${item.card}»${item.at ? ` — ${item.at}` : ""}${occurrenceSuffix(item)}${dueSuffix(item)}.`,
+    overflowNoun: ["подія", "події", "подій"],
+    overflowGender: "fem",
+  },
+  created: {
+    total: (n) => `Створено ${n} ${ukrainianPlural(n, ["картка", "картки", "карток"])}.`,
+    item: (item) => `Створено «${item.card}»${item.at ? ` — ${item.at}` : ""}${dueSuffix(item)}.`,
+    overflowNoun: ["картка", "картки", "карток"],
+    overflowGender: "fem",
+  },
+  archived: {
+    total: (n) => `Архівовано ${n} ${ukrainianPlural(n, ["картка", "картки", "карток"])}.`,
+    item: (item) => `Архівовано «${item.card}»${item.at ? ` — ${item.at}` : ""}.`,
+    overflowNoun: ["картка", "картки", "карток"],
+    overflowGender: "fem",
+  },
+  moved: {
+    total: (n) => `Між іншими списками переміщено ${n} ${ukrainianPlural(n, ["картка", "картки", "карток"])}.`,
+    item: (item) => `«${item.card}»${item.transition ? ` перейшла ${item.transition}` : ""}${item.at ? ` — ${item.at}` : ""}${dueSuffix(item)}.`,
+    overflowNoun: ["переміщення", "переміщення", "переміщень"],
+    overflowGender: "neut",
+  },
+};
+
+const CATEGORY_ORDER: CategoryKey[] = ["reached_done", "returned_from_done", "created", "archived", "moved"];
+
+/**
+ * Renders every quantitative claim in `categories` into already-computed Ukrainian sentences.
+ * Claude receives only this text: the category's authoritative `total` becomes the total
+ * sentence, each shown item becomes a named-example sentence, and a non-zero `omitted`
+ * becomes its own "N more not listed" sentence — never left for the model to infer from
+ * `items.length`.
+ */
+export function renderCategoryFactLines(categories: WorkHistoryCategories): string[] {
+  const lines: string[] = [];
+  for (const key of CATEGORY_ORDER) {
+    const category = categories[key];
+    if (!category) continue;
+    const narration = CATEGORY_NARRATION[key];
+    lines.push(narration.total(category.total));
+    for (const item of category.items) lines.push(narration.item(item));
+    if (category.omitted > 0) {
+      const noun = ukrainianPlural(category.omitted, narration.overflowNoun);
+      const predicate = notListedPredicate(category.omitted, narration.overflowGender);
+      lines.push(`Ще ${category.omitted} ${noun} ${predicate} в короткому огляді.`);
+    }
+  }
+  return lines;
+}
+
 interface CardFacts {
   card: TrelloHistoryCard | undefined;
   name: string;
@@ -260,14 +368,18 @@ function itemFor(facts: CardFacts, date: Date | undefined, occurrences?: number)
   return item;
 }
 
-/** Collapses raw action history into one net movement per card while retaining reopen/re-Done evidence. */
-export function buildWorkHistoryDigest(
+/**
+ * Collapses raw action history into one net movement per card while retaining reopen/re-Done
+ * evidence, and returns the internal per-category totals/items. Exported for tests/debugging
+ * only (docs/21 §10, docs/28 remediation) — the model-facing result is
+ * {@link buildWorkHistoryFactSkeleton}'s `fact_lines`, not this structure.
+ */
+export function buildWorkHistoryCategories(
   input: TrelloWorkHistoryInput,
   actions: readonly TrelloAction[],
   cards: readonly TrelloHistoryCard[],
-  coverage: HistoryCoverage,
   now = new Date(),
-): WorkHistoryDigest {
+): WorkHistoryCategories {
   const window = resolveHistoryWindow(input.window, now);
   const format = input.response_format ?? "concise";
   const cardsById = new Map(cards.map((card) => [card.id, card]));
@@ -315,12 +427,8 @@ export function buildWorkHistoryDigest(
     .filter((facts) => facts.firstList && facts.lastList && facts.reachedDone.length === 0 && facts.returnedFromDone.length === 0)
     .map((facts) => itemFor(facts, facts.lastMoveAt));
 
-  const digest: WorkHistoryDigest = {
-    window: { from: formatKyivDateTime(window.from), to: formatKyivDateTime(window.to), label: window.label },
-    scope: input.scope.kind === "board" ? { kind: "board" } : { kind: "project", label: input.scope.label },
-    coverage,
-  };
-  const sections: Array<[keyof Pick<WorkHistoryDigest, "reached_done" | "returned_from_done" | "created" | "archived" | "moved">, WorkHistoryItem[], WorkHistoryCategory["total_kind"]]> = [
+  const categories: WorkHistoryCategories = {};
+  const sections: Array<[CategoryKey, WorkHistoryItem[], WorkHistoryCategory["total_kind"]]> = [
     ["reached_done", reachedDone, "event_occurrences"],
     ["returned_from_done", returnedFromDone, "event_occurrences"],
     ["created", created, "cards"],
@@ -329,10 +437,41 @@ export function buildWorkHistoryDigest(
   ];
   for (const [key, items, totalKind] of sections) {
     const category = categoryFor(items, totalKind, format);
-    if (category) digest[key] = category;
+    if (category) categories[key] = category;
   }
-  return digest;
+  return categories;
 }
+
+/**
+ * The model-facing #36 entry point. Builds the internal per-category totals, then renders
+ * every quantitative claim — category totals, named examples, omitted-example counts, and an
+ * incomplete-coverage caveat — into `fact_lines` so Claude narrates already-computed Ukrainian
+ * sentences instead of recalculating counts from structured data (docs/21 §10, docs/28).
+ */
+export function buildWorkHistoryFactSkeleton(
+  input: TrelloWorkHistoryInput,
+  actions: readonly TrelloAction[],
+  cards: readonly TrelloHistoryCard[],
+  coverage: HistoryCoverage,
+  now = new Date(),
+): WorkHistoryFactSkeleton {
+  const window = resolveHistoryWindow(input.window, now);
+  const categories = buildWorkHistoryCategories(input, actions, cards, now);
+  const fact_lines = renderCategoryFactLines(categories);
+  if (coverage.truncated || !coverage.oldestActionReached) {
+    fact_lines.push("Історія за цей період може бути неповною: частину дій не вдалося прочитати повністю.");
+  }
+  if (fact_lines.length === 0) {
+    fact_lines.push("За цей період суттєвих змін не зафіксовано.");
+  }
+  return {
+    window: { from: formatKyivDateTime(window.from), to: formatKyivDateTime(window.to), label: window.label },
+    scope: input.scope.kind === "board" ? { kind: "board" } : { kind: "project", label: input.scope.label },
+    coverage,
+    fact_lines,
+  };
+}
+
 
 export class TrelloWorkHistoryError extends Error {
   constructor(public readonly code: "credentials_missing" | "unauthorized" | "request_failed" | "malformed" | "ambiguous_board" | "project_not_found") {
@@ -452,7 +591,7 @@ export class TrelloWorkHistoryClient {
     return { actions, coverage: { pagesRead, truncated, oldestActionReached } };
   }
 
-  async execute(input: TrelloWorkHistoryInput, now = new Date()): Promise<WorkHistoryDigest> {
+  async execute(input: TrelloWorkHistoryInput, now = new Date()): Promise<WorkHistoryFactSkeleton> {
     const window = resolveHistoryWindow(input.window, now);
     const board = await this.resolveSingleBoard();
     const cards = await this.readCards(board.id);
@@ -461,7 +600,7 @@ export class TrelloWorkHistoryClient {
       throw new TrelloWorkHistoryError("project_not_found");
     }
     const { actions, coverage } = await this.readActions(board.id, window);
-    return buildWorkHistoryDigest(input, actions, cards, coverage, now);
+    return buildWorkHistoryFactSkeleton(input, actions, cards, coverage, now);
   }
 }
 

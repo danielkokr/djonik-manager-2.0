@@ -3,7 +3,8 @@ import { test } from "node:test";
 import {
   TrelloWorkHistoryClient,
   TrelloWorkHistoryError,
-  buildWorkHistoryDigest,
+  buildWorkHistoryCategories,
+  buildWorkHistoryFactSkeleton,
   executeTrelloWorkHistoryFromEnvironment,
   formatKyivDateTime,
   resolveHistoryWindow,
@@ -47,44 +48,63 @@ test("#36 resolves Kyiv Monday week boundaries, last week and the DST change wit
   assert.equal(explicit.to.toISOString(), "2026-03-23T22:00:00.000Z");
 });
 
-test("#36 collapses rapid moves, preserves reopen/re-Done, isolates current project labels and suppresses create+archive noise", () => {
-  const digest = buildWorkHistoryDigest(
+test("#36 internal categories (debug/test-only) still count occurrences vs cards correctly and isolate current project labels", () => {
+  // buildWorkHistoryCategories is the pre-#36-fix, arithmetic-only intermediate shape. It is no
+  // longer sent to the model (docs/28), but stays useful here to test counting independently of
+  // sentence rendering.
+  const categories = buildWorkHistoryCategories({ window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" }, response_format: "detailed" }, history, cards, NOW);
+  assert.equal(categories.reached_done?.total, 2, "reached-Done total counts event occurrences, not net cards");
+  assert.equal(categories.reached_done?.items.length, 1, "one net card item represents two Done entries");
+  assert.equal(categories.reached_done?.items[0].occurrences, 2);
+  assert.equal(categories.reached_done?.items[0].transition, "In progress → Done");
+  assert.equal(categories.returned_from_done?.total, 1);
+  assert.equal(categories.returned_from_done?.items[0].card, "Анонімна картка");
+  assert.equal(categories.reached_done?.items[0].due, "пт 27.03, 18:00");
+  const board = buildWorkHistoryCategories({ window: { kind: "this_week" }, scope: { kind: "board" } }, history, cards, NOW);
+  assert.equal(board.reached_done?.total, 3, "whole-board scope includes the other labelled card");
+});
+
+test("#36 fact skeleton renders reopen/re-Done as already-computed Ukrainian sentences with no raw IDs, no lastActivityAt, and no actor claim", () => {
+  const skeleton = buildWorkHistoryFactSkeleton(
     { window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" }, response_format: "detailed" },
     history,
     cards,
     { pagesRead: 2, truncated: false, oldestActionReached: true },
     NOW,
   );
-  assert.equal(digest.reached_done?.total, 2, "reached-Done total counts event occurrences, not net cards");
-  assert.equal(digest.reached_done?.total_kind, "event_occurrences");
-  assert.equal(digest.reached_done?.shown, 2);
-  assert.equal(digest.reached_done?.omitted, 0);
-  assert.equal(digest.reached_done?.items.length, 1, "one net card item represents two Done entries");
-  assert.equal(digest.reached_done?.items[0].occurrences, 2);
-  assert.equal(digest.reached_done?.items[0].transition, "In progress → Done");
-  assert.equal(digest.returned_from_done?.total, 1);
-  assert.equal(digest.returned_from_done?.total_kind, "event_occurrences");
-  assert.equal(digest.returned_from_done?.items[0].card, "Анонімна картка");
-  assert.equal(digest.reached_done?.items[0].due, "пт 27.03, 18:00");
-  assert.equal(digest.coverage.pagesRead, 2);
-  assert.doesNotMatch(JSON.stringify(digest), /card_extract|lastActivityAt|""/);
-  const board = buildWorkHistoryDigest({ window: { kind: "this_week" }, scope: { kind: "board" } }, history, cards, { pagesRead: 1, truncated: false, oldestActionReached: true }, NOW);
-  assert.equal(board.reached_done?.total, 3, "whole-board scope includes the other labelled card");
+  assert.deepEqual(skeleton.fact_lines, [
+    "У Done перейшло 2 події.",
+    "У Done перейшла «Анонімна картка» — пн 23.03, 13:00 (2 рази), due пт 27.03, 18:00.",
+    "Із Done повернулося 1 подія.",
+    "Із Done повернулася «Анонімна картка» — пн 23.03, 11:00, due пт 27.03, 18:00.",
+  ]);
+  const joined = skeleton.fact_lines.join(" ");
+  assert.doesNotMatch(joined, /card_extract|lastActivityAt|ти зробив|daniel/i);
+  const board = buildWorkHistoryFactSkeleton({ window: { kind: "this_week" }, scope: { kind: "board" } }, history, cards, { pagesRead: 1, truncated: false, oldestActionReached: true }, NOW);
+  assert.ok(board.fact_lines.includes("У Done перейшло 3 події."), "whole-board scope includes the other labelled card in its own authoritative total sentence");
 });
 
-test("#36 concise digest limits each named category to five items and formats Kyiv actions", () => {
+test("#36 concise fact skeleton limits named examples to five, states the omitted count as its own sentence, and flags incomplete coverage", () => {
   const manyCards = Array.from({ length: 6 }, (_, index) => ({ id: `id_${index}`, name: `Картка ${index}`, labels: [{ name: "Extract" }] }));
   const manyActions = manyCards.map((card, index) => action(`a_${index}`, `2026-03-23T0${index}:00:00Z`, "updateCard", { card, listBefore: { name: "In progress" }, listAfter: { name: "Done" } }));
-  const digest = buildWorkHistoryDigest({ window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" } }, manyActions, manyCards, { pagesRead: 1, truncated: true, oldestActionReached: false }, NOW);
-  assert.equal(digest.reached_done?.total, 6);
-  assert.equal(digest.reached_done?.shown, 5);
-  assert.equal(digest.reached_done?.omitted, 1);
-  assert.equal(digest.reached_done?.items.length, 5);
-  assert.equal(digest.coverage.truncated, true);
+  const skeleton = buildWorkHistoryFactSkeleton({ window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" } }, manyActions, manyCards, { pagesRead: 1, truncated: true, oldestActionReached: false }, NOW);
+  assert.deepEqual(skeleton.fact_lines, [
+    "У Done перейшло 6 подій.",
+    "У Done перейшла «Картка 0» — пн 23.03, 02:00.",
+    "У Done перейшла «Картка 1» — пн 23.03, 03:00.",
+    "У Done перейшла «Картка 2» — пн 23.03, 04:00.",
+    "У Done перейшла «Картка 3» — пн 23.03, 05:00.",
+    "У Done перейшла «Картка 4» — пн 23.03, 06:00.",
+    "Ще 1 подія не перелічена в короткому огляді.",
+    "Історія за цей період може бути неповною: частину дій не вдалося прочитати повністю.",
+  ]);
   assert.equal(formatKyivDateTime("2026-03-23T08:00:00Z"), "пн 23.03, 10:00");
 });
 
-test("#36 regression: concise project digest makes seven moved cards and five named examples unambiguous", () => {
+test("#36 fixture A (first live failure): a concise project skeleton makes 7 moved cards and 5 named examples factually unambiguous", () => {
+  // Reproduces docs/27's first live failure: Haiku answered "5 moved" when the deterministic
+  // count was 7, because 7 and 5 were both present as competing numbers (`counts.moved` vs an
+  // `items` array of length 5). The fact skeleton must never emit that second number as a count.
   const movedCards = Array.from({ length: 7 }, (_, index) => ({ id: `moved_${index}`, name: `Рух ${index + 1}`, labels: [{ name: "Extract" }] }));
   const movedActions = movedCards.map((card, index) =>
     action(`move_${index}`, `2026-03-23T${String(index + 1).padStart(2, "0")}:00:00Z`, "updateCard", {
@@ -93,23 +113,46 @@ test("#36 regression: concise project digest makes seven moved cards and five na
       listAfter: { name: "This week" },
     }),
   );
-  const digest = buildWorkHistoryDigest(
+  const skeleton = buildWorkHistoryFactSkeleton(
     { window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" }, response_format: "concise" },
     movedActions,
     movedCards,
     { pagesRead: 1, truncated: false, oldestActionReached: true },
     NOW,
   );
-  assert.equal(digest.moved?.total, 7);
-  assert.equal(digest.moved?.total_kind, "cards");
-  assert.equal(digest.moved?.shown, 5);
-  assert.equal(digest.moved?.omitted, 2);
-  assert.equal(digest.moved?.items.length, 5);
-  assert.equal(digest.reached_done, undefined, "empty categories stay absent");
-  assert.doesNotMatch(JSON.stringify(digest), /moved_\d|lastActivityAt/);
+  assert.equal(skeleton.fact_lines[0], "Між іншими списками переміщено 7 карток.", "the total sentence states 7, not the shown subset");
+  assert.equal(skeleton.fact_lines.filter((line) => line.startsWith("«Рух")).length, 5, "at most five named examples appear");
+  assert.equal(skeleton.fact_lines.at(-1), "Ще 2 переміщення не перелічені в короткому огляді.", "the omitted amount is its own factual sentence, not something to subtract");
+  assert.doesNotMatch(skeleton.fact_lines.join(" "), /moved_\d|lastActivityAt/);
 });
 
-test("#36 detailed digest retains every item with authoritative total and no omitted subset", () => {
+test("#36 fixture B (second live failure): reached-Done and created totals stay authoritative even when created is truncated to five examples", () => {
+  // Reproduces docs/27's second live failure: with reached_done.total=4 and
+  // created.total=6/shown=5/omitted=1, Haiku answered "3 completed" and "5 created", again
+  // treating a displayed/selected subset as the authoritative count.
+  const reachedDoneCards = Array.from({ length: 4 }, (_, index) => ({ id: `rd_${index}`, name: `Завершення ${index + 1}`, labels: [{ name: "Extract" }] }));
+  const reachedDoneActions = reachedDoneCards.map((card, index) =>
+    action(`rd_action_${index}`, `2026-03-16T0${index + 1}:00:00Z`, "updateCard", { card, listBefore: { name: "In progress" }, listAfter: { name: "Done" } }),
+  );
+  const createdCards = Array.from({ length: 6 }, (_, index) => ({ id: `cr_${index}`, name: `Нова картка ${index + 1}`, labels: [{ name: "Extract" }] }));
+  const createdActions = createdCards.map((card, index) => action(`cr_action_${index}`, `2026-03-17T0${index + 1}:00:00Z`, "createCard", { card }));
+
+  const skeleton = buildWorkHistoryFactSkeleton(
+    { window: { kind: "explicit", from: "2026-03-14", to: "2026-03-21" }, scope: { kind: "project", label: "Extract" }, response_format: "concise" },
+    [...reachedDoneActions, ...createdActions],
+    [...reachedDoneCards, ...createdCards],
+    { pagesRead: 1, truncated: false, oldestActionReached: true },
+    NOW,
+  );
+
+  assert.ok(skeleton.fact_lines.includes("У Done перейшло 4 події."), "reached-Done total is stated exactly, with no lower substitute total");
+  assert.ok(skeleton.fact_lines.includes("Створено 6 карток."), "created total is stated exactly, not the five shown");
+  assert.ok(skeleton.fact_lines.includes("Ще 1 картка не перелічена в короткому огляді."), "the one omitted created card is its own factual sentence");
+  assert.equal(skeleton.fact_lines.filter((line) => line.startsWith("У Done перейшла")).length, 4, "all four reached-Done examples are named because the concise limit (5) is not exceeded");
+  assert.equal(skeleton.fact_lines.filter((line) => line.startsWith("Створено «")).length, 5, "created examples are capped at five even though six cards were created");
+});
+
+test("#36 detailed fact skeleton names every item and never emits an omitted-example sentence", () => {
   const manyCards = Array.from({ length: 6 }, (_, index) => ({ id: `detail_${index}`, name: `Деталь ${index}`, labels: [{ name: "Extract" }] }));
   const manyActions = manyCards.map((card, index) =>
     action(`detail_action_${index}`, `2026-03-23T${String(index + 1).padStart(2, "0")}:00:00Z`, "updateCard", {
@@ -118,20 +161,22 @@ test("#36 detailed digest retains every item with authoritative total and no omi
       listAfter: { name: "This week" },
     }),
   );
-  const digest = buildWorkHistoryDigest(
+  const skeleton = buildWorkHistoryFactSkeleton(
     { window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" }, response_format: "detailed" },
     manyActions,
     manyCards,
     { pagesRead: 1, truncated: false, oldestActionReached: true },
     NOW,
   );
-  assert.deepEqual(digest.moved && { total: digest.moved.total, shown: digest.moved.shown, omitted: digest.moved.omitted, items: digest.moved.items.length }, { total: 6, shown: 6, omitted: 0, items: 6 });
+  assert.equal(skeleton.fact_lines[0], "Між іншими списками переміщено 6 карток.");
+  assert.equal(skeleton.fact_lines.filter((line) => line.startsWith("«Деталь")).length, 6);
+  assert.ok(!skeleton.fact_lines.some((line) => line.startsWith("Ще ")), "detailed mode names every item, so there is nothing left to omit");
 });
 
 test("#36 reports ordinary creation and archival independently when they are not same-window noise", () => {
   const createdCard = { id: "created", name: "Нова картка", labels: [{ name: "Extract" }] };
   const archivedCard = { id: "archived", name: "Архівна картка", labels: [{ name: "Extract" }] };
-  const digest = buildWorkHistoryDigest(
+  const skeleton = buildWorkHistoryFactSkeleton(
     { window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" }, response_format: "detailed" },
     [
       action("created", "2026-03-23T08:00:00Z", "createCard", { card: createdCard }),
@@ -141,10 +186,27 @@ test("#36 reports ordinary creation and archival independently when they are not
     { pagesRead: 1, truncated: false, oldestActionReached: true },
     NOW,
   );
-  assert.deepEqual(digest.created && { total: digest.created.total, shown: digest.created.shown, omitted: digest.created.omitted, total_kind: digest.created.total_kind }, { total: 1, shown: 1, omitted: 0, total_kind: "cards" });
-  assert.equal(digest.archived?.total, 1);
-  assert.equal(digest.created?.items[0].card, "Нова картка");
-  assert.equal(digest.archived?.items[0].card, "Архівна картка");
+  assert.deepEqual(skeleton.fact_lines, [
+    "Створено 1 картка.",
+    "Створено «Нова картка» — пн 23.03, 10:00.",
+    "Архівовано 1 картка.",
+    "Архівовано «Архівна картка» — пн 23.03, 11:00.",
+  ]);
+});
+
+test("#36 create+archive noise within the same window is suppressed cleanly and an inactive project reports zero categories without arithmetic", () => {
+  const noiseCard = { id: "noise", name: "Тестовий шум", closed: true, labels: [{ name: "Extract" }] };
+  const skeleton = buildWorkHistoryFactSkeleton(
+    { window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" } },
+    [
+      action("n1", "2026-03-23T07:00:00Z", "createCard", { card: noiseCard }),
+      action("n2", "2026-03-23T12:00:00Z", "updateCard", { card: noiseCard, old: { closed: false } }),
+    ],
+    [noiseCard],
+    { pagesRead: 1, truncated: false, oldestActionReached: true },
+    NOW,
+  );
+  assert.deepEqual(skeleton.fact_lines, ["За цей період суттєвих змін не зафіксовано."]);
 });
 
 test("#36 read-only REST paging uses since/before and reports coverage without credentials in requests or errors", async () => {
