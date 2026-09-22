@@ -14,6 +14,17 @@ import {
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const skill = readFileSync(join(root, ".claude", "skills", "work-review", "SKILL.md"), "utf8");
 
+test("#36 work-review Skill has current required YAML frontmatter", () => {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(skill);
+  assert.ok(match, "SKILL.md must begin with YAML frontmatter");
+  const frontmatter = match[1];
+  assert.match(frontmatter, /^name: work-review$/m);
+  const description = /^description: (.+)$/m.exec(frontmatter)?.[1]?.trim() ?? "";
+  assert.ok(description.length > 0, "frontmatter description must be non-empty");
+  assert.match(description, /Trello action history/i);
+  assert.match(description, /this week, last week, or an explicit date range/i);
+});
+
 // #29's rubric/source remains historical evidence. These assertions replace only its now-superseded
 // current-state Skill contract with #36's action-history tool contract.
 test("#36 work-review Skill is thin, history-first, actor-safe and read-only", () => {

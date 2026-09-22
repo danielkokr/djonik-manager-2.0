@@ -1,3 +1,8 @@
+---
+name: work-review
+description: Review Trello action history for a project or board over this week, last week, or an explicit date range, then provide one short PM conclusion after the client-delivered factual report.
+---
+
 # Work review — Trello action history
 
 Use `trello_work_history` for questions about a period: what moved to Done, returned from Done, was created, archived, or otherwise changed this/last week or in an explicit range. It is read-only and Trello's action log is the source of truth for those events.
