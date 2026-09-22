@@ -179,3 +179,67 @@ passed
 git diff --check
 passed (only non-fatal CRLF/global-ignore warnings)
 ```
+
+## 10. Second isolated live revalidation — commit `1b2e33a`
+
+Date: 2026-09-22. This is a separately authorised rerun after `1b2e33a` (`fix: disambiguate work history digest totals`). It is independent of the historical first run above: its $0.70 authorization does not subtract the earlier $0.22 spend.
+
+**Rerun result: candidate fails #36 live revalidation.** The original `7` versus `5` ambiguity was structurally removed, and T1 did not repeat that exact claim. However, T2 still treated non-authoritative displayed/selected information as totals: it reported three completions against `reached_done.total: 4` and five created cards against `created.total: 6`, `shown: 5`, `omitted: 1`. This is a critical total-fidelity failure. The run stopped immediately after T2; PH and Sessions 2–4 were not started.
+
+### Preflight and frozen candidate
+
+- Canonical NOW: `docs/02_DEVELOPMENT_ROADMAP.md` still marks #36 NOW. `1b2e33abddf711fd9406cfdea0c848aca2dc59c1` is `HEAD`.
+- Plan-vs-actual remains deferred to #34: #34 owns persistent accepted commitment identity/card/project. No Memory fixture was seeded or changed.
+- Production read-back before and after the rerun was identical: `agent_01WGRHDBjQa3eMhoGJMmQ1dh`, version 21, `claude-haiku-4-5-20251001` standard, system SHA-256 `03b33a909123bb40d56415fee7b4a4b95071e5e6a4a31a70b16c3f6d6a283899`, four `latest` coordinator Skills, PH `agent_01KNiQDzzPjaMU6LLF4mU6uM` v4. No production resource was modified.
+- New isolated candidate: `agent_01G9i5vhv4oNcp14rXyvTyRc`, version 1, same model/system hash, and pinned coordinator Skills: `task-management` `skver_012fLb9ZFpL4mjqybAZ7KtmU`; `daily-planning` `skver_01TDfMCnuv5LkQN4WvtwBzXW`; `weekly-planning` `skver_018soRHmcAn6onE8DpHScFbf`; `studio-intake` `skver_018sJv1GCnzfZRG4NbExbAzj`; canonical PH v4.
+- Candidate work-review Skill: `skill_01YVPQniaz4A7HcV5SMhF4bH` / `skver_01Tv6i31e7JLuH3i63WFGr4t`; committed-source SHA-256 `5f3dd016afa630b347ebe0d609fc261aa63a3570f2d2bf8328fed05a09974e3b`. `trello_work_history` input-schema SHA-256 `ff820032911734a0fc63bdf2d2e941994d28241614cca812fbd353b4bc1a7921`.
+- The candidate has every listed `trelloWrite*` tool disabled (including `trelloWriteCard`), Calendar disabled, and the Session mounted `memstore_01WViYK3WQvGEgojB2GiaDFq` with `read_only`. Candidate version remained 1 after the first paid turn.
+- The old failed candidate was neither reused nor modified: `agent_01EeGJTjuKWZa3LuRaHBjj8k` remains version 1 with its earlier update timestamp.
+
+### Fail-fast Session 1
+
+Session: `sesn_01AM4JKKPCWYA7nZrNCkYCXj`, native `max_list_cost: $0.45`; final authoritative cumulative rerun cost **$0.04**. This is below the new $0.70 cap. Historical first-run cost remains **$0.22**, reported separately above.
+
+#### T1 — original failure reproduction (pass, with a non-critical shape observation)
+
+- Prompt: `Що я реально зробив/завершив цього тижня по Extract? Дай коротко.`
+- Custom use `sevt_01DzMYY3YewYmDmZTL9Fbf2m`: `{"scope":{"kind":"project","label":"Extract"},"window":{"kind":"this_week"},"response_format":"concise"}`.
+- Correlated result `sevt_01XHgD2fgewJceWeoR7SV781` used exactly that ID as `custom_tool_use_id`, then ended at `sevt_01D4Nbrpp3FjiFqntLdeS4wa` with `end_turn`.
+- Model-facing categories: `reached_done { total: 1, total_kind: event_occurrences, shown: 1, omitted: 0, items.length: 1 }`; `created { 3, cards, 3, 0, 3 }`; `moved { 7, cards, 5, 2, 5 }`; one-page complete coverage.
+- Answer correctly reported one completion and three creations. It listed representative moves followed by “та інші”; it did **not** claim that five was the moved total. Thus the original `total: 7` / `shown: 5` failure did not recur. The answer was more report-like than the requested short 2–4 sentences, recorded as a non-critical response-shape issue.
+- Authoritative list cost after T1: $0.03; $0.67 rerun authorization remained, so T2 was admitted (normal-turn reserve $0.12 satisfied).
+
+#### T2 — same-Session last week (critical failure)
+
+- T2 was sent only after T1's `end_turn` was inspected and graded; T1 ended at `09:57:42Z`, while the T2 user event `sevt_01B3cQ99sbDAkvZoFjCgAXKj` was processed at `09:59:03Z`. No future prompt was pre-enqueued.
+- Prompt: `А минулого тижня по Extract? Теж коротко.`
+- New custom use `sevt_01RxfEjTLod7TXGVG197gwwK`: `{"scope":{"kind":"project","label":"Extract"},"window":{"kind":"last_week"},"response_format":"concise"}`. Its correlated result was `sevt_011CaPhisi6QEbhpyfTVFKEP`, using exactly that `custom_tool_use_id`; no stale T1 result was reused.
+- Exact relevant model-facing categories: `reached_done { total: 4, total_kind: event_occurrences, shown: 4, omitted: 0, items.length: 4 }`; `returned_from_done { total: 2, event_occurrences, shown: 2, omitted: 0, items.length: 2 }`; `created { total: 6, cards, shown: 5, omitted: 1, items.length: 5 }`; `moved { total: 5, cards, shown: 5, omitted: 0, items.length: 5 }`; coverage remained one-page, non-truncated and oldest reached.
+- Visible answer said **“Завершено 3 карти”** and **“Створено 5 нових карт”**. The digest authoritatively says four reached-Done event occurrences and six created cards. The latter exactly repeats the forbidden total/subset conflation (`total: 6`, `shown/items: 5`). The former is also materially wrong and selectively omits a supplied fourth occurrence. **Critical fail: category totals were not treated as authoritative.**
+- T2 ended authoritatively at `sevt_01CDt1i3LjpgwtX1xSSmegoS` with `end_turn`. Cumulative Session cost was $0.04; no further turn was admitted despite $0.66 remaining.
+
+### Stop, safety, and remaining scope
+
+No Project Health prompt, whole-board sample, explicit reopen sample, or independent last-week Session was created after T2. Therefore there is no PH acceptance evidence from this rerun. The candidate was not changed after its first paid turn.
+
+Both history turns used only the read-only custom tool. The candidate structurally disabled Trello writes and Calendar; the Memory resource was read-only; no write event occurred. `requires_action` was treated as a pause, settled only through the exact observed custom-tool event ID, and each visible result waited for authoritative `end_turn`.
+
+The structural source fix is present and removes the original competing `counts`/array locations, but this rerun shows that it alone does not make Haiku reliably narrate every category total. Do not promote this candidate. Any remediation or another live attempt needs Product Lead review and separate Product Owner authorization; plan-vs-actual remains #34 work.
+
+**Recommendation: candidate fails #36 live revalidation.**
+
+### Local checks after revalidation
+
+```text
+npm test
+449 passed, 0 failed, 0 skipped, 0 cancelled
+
+npm run typecheck
+passed
+
+git diff --check
+passed (only non-fatal CRLF/global-ignore warnings)
+
+git status --short
+ M docs/27_ISSUE_36_LIVE_VALIDATION_REPORT.md
+```
