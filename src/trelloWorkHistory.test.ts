@@ -3,8 +3,8 @@ import { test } from "node:test";
 import {
   TrelloWorkHistoryClient,
   TrelloWorkHistoryError,
+  buildWorkHistoryAnswer,
   buildWorkHistoryCategories,
-  buildWorkHistoryFactSkeleton,
   executeTrelloWorkHistoryFromEnvironment,
   formatKyivDateTime,
   resolveHistoryWindow,
@@ -49,8 +49,8 @@ test("#36 resolves Kyiv Monday week boundaries, last week and the DST change wit
 });
 
 test("#36 internal categories (debug/test-only) still count occurrences vs cards correctly and isolate current project labels", () => {
-  // buildWorkHistoryCategories is the pre-#36-fix, arithmetic-only intermediate shape. It is no
-  // longer sent to the model (docs/28), but stays useful here to test counting independently of
+  // buildWorkHistoryCategories is the pre-#36-fix, arithmetic-only intermediate shape. It is never
+  // sent to the model (docs/28, docs/29), but stays useful here to test counting independently of
   // sentence rendering.
   const categories = buildWorkHistoryCategories({ window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" }, response_format: "detailed" }, history, cards, NOW);
   assert.equal(categories.reached_done?.total, 2, "reached-Done total counts event occurrences, not net cards");
@@ -64,47 +64,57 @@ test("#36 internal categories (debug/test-only) still count occurrences vs cards
   assert.equal(board.reached_done?.total, 3, "whole-board scope includes the other labelled card");
 });
 
-test("#36 fact skeleton renders reopen/re-Done as already-computed Ukrainian sentences with no raw IDs, no lastActivityAt, and no actor claim", () => {
-  const skeleton = buildWorkHistoryFactSkeleton(
+test("#36 concise answer_text is one already-complete Ukrainian review: combined totals, named completions, no raw IDs, no lastActivityAt, no actor claim", () => {
+  const answer = buildWorkHistoryAnswer(
+    { window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" } },
+    history,
+    cards,
+    { pagesRead: 2, truncated: false, oldestActionReached: true },
+    NOW,
+  );
+  assert.equal(
+    answer.answer_text,
+    "Цього тижня по Extract на дошці в Done перейшло 2 події та 1 подія повернулося з Done. " +
+      "У Done перейшла «Анонімна картка». " +
+      "Із Done повернулася «Анонімна картка».",
+  );
+  assert.doesNotMatch(answer.answer_text, /card_extract|lastActivityAt|ти зробив|daniel/i);
+  const board = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: { kind: "board" } }, history, cards, { pagesRead: 1, truncated: false, oldestActionReached: true }, NOW);
+  assert.match(board.answer_text, /в Done перейшло 3 події/, "whole-board scope includes the other labelled card in the combined opening sentence");
+});
+
+test("#36 detailed answer_text names every item and never emits an omitted-example sentence", () => {
+  const answer = buildWorkHistoryAnswer(
     { window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" }, response_format: "detailed" },
     history,
     cards,
     { pagesRead: 2, truncated: false, oldestActionReached: true },
     NOW,
   );
-  assert.deepEqual(skeleton.fact_lines, [
-    "У Done перейшло 2 події.",
-    "У Done перейшла «Анонімна картка» — пн 23.03, 13:00 (2 рази), due пт 27.03, 18:00.",
-    "Із Done повернулося 1 подія.",
-    "Із Done повернулася «Анонімна картка» — пн 23.03, 11:00, due пт 27.03, 18:00.",
-  ]);
-  const joined = skeleton.fact_lines.join(" ");
-  assert.doesNotMatch(joined, /card_extract|lastActivityAt|ти зробив|daniel/i);
-  const board = buildWorkHistoryFactSkeleton({ window: { kind: "this_week" }, scope: { kind: "board" } }, history, cards, { pagesRead: 1, truncated: false, oldestActionReached: true }, NOW);
-  assert.ok(board.fact_lines.includes("У Done перейшло 3 події."), "whole-board scope includes the other labelled card in its own authoritative total sentence");
+  assert.equal(
+    answer.answer_text,
+    "У Done перейшло 2 події. У Done перейшла «Анонімна картка» — пн 23.03, 13:00 (2 рази), due пт 27.03, 18:00. " +
+      "Із Done повернулося 1 подія. Із Done повернулася «Анонімна картка» — пн 23.03, 11:00, due пт 27.03, 18:00.",
+  );
 });
 
-test("#36 concise fact skeleton limits named examples to five, states the omitted count as its own sentence, and flags incomplete coverage", () => {
+test("#36 concise answer_text limits named completions to five, folds the omitted count into the same sentence, and flags incomplete coverage", () => {
   const manyCards = Array.from({ length: 6 }, (_, index) => ({ id: `id_${index}`, name: `Картка ${index}`, labels: [{ name: "Extract" }] }));
   const manyActions = manyCards.map((card, index) => action(`a_${index}`, `2026-03-23T0${index}:00:00Z`, "updateCard", { card, listBefore: { name: "In progress" }, listAfter: { name: "Done" } }));
-  const skeleton = buildWorkHistoryFactSkeleton({ window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" } }, manyActions, manyCards, { pagesRead: 1, truncated: true, oldestActionReached: false }, NOW);
-  assert.deepEqual(skeleton.fact_lines, [
-    "У Done перейшло 6 подій.",
-    "У Done перейшла «Картка 0» — пн 23.03, 02:00.",
-    "У Done перейшла «Картка 1» — пн 23.03, 03:00.",
-    "У Done перейшла «Картка 2» — пн 23.03, 04:00.",
-    "У Done перейшла «Картка 3» — пн 23.03, 05:00.",
-    "У Done перейшла «Картка 4» — пн 23.03, 06:00.",
-    "Ще 1 подія не перелічена в короткому огляді.",
-    "Історія за цей період може бути неповною: частину дій не вдалося прочитати повністю.",
-  ]);
+  const answer = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" } }, manyActions, manyCards, { pagesRead: 1, truncated: true, oldestActionReached: false }, NOW);
+  assert.equal(
+    answer.answer_text,
+    "Цього тижня по Extract на дошці в Done перейшло 6 подій. " +
+      "У Done перейшли «Картка 0», «Картка 1», «Картка 2», «Картка 3» та «Картка 4» (ще 1). " +
+      "Історія за цей період може бути неповною: частину дій не вдалося прочитати повністю.",
+  );
   assert.equal(formatKyivDateTime("2026-03-23T08:00:00Z"), "пн 23.03, 10:00");
 });
 
-test("#36 fixture A (first live failure): a concise project skeleton makes 7 moved cards and 5 named examples factually unambiguous", () => {
+test("#36 fixture A (first live failure): a concise board-noise moved total never leaks into a named sentence and states 7, not 5", () => {
   // Reproduces docs/27's first live failure: Haiku answered "5 moved" when the deterministic
-  // count was 7, because 7 and 5 were both present as competing numbers (`counts.moved` vs an
-  // `items` array of length 5). The fact skeleton must never emit that second number as a count.
+  // count was 7. `moved` cards are never individually named in a concise answer (docs/29), so
+  // there is no shown-subset number anywhere near the authoritative total for Claude to substitute.
   const movedCards = Array.from({ length: 7 }, (_, index) => ({ id: `moved_${index}`, name: `Рух ${index + 1}`, labels: [{ name: "Extract" }] }));
   const movedActions = movedCards.map((card, index) =>
     action(`move_${index}`, `2026-03-23T${String(index + 1).padStart(2, "0")}:00:00Z`, "updateCard", {
@@ -113,23 +123,20 @@ test("#36 fixture A (first live failure): a concise project skeleton makes 7 mov
       listAfter: { name: "This week" },
     }),
   );
-  const skeleton = buildWorkHistoryFactSkeleton(
+  const answer = buildWorkHistoryAnswer(
     { window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" }, response_format: "concise" },
     movedActions,
     movedCards,
     { pagesRead: 1, truncated: false, oldestActionReached: true },
     NOW,
   );
-  assert.equal(skeleton.fact_lines[0], "Між іншими списками переміщено 7 карток.", "the total sentence states 7, not the shown subset");
-  assert.equal(skeleton.fact_lines.filter((line) => line.startsWith("«Рух")).length, 5, "at most five named examples appear");
-  assert.equal(skeleton.fact_lines.at(-1), "Ще 2 переміщення не перелічені в короткому огляді.", "the omitted amount is its own factual sentence, not something to subtract");
-  assert.doesNotMatch(skeleton.fact_lines.join(" "), /moved_\d|lastActivityAt/);
+  assert.equal(answer.answer_text, "Цього тижня по Extract на дошці ще 7 карток перемістилися між іншими списками.");
+  assert.doesNotMatch(answer.answer_text, /«Рух|moved_\d|lastActivityAt|5 карт/);
 });
 
-test("#36 fixture B (second live failure): reached-Done and created totals stay authoritative even when created is truncated to five examples", () => {
-  // Reproduces docs/27's second live failure: with reached_done.total=4 and
-  // created.total=6/shown=5/omitted=1, Haiku answered "3 completed" and "5 created", again
-  // treating a displayed/selected subset as the authoritative count.
+test("#36 fixture B (second live failure): reached-Done and created totals stay authoritative and created cards are never individually named", () => {
+  // Reproduces docs/27's second live failure: with reached_done=4 and created=6 (5 shown), Haiku
+  // answered "3 completed" and "5 created" — treating a displayed/selected subset as the total.
   const reachedDoneCards = Array.from({ length: 4 }, (_, index) => ({ id: `rd_${index}`, name: `Завершення ${index + 1}`, labels: [{ name: "Extract" }] }));
   const reachedDoneActions = reachedDoneCards.map((card, index) =>
     action(`rd_action_${index}`, `2026-03-16T0${index + 1}:00:00Z`, "updateCard", { card, listBefore: { name: "In progress" }, listAfter: { name: "Done" } }),
@@ -137,7 +144,7 @@ test("#36 fixture B (second live failure): reached-Done and created totals stay 
   const createdCards = Array.from({ length: 6 }, (_, index) => ({ id: `cr_${index}`, name: `Нова картка ${index + 1}`, labels: [{ name: "Extract" }] }));
   const createdActions = createdCards.map((card, index) => action(`cr_action_${index}`, `2026-03-17T0${index + 1}:00:00Z`, "createCard", { card }));
 
-  const skeleton = buildWorkHistoryFactSkeleton(
+  const answer = buildWorkHistoryAnswer(
     { window: { kind: "explicit", from: "2026-03-14", to: "2026-03-21" }, scope: { kind: "project", label: "Extract" }, response_format: "concise" },
     [...reachedDoneActions, ...createdActions],
     [...reachedDoneCards, ...createdCards],
@@ -145,38 +152,86 @@ test("#36 fixture B (second live failure): reached-Done and created totals stay 
     NOW,
   );
 
-  assert.ok(skeleton.fact_lines.includes("У Done перейшло 4 події."), "reached-Done total is stated exactly, with no lower substitute total");
-  assert.ok(skeleton.fact_lines.includes("Створено 6 карток."), "created total is stated exactly, not the five shown");
-  assert.ok(skeleton.fact_lines.includes("Ще 1 картка не перелічена в короткому огляді."), "the one omitted created card is its own factual sentence");
-  assert.equal(skeleton.fact_lines.filter((line) => line.startsWith("У Done перейшла")).length, 4, "all four reached-Done examples are named because the concise limit (5) is not exceeded");
-  assert.equal(skeleton.fact_lines.filter((line) => line.startsWith("Створено «")).length, 5, "created examples are capped at five even though six cards were created");
+  assert.match(answer.answer_text, /в Done перейшло 4 поді[їй]/, "reached-Done total is stated exactly, with no lower substitute total");
+  assert.match(answer.answer_text, /створено 6 карток/, "created total is stated exactly, not the five internally shown");
+  assert.match(answer.answer_text, /перейшли «Завершення 1», «Завершення 2», «Завершення 3» та «Завершення 4»/, "all four reached-Done examples are named because the concise limit (5) is not exceeded");
+  assert.doesNotMatch(answer.answer_text, /Нова картка/, "created cards are never individually named in a concise answer");
+  assert.match(answer.answer_text, /не всі створені картки/, "the caveat says created cards were not individually listed");
+  assert.doesNotMatch(answer.answer_text, /\b5\b.*created|created.*\b5\b/i);
 });
 
-test("#36 detailed fact skeleton names every item and never emits an omitted-example sentence", () => {
-  const manyCards = Array.from({ length: 6 }, (_, index) => ({ id: `detail_${index}`, name: `Деталь ${index}`, labels: [{ name: "Extract" }] }));
-  const manyActions = manyCards.map((card, index) =>
-    action(`detail_action_${index}`, `2026-03-23T${String(index + 1).padStart(2, "0")}:00:00Z`, "updateCard", {
-      card,
-      listBefore: { name: "Backlog" },
-      listAfter: { name: "This week" },
-    }),
-  );
-  const skeleton = buildWorkHistoryFactSkeleton(
-    { window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" }, response_format: "detailed" },
-    manyActions,
-    manyCards,
+test("#36 exact third live diagnostic fixture (docs/27 §12): every requirement from the fact-skeleton-compression remediation", () => {
+  // Reproduces the exact facts behind docs/27 §12's fact-skeleton candidate FAIL: correct totals
+  // (4/2/6/5) were narrated, but Haiku still misdescribed «Міні-парфуми адаптація» as created,
+  // claimed an unsupported "majority Backlog → This week/In progress" direction contradicted by
+  // «Брендбук» (This week → Backlog), invented "потребували правок", and added productivity framing.
+  const doneCards = [
+    { id: "kohaiu", name: "Кохаю пінка", labels: [{ name: "Extract" }] },
+    { id: "bili3d", name: "Білі аромати 3D відео", labels: [{ name: "Extract" }] },
+    { id: "avtorender", name: "Автоматизація рендеру", labels: [{ name: "Extract" }] },
+    { id: "komentari", name: "Коментарі по пінкам", labels: [{ name: "Extract" }] },
+  ];
+  const createdOnlyCards = [
+    { id: "bili50", name: "Білі аромати 50 ML", labels: [{ name: "Extract" }] },
+    { id: "chorni100", name: "Чорні аромати 100 ML", labels: [{ name: "Extract" }] },
+    { id: "flakony75", name: "Флакони 7.5 ML", labels: [{ name: "Extract" }] },
+    { id: "flakony15", name: "Флакони 1.5 ML", labels: [{ name: "Extract" }] },
+  ];
+  const movedOnlyCards = [
+    { id: "adaptatsiya", name: "Міні-парфуми адаптація", labels: [{ name: "Extract" }] },
+    { id: "brendbuk", name: "Брендбук", labels: [{ name: "Extract" }] },
+    { id: "moved_extra_1", name: "Рух 1", labels: [{ name: "Extract" }] },
+    { id: "moved_extra_2", name: "Рух 2", labels: [{ name: "Extract" }] },
+    { id: "moved_extra_3", name: "Рух 3", labels: [{ name: "Extract" }] },
+  ];
+  const allCards = [...doneCards, ...createdOnlyCards, ...movedOnlyCards];
+
+  const actions: TrelloAction[] = [
+    ...doneCards.map((card, i) => action(`done_${i}`, `2026-03-16T0${i + 1}:00:00Z`, "updateCard", { card, listBefore: { name: "In progress" }, listAfter: { name: "Done" } })),
+    // Two of the four Done cards also returned from Done earlier in the window (reopen).
+    action("return_0", "2026-03-16T00:30:00Z", "updateCard", { card: doneCards[0], listBefore: { name: "Done" }, listAfter: { name: "In progress" } }),
+    action("return_1", "2026-03-16T00:45:00Z", "updateCard", { card: doneCards[1], listBefore: { name: "Done" }, listAfter: { name: "In progress" } }),
+    // Six created cards this window: 4 done cards plus 2 created-only cards.
+    ...[...doneCards.slice(0, 2), ...createdOnlyCards].map((card, i) => action(`create_${i}`, `2026-03-14T0${i + 1}:00:00Z`, "createCard", { card })),
+    // Five dedicated moved (non-Done, non-created-this-window) cards, including one that moved
+    // BACKWARD (This week → Backlog) — the direction a live candidate wrongly generalized about.
+    action("move_0", "2026-03-14T05:00:00Z", "updateCard", { card: movedOnlyCards[0], listBefore: { name: "Backlog" }, listAfter: { name: "This week" } }),
+    action("move_1", "2026-03-14T06:00:00Z", "updateCard", { card: movedOnlyCards[1], listBefore: { name: "This week" }, listAfter: { name: "Backlog" } }),
+    action("move_2", "2026-03-14T07:00:00Z", "updateCard", { card: movedOnlyCards[2], listBefore: { name: "Backlog" }, listAfter: { name: "In progress" } }),
+    action("move_3", "2026-03-14T08:00:00Z", "updateCard", { card: movedOnlyCards[3], listBefore: { name: "Backlog" }, listAfter: { name: "This week" } }),
+    action("move_4", "2026-03-14T09:00:00Z", "updateCard", { card: movedOnlyCards[4], listBefore: { name: "This week" }, listAfter: { name: "In progress" } }),
+  ];
+
+  const answer = buildWorkHistoryAnswer(
+    { window: { kind: "explicit", from: "2026-03-14", to: "2026-03-21" }, scope: { kind: "project", label: "Extract" }, response_format: "concise" },
+    actions,
+    allCards,
     { pagesRead: 1, truncated: false, oldestActionReached: true },
     NOW,
   );
-  assert.equal(skeleton.fact_lines[0], "Між іншими списками переміщено 6 карток.");
-  assert.equal(skeleton.fact_lines.filter((line) => line.startsWith("«Деталь")).length, 6);
-  assert.ok(!skeleton.fact_lines.some((line) => line.startsWith("Ще ")), "detailed mode names every item, so there is nothing left to omit");
+
+  // 1-4: every authoritative total is stated correctly.
+  assert.match(answer.answer_text, /в Done перейшло 4 поді[їй]/, "4 reached-Done events");
+  assert.match(answer.answer_text, /2 поді[їй] повернулося з Done/, "2 returned-from-Done events");
+  assert.match(answer.answer_text, /створено 6 карток/, "6 created cards");
+  assert.match(answer.answer_text, /5 карток перемістилися між іншими списками/, "5 moved cards");
+  // 5: the moved card "Міні-парфуми адаптація" never appears anywhere, so it cannot be misdescribed as created.
+  assert.doesNotMatch(answer.answer_text, /адаптація/i);
+  // 6/7: no direction/majority claim, so «Брендбук»'s real (backward) direction cannot be contradicted.
+  assert.doesNotMatch(answer.answer_text, /більшість|напрям|Backlog\s*→|Брендбук/i);
+  // 8: no invented reason for the Done-returns.
+  assert.doesNotMatch(answer.answer_text, /правок|доробк/i);
+  // 9: no productivity/trend framing.
+  assert.doesNotMatch(answer.answer_text, /активн|ресурс|продуктивн/i);
+  // 10: stays within the intended short-answer sentence budget.
+  const sentenceCount = answer.answer_text.split(". ").length;
+  assert.ok(sentenceCount <= 4, `expected <=4 sentences, got ${sentenceCount}: ${answer.answer_text}`);
 });
 
 test("#36 reports ordinary creation and archival independently when they are not same-window noise", () => {
   const createdCard = { id: "created", name: "Нова картка", labels: [{ name: "Extract" }] };
   const archivedCard = { id: "archived", name: "Архівна картка", labels: [{ name: "Extract" }] };
-  const skeleton = buildWorkHistoryFactSkeleton(
+  const answer = buildWorkHistoryAnswer(
     { window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" }, response_format: "detailed" },
     [
       action("created", "2026-03-23T08:00:00Z", "createCard", { card: createdCard }),
@@ -186,17 +241,15 @@ test("#36 reports ordinary creation and archival independently when they are not
     { pagesRead: 1, truncated: false, oldestActionReached: true },
     NOW,
   );
-  assert.deepEqual(skeleton.fact_lines, [
-    "Створено 1 картка.",
-    "Створено «Нова картка» — пн 23.03, 10:00.",
-    "Архівовано 1 картка.",
-    "Архівовано «Архівна картка» — пн 23.03, 11:00.",
-  ]);
+  assert.equal(
+    answer.answer_text,
+    "Створено 1 картка. Створено «Нова картка» — пн 23.03, 10:00. Архівовано 1 картка. Архівовано «Архівна картка» — пн 23.03, 11:00.",
+  );
 });
 
 test("#36 create+archive noise within the same window is suppressed cleanly and an inactive project reports zero categories without arithmetic", () => {
   const noiseCard = { id: "noise", name: "Тестовий шум", closed: true, labels: [{ name: "Extract" }] };
-  const skeleton = buildWorkHistoryFactSkeleton(
+  const answer = buildWorkHistoryAnswer(
     { window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" } },
     [
       action("n1", "2026-03-23T07:00:00Z", "createCard", { card: noiseCard }),
@@ -206,7 +259,7 @@ test("#36 create+archive noise within the same window is suppressed cleanly and 
     { pagesRead: 1, truncated: false, oldestActionReached: true },
     NOW,
   );
-  assert.deepEqual(skeleton.fact_lines, ["За цей період суттєвих змін не зафіксовано."]);
+  assert.equal(answer.answer_text, "За цей період суттєвих змін не зафіксовано.");
 });
 
 test("#36 read-only REST paging uses since/before and reports coverage without credentials in requests or errors", async () => {

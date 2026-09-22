@@ -94,16 +94,20 @@ export interface WorkHistoryCategories {
 }
 
 /**
- * The model-facing #36 contract. Every quantitative claim (counts, omitted-example
- * amounts, coverage limitation) is already rendered into Ukrainian text in `fact_lines`.
- * Claude narrates these lines; it does not need `window`/`scope`/`coverage` to produce the
- * normal concise answer, and there is no parallel numeric field for a count to conflict with.
+ * The model-facing #36 contract (docs/29 remediation). `answer_text` is already the complete,
+ * ready-to-send Ukrainian review — not a list of facts for Claude to summarize. Three live
+ * candidates showed that handing Claude any parallel numeric/categorical structure (a `total`
+ * beside an `items` array, or a flat list of 15–25 already-rendered `fact_lines` it still had to
+ * compress into "коротко") gives it room to invent: rewrite a total, misattribute a moved card as
+ * created, or add an unsupported "majority direction"/causal claim while condensing. Deterministic
+ * code now performs that compression itself, so a normal successful call requires no factual
+ * summarization, categorization, or generalization from Claude at all.
  */
-export interface WorkHistoryFactSkeleton {
+export interface WorkHistoryAnswer {
   window: { from: string; to: string; label: string };
   scope: { kind: "board" } | { kind: "project"; label: string };
   coverage: HistoryCoverage;
-  fact_lines: string[];
+  answer_text: string;
 }
 
 export const TRELLO_WORK_HISTORY_TOOL = {
@@ -347,6 +351,112 @@ export function renderCategoryFactLines(categories: WorkHistoryCategories): stri
   return lines;
 }
 
+/** Joins Ukrainian list items with a comma, and "та" before the last one. Empty/singleton-safe. */
+function joinUkrainianList(parts: readonly string[]): string {
+  if (parts.length === 0) return "";
+  if (parts.length === 1) return parts[0];
+  return `${parts.slice(0, -1).join(", ")} та ${parts.at(-1)}`;
+}
+
+/** Lowercase, non-terminal clause form of each category's total, for folding several categories
+ *  into one opening sentence instead of one standalone sentence per category. */
+const TOTAL_CLAUSE: Record<CategoryKey, (n: number) => string> = {
+  reached_done: (n) => `в Done перейшло ${n} ${ukrainianPlural(n, ["подія", "події", "подій"])}`,
+  returned_from_done: (n) => `${n} ${ukrainianPlural(n, ["подія", "події", "подій"])} повернулося з Done`,
+  created: (n) => `створено ${n} ${ukrainianPlural(n, ["картка", "картки", "карток"])}`,
+  archived: (n) => `архівовано ${n} ${ukrainianPlural(n, ["картка", "картки", "карток"])}`,
+  moved: (n) => `ще ${n} ${ukrainianPlural(n, ["картка", "картки", "карток"])} перемістилися між іншими списками`,
+};
+
+function temporalPhrase(input: WorkHistoryWindowInput, window: HistoryWindow): string {
+  if (input.kind === "this_week") return "Цього тижня";
+  if (input.kind === "last_week") return "Минулого тижня";
+  return `За період ${formatKyivDateTime(window.from)} – ${formatKyivDateTime(window.to)}`;
+}
+
+function scopePhrase(scope: WorkHistoryScope): string {
+  return scope.kind === "project" ? ` по ${scope.label} на дошці` : " на дошці";
+}
+
+/**
+ * One combined opening sentence stating every non-empty category's authoritative total —
+ * deliberately one sentence for however many categories are active, rather than one standalone
+ * sentence per category, so a busy week does not by itself blow past a short answer's sentence
+ * budget. Returns null only when every category is empty (the zero-activity fallback applies).
+ */
+function buildOpeningSentence(categories: WorkHistoryCategories, input: TrelloWorkHistoryInput, window: HistoryWindow): string | null {
+  const clauses = CATEGORY_ORDER.filter((key) => categories[key]).map((key) => TOTAL_CLAUSE[key](categories[key]!.total));
+  if (clauses.length === 0) return null;
+  return `${temporalPhrase(input.window, window)}${scopePhrase(input.scope)} ${joinUkrainianList(clauses)}.`;
+}
+
+type NamedCategoryKey = "reached_done" | "returned_from_done";
+
+const NAMED_SENTENCE: Record<NamedCategoryKey, { subjectPrefix: string; singularVerb: string; pluralVerb: string }> = {
+  reached_done: { subjectPrefix: "У Done", singularVerb: "перейшла", pluralVerb: "перейшли" },
+  returned_from_done: { subjectPrefix: "Із Done", singularVerb: "повернулася", pluralVerb: "повернулися" },
+};
+
+/**
+ * Names the cards behind a "completion" category (reached/returned-from Done) — the facts Daniel
+ * is most likely to want by name. Only `items` already selected/capped by `buildWorkHistoryCategories`
+ * are used (docs/29's "named-example policy": deterministic code chooses and orders names; Claude
+ * is never handed a list to choose from). A non-zero `omitted` is folded into the same sentence as
+ * "(ще N)" instead of a separate sentence, so overflow never grows the answer's sentence count.
+ */
+function buildNamedSentence(key: NamedCategoryKey, category: WorkHistoryCategory | undefined): string | null {
+  if (!category || category.items.length === 0) return null;
+  const config = NAMED_SENTENCE[key];
+  const verb = category.items.length === 1 ? config.singularVerb : config.pluralVerb;
+  const names = joinUkrainianList(category.items.map((item) => `«${item.card}»`));
+  const overflow = category.omitted > 0 ? ` (ще ${category.omitted})` : "";
+  return `${config.subjectPrefix} ${verb} ${names}${overflow}.`;
+}
+
+const UNNAMED_CAVEAT_LABEL: Partial<Record<CategoryKey, string>> = {
+  created: "створені",
+  archived: "архівовані",
+};
+
+/**
+ * `created`/`archived` cards are never individually named in a concise answer (only `moved`'s
+ * bulk-noise total is even less named, deliberately with no caveat: the "ще N карток
+ * перемістилися" phrasing never promised names). When either is non-empty, one honest sentence
+ * says their names were not listed here — never silently, and never as a per-category sentence.
+ */
+function buildUnnamedCaveatSentence(categories: WorkHistoryCategories): string | null {
+  const labels = (["created", "archived"] as const).filter((key) => categories[key]).map((key) => UNNAMED_CAVEAT_LABEL[key]!);
+  if (labels.length === 0) return null;
+  return `У короткому огляді перелічено не всі ${joinUkrainianList(labels)} картки.`;
+}
+
+/**
+ * The deterministic concise `answer_text`: one opening sentence with every category's total, one
+ * sentence naming reached-Done cards, one naming returned-from-Done cards, and (only when
+ * applicable) one caveat that created/archived cards were not individually named. Typically
+ * 1–4 sentences before any coverage/zero-activity suffix. No direction/trend/reason is stated for
+ * `moved`, or anywhere else, because no such fact is computed.
+ */
+function buildConciseAnswerText(categories: WorkHistoryCategories, input: TrelloWorkHistoryInput, window: HistoryWindow): string[] {
+  const sentences: string[] = [];
+  const opening = buildOpeningSentence(categories, input, window);
+  if (opening) sentences.push(opening);
+  const done = buildNamedSentence("reached_done", categories.reached_done);
+  if (done) sentences.push(done);
+  const returned = buildNamedSentence("returned_from_done", categories.returned_from_done);
+  if (returned) sentences.push(returned);
+  const caveat = buildUnnamedCaveatSentence(categories);
+  if (caveat) sentences.push(caveat);
+  return sentences;
+}
+
+/** The deterministic detailed `answer_text`: every category total and every named item, in full —
+ *  the same computation `renderCategoryFactLines` already performs, just no longer a separate
+ *  model-facing field Claude would have to fold into prose itself. */
+function buildDetailedAnswerText(categories: WorkHistoryCategories): string[] {
+  return renderCategoryFactLines(categories);
+}
+
 interface CardFacts {
   card: TrelloHistoryCard | undefined;
   name: string;
@@ -371,8 +481,8 @@ function itemFor(facts: CardFacts, date: Date | undefined, occurrences?: number)
 /**
  * Collapses raw action history into one net movement per card while retaining reopen/re-Done
  * evidence, and returns the internal per-category totals/items. Exported for tests/debugging
- * only (docs/21 §10, docs/28 remediation) — the model-facing result is
- * {@link buildWorkHistoryFactSkeleton}'s `fact_lines`, not this structure.
+ * only (docs/21 §10, docs/28, docs/29 remediation) — the model-facing result is
+ * {@link buildWorkHistoryAnswer}'s `answer_text`, not this structure.
  */
 export function buildWorkHistoryCategories(
   input: TrelloWorkHistoryInput,
@@ -443,32 +553,35 @@ export function buildWorkHistoryCategories(
 }
 
 /**
- * The model-facing #36 entry point. Builds the internal per-category totals, then renders
- * every quantitative claim — category totals, named examples, omitted-example counts, and an
- * incomplete-coverage caveat — into `fact_lines` so Claude narrates already-computed Ukrainian
- * sentences instead of recalculating counts from structured data (docs/21 §10, docs/28).
+ * The model-facing #36 entry point (docs/29 remediation). Builds the internal per-category
+ * totals, then renders the FINAL ready-to-send `answer_text` itself — concise mode folds totals
+ * into one opening sentence plus named-completion sentences and an unnamed-category caveat
+ * (`buildConciseAnswerText`); detailed mode names every item (`buildDetailedAnswerText`, reusing
+ * `renderCategoryFactLines`). Either way, Claude receives one already-composed piece of prose with
+ * no parallel structured field to re-derive or re-summarize a number from.
  */
-export function buildWorkHistoryFactSkeleton(
+export function buildWorkHistoryAnswer(
   input: TrelloWorkHistoryInput,
   actions: readonly TrelloAction[],
   cards: readonly TrelloHistoryCard[],
   coverage: HistoryCoverage,
   now = new Date(),
-): WorkHistoryFactSkeleton {
+): WorkHistoryAnswer {
   const window = resolveHistoryWindow(input.window, now);
   const categories = buildWorkHistoryCategories(input, actions, cards, now);
-  const fact_lines = renderCategoryFactLines(categories);
+  const format = input.response_format ?? "concise";
+  const sentences = format === "concise" ? buildConciseAnswerText(categories, input, window) : buildDetailedAnswerText(categories);
   if (coverage.truncated || !coverage.oldestActionReached) {
-    fact_lines.push("Історія за цей період може бути неповною: частину дій не вдалося прочитати повністю.");
+    sentences.push("Історія за цей період може бути неповною: частину дій не вдалося прочитати повністю.");
   }
-  if (fact_lines.length === 0) {
-    fact_lines.push("За цей період суттєвих змін не зафіксовано.");
+  if (sentences.length === 0) {
+    sentences.push("За цей період суттєвих змін не зафіксовано.");
   }
   return {
     window: { from: formatKyivDateTime(window.from), to: formatKyivDateTime(window.to), label: window.label },
     scope: input.scope.kind === "board" ? { kind: "board" } : { kind: "project", label: input.scope.label },
     coverage,
-    fact_lines,
+    answer_text: sentences.join(" "),
   };
 }
 
@@ -591,7 +704,7 @@ export class TrelloWorkHistoryClient {
     return { actions, coverage: { pagesRead, truncated, oldestActionReached } };
   }
 
-  async execute(input: TrelloWorkHistoryInput, now = new Date()): Promise<WorkHistoryFactSkeleton> {
+  async execute(input: TrelloWorkHistoryInput, now = new Date()): Promise<WorkHistoryAnswer> {
     const window = resolveHistoryWindow(input.window, now);
     const board = await this.resolveSingleBoard();
     const cards = await this.readCards(board.id);
@@ -600,7 +713,7 @@ export class TrelloWorkHistoryClient {
       throw new TrelloWorkHistoryError("project_not_found");
     }
     const { actions, coverage } = await this.readActions(board.id, window);
-    return buildWorkHistoryFactSkeleton(input, actions, cards, coverage, now);
+    return buildWorkHistoryAnswer(input, actions, cards, coverage, now);
   }
 }
 

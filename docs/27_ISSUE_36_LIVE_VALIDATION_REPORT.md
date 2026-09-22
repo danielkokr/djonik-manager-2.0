@@ -543,3 +543,124 @@ git status --short
 ```
 
 No source change was made or is proposed by this diagnostic. No commit, push, deploy, production configuration change, roadmap update, or issue close occurred.
+
+## 13. Semantic-compression remediation — deterministic `answer_text` (source-only)
+
+Date: 2026-09-22. This is a **source-only** iteration after candidate #3's FAIL (§12). No Managed Agent inference, candidate creation, Trello request, remote configuration change, commit, push, deploy, or issue close was performed. Candidate #3's FAIL verdict in §12 is **not rewritten or reopened** — it stands as historical evidence, same as candidates #1 (§4–§9) and #2 (§10).
+
+### What candidate #3 proved
+
+The deterministic fact skeleton (`744be22`) fixed the exact numeric defect that failed candidates #1 and #2: every authoritative total (4 reached-Done, 2 returned-from-Done, 6 created, 5 moved) was narrated correctly, with no total/subset conflation. That confirms the count-narration fix works.
+
+### What candidate #3 exposed
+
+Candidate #3 also proved that fixing the *numbers* was not sufficient. Its `fact_lines` contract still handed Claude 15–25 already-correct-but-separate sentences (one total line, several named-Done lines, several named-returned lines, several named-created lines, several named-moved lines, overflow lines) for a question the user asked "коротко" (briefly). Producing a short answer from that still required Claude to perform **factual compression** — deciding what to keep, what to drop, and how to connect it — and that compression step, not arithmetic, is where it invented new claims:
+
+- misdescribing the moved card «Міні-парфуми адаптація» as created;
+- generalizing an unsupported "majority Backlog → This week/In progress" direction that «Брендбук» (This week → Backlog) contradicts;
+- inventing "потребували правок" as a reason for the Done-returns;
+- adding unsupported productivity/trend framing.
+
+None of these were numeric errors, so the fact-skeleton's own fix (rendering every count into text) could not and did not prevent them. The measured root cause is that **concise summarization/compression, not arithmetic, was still Claude's job**, and asking Claude to compress correct facts is exactly where it started fabricating.
+
+### New model-facing contract
+
+`WorkHistoryFactSkeleton` (`window`/`scope`/`coverage`/`fact_lines: string[]`) is replaced by `WorkHistoryAnswer`:
+
+```ts
+export interface WorkHistoryAnswer {
+  window: { from: string; to: string; label: string };
+  scope: { kind: "board" } | { kind: "project"; label: string };
+  coverage: HistoryCoverage;
+  answer_text: string;
+}
+```
+
+`answer_text` is not a list of facts — it is the **already-complete, ready-to-send Ukrainian review**. There is no parallel category array, total/shown/omitted field, named-example array, or flat fact-line list in the model-facing result for either `concise` or `detailed` mode. `buildWorkHistoryCategories` and `renderCategoryFactLines` remain as internal, exported-for-tests helpers (per docs/28's own precedent), but neither reaches `TrelloWorkHistoryClient.execute()`'s return value; `answer_text` is built from them entirely inside `src/trelloWorkHistory.ts` before the custom-tool result is ever serialized.
+
+### Exact example `answer_text` for the docs/27 §12 live fixture
+
+Reconstructing the exact facts behind §12 (`reached_done`: 4 events/4 cards; `returned_from_done`: 2 events/2 cards; `created`: 6 cards; `moved`: 5 cards, including one card moving This week → Backlog) through the new renderer produces (see the regression fixture in §5 below for the exact reproduction, built from a synthetic action history matching these totals):
+
+```
+За період <window> по Extract на дошці в Done перейшло 4 події, 2 події повернулося з Done, створено 6 карток та ще 5 карток перемістилися між іншими списками. У Done перейшли «Кохаю пінка», «Білі аромати 3D відео», «Автоматизація рендеру» та «Коментарі по пінкам». Із Done повернулися «Білі аромати 3D відео» та «Коментарі по пінкам». У короткому огляді перелічено не всі створені картки.
+```
+
+Four sentences. Every stated number is authoritative. No moved card is named (so «Міні-парфуми адаптація» cannot be misdescribed as created — it structurally never appears). No direction/majority is stated for `moved` (so «Брендбук»'s real backward move cannot be contradicted — it is never mentioned). No reason is given for the Done-returns. No productivity/trend language is added.
+
+### Concise rendering rules (deterministic, in `src/trelloWorkHistory.ts`)
+
+1. **One opening sentence** states every non-empty category's authoritative total, combined with commas and a final "та" — never one standalone sentence per category, so a busy week cannot by itself inflate the sentence count.
+2. **One sentence names `reached_done` cards** (if any), and **one sentence names `returned_from_done` cards** (if any) — using the same already-capped (≤5) `items` list `buildWorkHistoryCategories` already produces for concise mode; correct singular/plural verb selection is based on how many cards are actually named, and any `omitted` count is folded into the same sentence as `(ще N)` rather than a new sentence.
+3. **`created` and `archived` cards are never individually named** in a concise answer. If either has a non-zero total, **one shared caveat sentence** says their cards were not listed by name (`"У короткому огляді перелічено не всі {створені|архівовані|створені та архівовані} картки."`).
+4. **`moved` cards are never individually named and never given a caveat.** Only their total is stated, in the opening sentence. No direction, trend, or majority claim is computed or rendered for `moved`, anywhere — because no such fact exists in the deterministic data (docs/29's explicit non-goal), so there is nothing for Claude to see and no invented generalization is even representable in the output.
+5. The existing incomplete-coverage sentence and the zero-activity fallback sentence are appended exactly as before (§11), after the above.
+6. Typical output is 1–4 sentences (2–4 in a normal active week; 1 for a quiet week; the coverage caveat can occasionally add a 5th when history genuinely was incomplete, which is treated as more important than strict length).
+
+### Detailed rendering rules
+
+`response_format: "detailed"` still returns a deterministic `answer_text`, reusing the existing `renderCategoryFactLines` computation unchanged: every category's total plus every named item (with Kyiv date/time, occurrence and due suffixes), joined into one string. No item is omitted and no overflow sentence is ever needed in detailed mode, matching prior (§9/§11) behavior. The only change from the prior fact-skeleton shape is that this text is now the single `answer_text` field rather than a `fact_lines` array.
+
+### Named-example selection rule
+
+Deterministic code chooses which cards are named, in which order, for every mode — Claude is never handed a list to pick from. Concise mode reuses the same ≤5-item, first-N-in-history-order selection `buildWorkHistoryCategories` already applied; detailed mode names every item. This is unchanged from docs/28's existing policy — only where that selection is turned into prose (inside the tool, once, instead of per-line for Claude to re-assemble) has changed.
+
+### What Claude still owns
+
+- deciding whether to call `trello_work_history` at all;
+- choosing `window` (this/last/explicit) and `scope` (board/project label);
+- choosing `concise` vs `detailed`;
+- ordinary conversational framing around the call (e.g. acknowledging the question);
+- handling a tool error or unavailable-history result honestly;
+- routing Project Health or an explicit task action to their own existing paths instead of treating a work-review answer as either.
+
+### What deterministic code now owns
+
+Everything that is a factual claim about Trello history: category totals, event-vs-card semantics, category assignment (so a moved card cannot be relabeled as created), named-example selection and ordering, the omitted-count wording, the unnamed-category caveat, movement (net transition per card, never a direction/trend summary), reopen/re-Done event counting, Kyiv date/time formatting, the incomplete-coverage caveat, the zero-activity fallback, and all Ukrainian grammar/pluralization needed to render any of the above. For a successful call, **Claude performs no factual summarization, categorization, or generalization arithmetic on work-history content** — it relays `answer_text`.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `src/trelloWorkHistory.ts` | Replaced the model-facing `WorkHistoryFactSkeleton`/`fact_lines` contract with `WorkHistoryAnswer`/`answer_text`. Added `joinUkrainianList`, `TOTAL_CLAUSE`, `temporalPhrase`, `scopePhrase`, `buildOpeningSentence`, `NAMED_SENTENCE`, `buildNamedSentence`, `UNNAMED_CAVEAT_LABEL`, `buildUnnamedCaveatSentence`, `buildConciseAnswerText`, and `buildDetailedAnswerText`. Renamed `buildWorkHistoryFactSkeleton` to `buildWorkHistoryAnswer`; `TrelloWorkHistoryClient.execute()` now returns `WorkHistoryAnswer`. `buildWorkHistoryCategories` and `renderCategoryFactLines` are unchanged and remain exported for tests/debugging only. |
+| `src/trelloWorkHistory.test.ts` | Replaced `fact_lines`-shaped assertions with `answer_text`-shaped assertions; added a fixture reproducing the exact docs/27 §12 live-failure facts (adaptation-card misattribution, backward-moving `Брендбук`, invented reasons, productivity framing) and asserting none of it can appear. Existing window/paging/credential/DST/noise-suppression tests are unchanged in intent, updated only to the new contract's shape. |
+| `.claude/skills/work-review/SKILL.md` | Points the coordinator at `answer_text` as an already-complete answer to relay, not a list to summarize/categorize/generalize/reason about. No new prohibition list; the Skill stays one short paragraph longer than before, still well under the 3 KB budget. |
+| `src/workReviewContract.test.ts` | Replaced the `fact_lines`-authoritative assertion with an `answer_text`-already-complete assertion; historical rubric/helper tests are unchanged. |
+| `src/djonikClient.ts` | **Not changed**, per this iteration's explicit boundary. It only forwards `JSON.stringify(await client.execute(...))` as an opaque string and has no dependency on the digest's internal field names, so no client change was needed or made. |
+
+### Focused test results
+
+```text
+node --import tsx --test src/trelloWorkHistory.test.ts src/workReviewContract.test.ts
+19 passed, 0 failed
+
+node --import tsx --test src/djonikClient.test.ts src/turnCompletion.test.ts
+174 passed, 0 failed
+```
+
+### Full test result
+
+```text
+npm test
+454 passed, 0 failed, 0 skipped, 0 cancelled
+```
+
+### Typecheck and diff check
+
+```text
+npm run typecheck
+passed
+
+git diff --check
+passed (only non-fatal CRLF warnings)
+
+git status --short
+ M .claude/skills/work-review/SKILL.md
+ M src/trelloWorkHistory.test.ts
+ M src/trelloWorkHistory.ts
+ M src/workReviewContract.test.ts
+```
+
+### Explicit next step
+
+No paid inference occurred in this iteration. The next step is **one isolated Haiku diagnostic** against this deterministic-`answer_text` source, built as a fresh, separately frozen candidate (not a reuse or modification of candidates #1, #2, or #3) — **only after Product Lead acceptance of this remediation and separate Product Owner authorization** of the paid run under docs/04 §27 (declared cost ceiling, session count, expected evidence, and stop condition, all declared before the first Session is created). No candidate was created, no production configuration was changed, and no commit, push, or issue close occurred in this iteration.

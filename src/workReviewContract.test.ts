@@ -19,7 +19,6 @@ const skill = readFileSync(join(root, ".claude", "skills", "work-review", "SKILL
 test("#36 work-review Skill is thin, history-first, actor-safe and read-only", () => {
   assert.ok(Buffer.byteLength(skill, "utf8") <= 3 * 1024);
   assert.match(skill, /trello_work_history/);
-  assert.match(skill, /2–4 concise Ukrainian sentences/);
   assert.match(skill, /на дошці перейшло в Done/);
   assert.match(skill, /not «ти зробив» or «Daniel завершив»/);
   assert.match(skill, /coverage/i);
@@ -30,14 +29,17 @@ test("#36 work-review Skill is thin, history-first, actor-safe and read-only", (
   assert.match(skill, /Do not make Project Health judgements, productivity scores, effort\/time claims, trend analysis/i);
 });
 
-// docs/28 #36 fact-skeleton remediation: two live candidates rewrote authoritative category
-// totals while narrating them, so the Skill must point the coordinator at pre-rendered
-// `fact_lines` instead of asking it to reason from total/shown/omitted/items.length.
-test("#36 work-review Skill treats fact_lines as authoritative and forbids recomputing numbers", () => {
-  assert.match(skill, /fact_lines/);
-  assert.match(skill, /authoritative/i);
-  assert.match(skill, /never recompute, rephrase into a different number, or drop a quantitative claim/i);
-  assert.match(skill, /infer a total from how many named examples appear/i);
+// docs/29 #36 semantic-compression remediation: candidate #3 (docs/27 §12) proved that handing
+// Claude even fully-correct `fact_lines` still requires it to compress 15–25 lines into a short
+// answer, and that compression is where it invented category/direction/reason claims. The Skill
+// must now point the coordinator at one already-complete `answer_text` instead of a list to
+// summarize, categorize, or generalize.
+test("#36 work-review Skill treats answer_text as an already-complete answer, not a list to summarize", () => {
+  assert.match(skill, /answer_text/);
+  assert.doesNotMatch(skill, /fact_lines/);
+  assert.match(skill, /already-complete|already complete/i);
+  assert.match(skill, /without summarizing, categorizing, generalizing/i);
+  assert.match(skill, /never recompute a number, change what category something belongs to, or state a direction/i);
 });
 
 test("#36 exports one bounded custom-tool schema with semantic window, scope and format inputs", () => {
