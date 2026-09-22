@@ -379,3 +379,167 @@ git status --short
 ### Remaining next step
 
 No paid inference occurred in this iteration; both prior live candidates (§9 first failure, §10 second failure) remain failed historical evidence and are not superseded by this source-only change. The next step is a **new isolated live candidate**, built from this fact-skeleton source, **only after Product Lead acceptance** of this remediation and separate Product Owner authorization of the paid run under docs/04 §27 (declared ceiling, session count, expected evidence, stop condition before the first Session is created). No production promotion, roadmap update, issue closure, commit, or push occurred in this iteration.
+
+## 12. Fact-skeleton fail-fast diagnostic
+
+Date: 2026-09-22. Single fail-fast diagnostic against the deterministic fact-skeleton commit under a fresh, separately declared authorization: **max $0.12 total list cost, 1 paid Managed Session, 1 visible paid user turn.** This is explicitly not the full #36 live gate; it answers only whether the fact-skeleton shape (§11) fixes the count-narration defect that failed both prior candidates.
+
+### 1. Commit under test
+
+`744be2283580a257319004311e890e85c410859c` — *fix: render work history facts deterministically*. Confirmed as `HEAD` and as an ancestor of `HEAD` before any paid call; working tree was clean.
+
+### 2. New candidate identity/config (frozen before the paid turn, read back unmodified after)
+
+| Item | Frozen value |
+|---|---|
+| Candidate Agent / version | `agent_01QiZTseJY6HnixDsBhRgwTU` / 1 |
+| Candidate model | `claude-haiku-4-5-20251001`, `standard` |
+| Coordinator system identity | SHA-256 `03b33a909123bb40d56415fee7b4a4b95071e5e6a4a31a70b16c3f6d6a283899` — byte-identical to production's current system prompt |
+| Coordinator Skills (pinned, not `latest`) | `task-management` `skill_01WS6JtY1GMu3rGZaKCVR9w1` / `skver_012fLb9ZFpL4mjqybAZ7KtmU`; `daily-planning` `skill_01G9DtQEzPYxgw78riFh8k99` / `skver_01TDfMCnuv5LkQN4WvtwBzXW`; `weekly-planning` `skill_01PTmbvLHJj1HuUxvDKhpaiE` / `skver_018soRHmcAn6onE8DpHScFbf`; `studio-intake` `skill_015c8dtDnWyDfVLwS6NLS7r6` / `skver_018sJv1GCnzfZRG4NbExbAzj` — the same four skill IDs/versions production currently resolves to |
+| Candidate work-review Skill (new, isolated) | `skill_01TLh4QoBJ3sBUkxZqxRwas6` / `skver_01VfBuhWijBmExjzDqhiz2w9`; committed-body SHA-256 `67056dce7ff544424276ba674ce192f7c82d6d253492c172fc9823cb49248083` (2,087 bytes) — matches the exact `.claude/skills/work-review/SKILL.md` body at `744be22`. A minimal `---`-fenced YAML frontmatter (`name`/`description` only, taken from this Skill's own already-known one-line description) was prepended **only in the uploaded artifact**, because the Skill upload API requires frontmatter that this repo file (unlike its four siblings) does not carry in-repo; the hashed/measured body is the unmodified committed text |
+| Project Health roster | `agent_01KNiQDzzPjaMU6LLF4mU6uM`, pinned version 4 — identical to production's roster |
+| Custom tool | `trello_work_history`; input-schema SHA-256 `ff820032911734a0fc63bdf2d2e941994d28241614cca812fbd353b4bc1a7921` — identical to both prior candidates' schema hash (§4, §10), confirming only the tool's *return shape*, not its input contract, changed at `744be22` |
+| Memory | production `Djonik Memory`, attached `read_only` |
+| Permissions | Trello read surface only; **every** `trelloWrite*` tool, including `trelloWriteCard`, explicitly `enabled:false`; Calendar toolset `enabled:false` (unchanged from production, which already excludes it) |
+
+The candidate was created via the official `client.beta.agents.create()` API from a full read-back copy of production's `tools`/`mcp_servers`/`system`/`model`/`multiagent`, with only the two declared changes (five Trello writes → six, including `trelloWriteCard`, forced to `enabled:false`; one custom tool and one additional Skill appended). No source file was edited to run this diagnostic.
+
+### 3. Proof the previous candidates remain untouched
+
+Read directly from the API immediately before candidate creation:
+
+| Candidate | id | version | `updated_at` |
+|---|---|---|---|
+| First failed candidate (§4–§9) | `agent_01EeGJTjuKWZa3LuRaHBjj8k` | 1 (unchanged) | `2026-09-22T09:17:17.156563Z` |
+| Second failed candidate (§10) | `agent_01G9i5vhv4oNcp14rXyvTyRc` | 1 (unchanged) | `2026-09-22T09:56:40.493927Z` |
+
+Neither was retrieved for any purpose beyond this read-only check; neither was updated, reused, or referenced by the new candidate.
+
+### 4. Proof production is unchanged
+
+`client.beta.agents.retrieve()` on `agent_01WGRHDBjQa3eMhoGJMmQ1dh` immediately before candidate creation returned **version 21**, model `claude-haiku-4-5-20251001` / `standard`, and system SHA-256 `03b33a909123bb40d56415fee7b4a4b95071e5e6a4a31a70b16c3f6d6a283899` — identical to every prior report in this file. No Agent, Skill, Session, Memory, Trello, Calendar, or vault configuration was modified before, during, or after this diagnostic.
+
+### 5. Exact user prompt
+
+```
+А минулого тижня по Extract? Теж коротко.
+```
+
+Sent exactly once, as the single `user.message` of Session `sesn_01Jpx15JmdZQc1RaoHB1nkUt`.
+
+### 6. Exact custom-tool input
+
+Blocking event `sevt_011qppB4yy3v6DG25Q53puhQ` (`agent.custom_tool_use`, tool `trello_work_history`):
+
+```json
+{"response_format":"concise","scope":{"kind":"project","label":"Extract"},"window":{"kind":"last_week"}}
+```
+
+Correct project (Extract), correct window (last week, matching "минулого тижня"), correct format.
+
+### 7. Exact `fact_lines` (verbatim, from the real `TrelloWorkHistoryClient.execute()` result — live Trello REST GETs, zero mutation)
+
+```json
+{
+  "window": {"from": "пн 14.09, 00:00", "to": "пн 21.09, 00:00", "label": "Минулий тиждень"},
+  "scope": {"kind": "project", "label": "Extract"},
+  "coverage": {"pagesRead": 1, "truncated": false, "oldestActionReached": true},
+  "fact_lines": [
+    "У Done перейшло 4 події.",
+    "У Done перейшла «Кохаю пінка» — пн 14.09, 09:57, due пн 14.09, 13:00.",
+    "У Done перейшла «Білі аромати 3D відео» — вт 15.09, 15:06, due пн 14.09, 18:00.",
+    "У Done перейшла «Автоматизація рендеру» — ср 16.09, 16:08, due пт 18.09, 20:00.",
+    "У Done перейшла «Коментарі по пінкам» — пт 18.09, 16:23.",
+    "Із Done повернулося 2 події.",
+    "Із Done повернулася «Білі аромати 3D відео» — пн 14.09, 10:00, due пн 14.09, 18:00.",
+    "Із Done повернулася «Коментарі по пінкам» — сб 19.09, 08:31.",
+    "Створено 6 карток.",
+    "Створено «Білі аромати 50 ML» — вт 15.09, 15:06.",
+    "Створено «Автоматизація рендеру» — вт 15.09, 17:46, due пт 18.09, 20:00.",
+    "Створено «Чорні аромати 100 ML» — пт 18.09, 10:31.",
+    "Створено «Флакони 7.5 ML» — пт 18.09, 10:33.",
+    "Створено «Флакони 1.5 ML» — пт 18.09, 10:35.",
+    "Ще 1 картка не перелічена в короткому огляді.",
+    "Між іншими списками переміщено 5 карток.",
+    "«Міні-парфуми адаптація» перейшла This week → This week — пт 18.09, 10:25.",
+    "«Білі аромати 50 ML» перейшла Backlog → Backlog — ср 16.09, 16:08.",
+    "«Брендбук» перейшла This week → Backlog — ср 16.09, 11:50, due пт 25.09, 18:00.",
+    "«Чорні аромати 100 ML» перейшла Backlog → In progress — сб 19.09, 08:31.",
+    "«Флакони 1.5 ML» перейшла Backlog → This week — пт 18.09, 14:46."
+  ]
+}
+```
+
+Not summarized before grading; reproduced verbatim above from the exact `user.custom_tool_result` content sent back.
+
+### 8. Exact final visible answer
+
+```
+**Extract минулий тиждень:**
+
+- **Done:** 4 картки (включно «Кохаю пінка», «Білі аромати 3D відео», «Автоматизація рендеру», «Коментарі по пінкам»)
+- **Повернулося з Done:** 2 («Білі аромати 3D відео» та «Коментарі по пінкам» — потребували правок)
+- **Нові:** 6 карток (флакони, чорні/білі аромати, адаптація)
+- **Рухи:** 5 карток по списках (більшість — із Backlog у This week чи In progress)
+
+Тиждень був активний: формально замкнули 4 завдання, але двох довелося повернути на доробку. Добавили ресурсів на наступні елементи.
+```
+
+### 9. Side-by-side factual grading
+
+| Fact-line claim | Visible answer | Verdict |
+|---|---|---|
+| 4 reached-Done events, 4 named cards | "Done: 4 картки", same 4 names | **Pass** — count preserved, no substitution of a subset for a total |
+| 2 returned-from-Done events, 2 named cards | "Повернулося з Done: 2", same 2 names | **Pass** on the number and names, but adds an unsupported reason: **"потребували правок" ("needed corrections")**. No `fact_lines` entry states why a card left Done. This is an invented causal claim, not a quantitative one, but it does add a factual-sounding claim the digest never made |
+| 6 created cards, 5 shown + 1 explicitly omitted | "Нові: 6 карток (флакони, чорні/білі аромати, адаптація)" | **Count pass**, but **critical content fail**: "адаптація" matches no created-card name in `fact_lines`. The only card in the entire digest containing "адаптація" is **«Міні-парфуми адаптація»**, which appears exclusively in the **moved** category (`This week → This week`). The answer misattributes a moved card's name fragment into the created-cards description — an invented/changed transition, not merely a paraphrase |
+| 5 moved cards, all 5 named, no omission line | "Рухи: 5 карток по списках (більшість — із Backlog у This week чи In progress)" | **Count pass**, but **critical directional fail**: of the 5 named moves, only 2 (`Чорні аромати 100 ML`: Backlog→In progress; `Флакони 1.5 ML`: Backlog→This week) match "Backlog → This week/In progress". The other 3 do not (`This week→This week`, `Backlog→Backlog`, and **«Брендбук»: This week → Backlog — the reverse direction**). Calling 2-of-5 a "majority" and folding in a card that moved backward as if it supported the same forward trend is an invented characterization not derivable from, and partly contradicted by, the fact lines |
+| (no such claim in `fact_lines`) | "Тиждень був активний... Добавили ресурсів на наступні елементи" | Vague, unsupported productivity-style framing; not a quantitative error but the kind of interpretive filler `work-review` v2 asks Djonik not to add |
+
+No date/time was altered, no count was recomputed to a wrong number, and no actor attribution to Daniel occurred — the three defect classes from the two prior live failures (§9, §10) did **not** recur. But two independent fact-content errors did occur: a card's true category was swapped (moved → misdescribed as created), and a real transition's direction was effectively reversed inside an invented "majority" generalization.
+
+### 10. `agent.custom_tool_use` / `user.custom_tool_result` correlation
+
+- Blocking use: `sevt_011qppB4yy3v6DG25Q53puhQ` (`agent.custom_tool_use`, `trello_work_history`), `session_thread_id: null`.
+- `session.status_idle` → `stop_reason: {"type":"requires_action","event_ids":["sevt_011qppB4yy3v6DG25Q53puhQ"]}`.
+- Result submitted as `user.custom_tool_result` with `custom_tool_use_id: "sevt_011qppB4yy3v6DG25Q53puhQ"` (exact match, never `session_thread_id`); provider-assigned id of that submission: `sevt_015rQWhLAiGiU6F9twnjm7kE`.
+- Final visible message: `sevt_019RBpypdnLW4CdiS8zRdwAY` (`agent.message`).
+
+### 11. `end_turn` evidence
+
+`session.status_idle` → `stop_reason: {"type":"end_turn"}` immediately after the final `agent.message`. Exactly one `requires_action` pause occurred, resolved by exactly one correlated result; no retry, no second tool call, no budget pause.
+
+### 12. Zero-write evidence
+
+The candidate's `trelloWriteCard` and every other `trelloWrite*` tool were `enabled:false` at the tool-configuration level (not merely denied by permission policy), Calendar was `enabled:false`, and Memory was mounted `read_only`. The full event log contains exactly one tool interaction: the single `trello_work_history` custom-tool round trip. No MCP tool-use event, no write, and no Memory-write event occurred.
+
+### 13. Deliberate cost
+
+Authoritative cumulative Session usage after `end_turn` (`client.beta.sessions.retrieve()`): `input_tokens: 15`, `cache_creation.ephemeral_5m_input_tokens: 18,840`, `cache_read_input_tokens: 17,711`, `output_tokens: 597`, **`list_cost: $0.03`**. This is the total deliberate spend for this diagnostic — within the declared $0.12 ceiling, using 1 of 1 authorized paid Session and 1 of 1 authorized visible paid turn.
+
+### 14. Result
+
+**FAIL — fact-skeleton diagnostic.**
+
+The deterministic fact-skeleton (`744be22`) fixed the specific defect class that failed both prior candidates: every quantitative total (4 reached-Done, 2 returned-from-Done, 6 created, 5 moved) was narrated correctly, with no total/subset conflation and no invented count. That is real, measured progress. However, this run surfaces a **new** defect class the fact-skeleton does not address: Haiku's own conversational compression can still swap a card between categories (moved → misdescribed as created) and construct an unsupported directional generalization ("majority… Backlog → This week/In progress") that a named transition (`Брендбук`, moving the opposite way) contradicts, plus an invented reason for a Done-return. Per the acceptance criteria's critical-fail list ("a transition is invented or changed"; "no new quantitative claim may be invented"; "Haiku must not alter the literal factual meaning"), this is a critical fail, not a cosmetic one.
+
+### 15. No second paid turn
+
+Exactly one visible paid turn was sent in exactly one paid Session, as authorized. No second prompt, no retry, no follow-up question, and no additional Session were sent or created. The run stopped after grading this single turn, per the fail-fast design of this diagnostic.
+
+### Local checks
+
+```text
+npm test
+453 passed, 0 failed, 0 skipped, 0 cancelled
+
+npm run typecheck
+passed
+
+git diff --check
+passed
+
+git status --short
+(clean before this report's own edit)
+```
+
+No source change was made or is proposed by this diagnostic. No commit, push, deploy, production configuration change, roadmap update, or issue close occurred.
