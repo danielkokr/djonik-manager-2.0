@@ -24,9 +24,9 @@ const skillSources = ["task-management", "daily-planning", "weekly-planning", "s
 
 // --- A. The file exists and parses as the declarative managed-agent format ---------------------
 
-test("source parses as frontmatter + system body and declares the Sonnet 5 low coordinator baseline", () => {
+test("source parses as frontmatter + system body and declares the Sonnet 5 medium coordinator baseline", () => {
   assert.match(frontmatter, /^name: Джонік$/m);
-  assert.match(frontmatter, /^model:\n  id: claude-sonnet-5\n  effort: low\n  speed: standard$/m);
+  assert.match(frontmatter, /^model:\n  id: claude-sonnet-5\n  effort: medium\n  speed: standard$/m);
   assert.ok(system.length > 0);
   // The four coordinator Skills, recorded exactly as production pins them.
   const skills = [...frontmatter.matchAll(/- type: custom\n\s+skill_id: (\S+)\n\s+version: (\S+)/g)];

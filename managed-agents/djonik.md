@@ -3,7 +3,7 @@ name: Джонік
 description: Personal conversational AI Project Manager for managing freelance and studio work through natural conversation.
 model:
   id: claude-sonnet-5
-  effort: low
+  effort: medium
   speed: standard
 skills:
   - type: custom
