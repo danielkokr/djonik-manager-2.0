@@ -10,6 +10,7 @@ import {
   finalizeDueDateReply,
   DjonikSessionDeadError,
   DjonikSpecialistUnverifiedError,
+  DjonikTurnIncompleteError,
   DjonikUnverifiedMutationError,
   PROJECT_HEALTH_SPECIALIST_AGENT_ID,
   resolveProjectHealthSpecialistName,
@@ -2961,5 +2962,73 @@ test("#37: the live {cards:{nodes}} read shape now carries the #23 verified-due 
   const reply = await session.send("Дедлайн Hero банер");
   assert.equal(reply, `Готово. Trello підтвердив дедлайн: ${DUE_KYIV_A}.`);
   assert.equal(sendCalls.length, 1);
+  session.close();
+});
+
+// --- #38: no interim `agent.message` ever leaves the client -------------------------------------
+// docs/34 recorded one visible turn with NINE interim process-narration messages before the final
+// answer. At this level the invariant is: a turn resolves exactly once, with the last accepted
+// message of the authoritatively completed turn, and no callback the caller can subscribe to
+// (`onTrace`, `onTurnTelemetry`) ever carries interim model text. The Telegram-facing half of the
+// same invariant lives in `src/telegramDispatch.test.ts`.
+
+const DOCS_34_NINE_INTERIM = [
+  "Зараз подивлюсь дошку:",
+  "Спробую подивитися на дошку інакше:",
+  "Тепер перевірю картку:",
+  "Ще раз пошукаю labels:",
+  "Спробую інший запит:",
+  "Читаю списки дошки:",
+  "Створюю картку:",
+  "Перевіряю результат:",
+  "Тепер перевірю картку ще раз:",
+];
+
+test("#38: nine interim agent.message events resolve one turn with only the final text, and never surface through onTrace/telemetry", async () => {
+  const final = "Створив «Djonik #38 smoke» в Inbox, з лейблом Extract.";
+  const fake = createFakeClient([...DOCS_34_NINE_INTERIM.map(msg), msg(final), IDLE]);
+  const traces: DjonikTraceEvent[] = [];
+  const telemetry: DjonikTurnTelemetry[] = [];
+  const session = await connectToDjonik(
+    fake.client,
+    "agent_x",
+    "env_x",
+    "memstore_x",
+    "vlt_x",
+    (event) => traces.push(event),
+    (summary) => telemetry.push(summary),
+    "telegram",
+  );
+
+  const reply = await session.sendOrdered([{ type: "text", text: "Створи задачу для Extract." }]);
+
+  assert.equal(reply, final, "the resolved value is the final accepted message, not an interim one");
+  assert.equal(fake.sendCalls.length, 1, "one visible turn, one provider submission");
+  const observable = JSON.stringify({ traces, telemetry });
+  for (const interim of DOCS_34_NINE_INTERIM) {
+    assert.ok(!reply.includes(interim), `interim text leaked into the reply: ${interim}`);
+    assert.ok(!observable.includes(interim), `interim text leaked into an observable callback: ${interim}`);
+  }
+  session.close();
+});
+
+test("#38: a turn that never reaches end_turn rejects instead of returning its last interim message", async () => {
+  const fake = createFakeClient([
+    ...DOCS_34_NINE_INTERIM.map(msg),
+    { type: "session.status_idle", stop_reason: { type: "retries_exhausted" } },
+  ]);
+  const session = await connectToDjonik(fake.client, "agent_x", "env_x", "memstore_x", "vlt_x");
+
+  await assert.rejects(
+    () => session.sendOrdered([{ type: "text", text: "Що по Extract?" }]),
+    (error: unknown) => {
+      assert.ok(error instanceof DjonikTurnIncompleteError);
+      // The partial text is carried as DATA on the error (#32) — the caller's user-facing path
+      // renders the incomplete-stop explanation, never this string as an answer.
+      assert.equal(error.partialReply, DOCS_34_NINE_INTERIM[DOCS_34_NINE_INTERIM.length - 1]);
+      assert.match(error.message, /retries_exhausted/);
+      return true;
+    },
+  );
   session.close();
 });

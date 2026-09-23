@@ -300,3 +300,131 @@ test("integration (#25 live-validation blocker): two independent groups settling
 
   realSession.close();
 });
+
+// --- #38: the Telegram delivery boundary ---------------------------------------------------------
+//
+// docs/34 §7.1/§17.4 recorded a real production-like Session whose single visible turn emitted NINE
+// interim `agent.message` process-narration events ("Тепер перевірю картку:", "Спробую подивитися на
+// дошку інакше:") before the final answer. #38 asks whether such text can reach Telegram.
+//
+// These tests answer it from the real path, end to end: the real `connectToDjonik` session, the real
+// `createGroupDispatchHandlers`, the real `MessageGroupBuffer`. Only the provider event stream and
+// `bot.api.sendMessage` are fakes. No second reimplementation of `connectToDjonik` is introduced —
+// the existing `createControllableAnthropicClient` seam above is reused.
+
+/** One dispatch-boundary rig: real client + real handlers, with a hand-driven provider stream. */
+async function setUpDeliveryBoundary() {
+  const { client, sendCalls, push } = createControllableAnthropicClient();
+  const realSession = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+  const sentMessages: Array<{ chatId: number; text: string }> = [];
+  const { onDispatch, onFailure } = createGroupDispatchHandlers({
+    djonikSession: createFakeSessionManager(realSession),
+    sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); },
+    logError: () => {},
+  });
+  const buffer = new MessageGroupBuffer({ adjacentWindowMs: 5, albumSettleWindowMs: 5, onDispatch, onFailure });
+  return { buffer, sentMessages, sendCalls, push, realSession };
+}
+
+/** The nine interim messages docs/34 observed, in the same process-narration register. */
+const DOCS_34_INTERIM_MESSAGES = [
+  "Зараз подивлюсь дошку:",
+  "Спробую подивитися на дошку інакше:",
+  "Тепер перевірю картку:",
+  "Ще раз пошукаю labels:",
+  "Спробую інший запит:",
+  "Читаю списки дошки:",
+  "Створюю картку:",
+  "Перевіряю результат:",
+  "Тепер перевірю картку ще раз:",
+];
+
+const DOCS_34_FINAL_REPLY = "Створив «Djonik #38 smoke» в Inbox, з лейблом Extract. Дедлайну не ставив.";
+
+test("#38 delivery boundary: nine interim agent.message events reach Telegram zero times; only the final accepted reply is sent", async () => {
+  const { buffer, sentMessages, sendCalls, push, realSession } = await setUpDeliveryBoundary();
+
+  buffer.addFragment({ chatId: 7, userId: 100, messageId: 1, text: "Створи задачу «Djonik #38 smoke» для Extract. Без дедлайну." });
+  await sleep(20);
+  assert.equal(sendCalls.length, 1, "exactly one Managed Agent turn is invoked for the grouped intake");
+
+  // Interim narration interleaved with tool work, exactly as the live Session produced it.
+  for (const [index, interim] of DOCS_34_INTERIM_MESSAGES.entries()) {
+    push({ type: "agent.message", content: [{ type: "text", text: interim }] });
+    push({ type: "agent.mcp_tool_use", id: `tool_${index}`, mcp_server_name: "trello", name: "trelloReadBoard", input: {} });
+    push({ type: "agent.mcp_tool_result", mcp_tool_use_id: `tool_${index}`, is_error: index < 3, content: [] });
+    await sleep(2);
+    assert.equal(
+      sentMessages.length,
+      0,
+      `no Telegram message may be sent while the turn is unresolved (after interim #${index + 1})`,
+    );
+  }
+
+  // Provider-level pauses that are NOT `end_turn` are still not a verdict (#32): the turn stays open.
+  push({ type: "session.thread_status_idle", thread_id: "thr_unrelated", stop_reason: { type: "end_turn" } });
+  await sleep(5);
+  assert.equal(sentMessages.length, 0, "a thread idle is not the visible turn's completion");
+
+  push({ type: "agent.message", content: [{ type: "text", text: DOCS_34_FINAL_REPLY }] });
+  await sleep(5);
+  assert.equal(sentMessages.length, 0, "even the final agent.message alone is not deliverable before end_turn");
+
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
+  await sleep(10);
+
+  assert.equal(sentMessages.length, 1, "exactly one Telegram message for the whole turn");
+  assert.equal(sentMessages[0].chatId, 7);
+  assert.equal(sentMessages[0].text, DOCS_34_FINAL_REPLY, "the delivered text is the accepted final reply");
+  for (const interim of DOCS_34_INTERIM_MESSAGES) {
+    assert.ok(!sentMessages[0].text.includes(interim), `interim narration leaked into the delivered reply: ${interim}`);
+  }
+  assert.equal(sendCalls.length, 1, "no extra provider turn was started");
+
+  realSession.close();
+});
+
+test("#38 delivery boundary: a turn that stops without authoritative end_turn sends the error path, never the last interim message", async () => {
+  const { buffer, sentMessages, push, realSession } = await setUpDeliveryBoundary();
+
+  buffer.addFragment({ chatId: 7, userId: 100, messageId: 1, text: "Що зараз по Extract?" });
+  await sleep(20);
+
+  push({ type: "agent.message", content: [{ type: "text", text: "Зараз подивлюсь дошку:" }] });
+  push({ type: "agent.message", content: [{ type: "text", text: "Ще дивлюсь, майже готово…" }] });
+  await sleep(5);
+  assert.equal(sentMessages.length, 0);
+
+  // #32: a budget pause is not a completed turn, and its partial text is data, never a reply.
+  push({ type: "session.status_idle", stop_reason: { type: "budget_reached" } });
+  await sleep(10);
+
+  assert.equal(sentMessages.length, 1, "the user still gets exactly one visible message");
+  assert.match(sentMessages[0].text, /^⚠️ Джонік не зміг відповісти/, "the existing user-facing error path, unchanged");
+  assert.match(sentMessages[0].text, /budget_reached/, "the incomplete stop is named, as before");
+  assert.ok(!sentMessages[0].text.includes("Ще дивлюсь"), "the last interim model message must never be delivered as success");
+  assert.ok(!sentMessages[0].text.includes("Зараз подивлюсь"), "no earlier interim message may be delivered either");
+
+  realSession.close();
+});
+
+test("#38 delivery boundary: an interim message before a tool pause cannot become the visible answer of the continued turn", async () => {
+  const { buffer, sentMessages, push, realSession } = await setUpDeliveryBoundary();
+
+  buffer.addFragment({ chatId: 7, userId: 100, messageId: 1, text: "Створи задачу для Extract." });
+  await sleep(20);
+
+  push({ type: "agent.message", content: [{ type: "text", text: "Перевіряю дошку, зараз створю:" }] });
+  push({ type: "agent.message", content: [{ type: "text", text: DOCS_34_FINAL_REPLY }] });
+  push({ type: "session.status_idle", stop_reason: { type: "end_turn" } });
+  await sleep(10);
+
+  assert.equal(sentMessages.length, 1);
+  assert.equal(
+    sentMessages[0].text,
+    DOCS_34_FINAL_REPLY,
+    "the last accepted agent.message of the completed turn wins; earlier interim text is discarded, not appended",
+  );
+
+  realSession.close();
+});
