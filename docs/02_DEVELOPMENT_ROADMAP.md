@@ -58,13 +58,17 @@ Verified outcome:
 | 3 | [#40 — Idempotent Managed Agents custom-tool continuation by event id](https://github.com/danielkokr/djonik-manager-2.0/issues/40) | DONE — accepted 2026-09-22 at `e5b0df2` ([docs/31](31_ISSUE_40_IMPLEMENTATION_REPORT.md)) |
 | 4 | [#36 — Weekly work review from Trello action history](https://github.com/danielkokr/djonik-manager-2.0/issues/36) | DONE — accepted 2026-09-22; post-#40 live diagnostic PASS at `3312706` ([docs/32](32_ISSUE_36_POST_40_LIVE_DIAGNOSTIC.md)) |
 | 5 | [#37 — Project label on create + Memory hygiene](https://github.com/danielkokr/djonik-manager-2.0/issues/37) | DONE — accepted 2026-09-23; source+Memory at `e1f9a31`, final isolated live smoke PASS at `71975a0` ([docs/33](33_ISSUE_37_SOURCE_AND_MEMORY_PROPOSAL.md), [docs/34](34_ISSUE_37_FINAL_LIVE_SMOKE.md)) |
-| 6 | **NOW — [#38 — Voice and Telegram UX](https://github.com/danielkokr/djonik-manager-2.0/issues/38)** | Source-first; repo-source coordinator prompt + interim-message delivery boundary; no production Agent update until later promotion |
+| 6 | **NOW — [#38 — Voice and Telegram UX](https://github.com/danielkokr/djonik-manager-2.0/issues/38)** | Production Agent v23 = Sonnet 5 low + accepted #38 prompt; isolated Session prepared. Small live acceptance remains. Close only after PASS. |
 | 7 | [#33 — Pinned release, always-on host, serving Session](https://github.com/danielkokr/djonik-manager-2.0/issues/33) | Promotes the accepted #40 runtime revision together with accepted #36/#37/#38; always-on adapter host and secrets (see #33 comments) |
 | 8 | [#34 — Commitments, waiting and follow-up](https://github.com/danielkokr/djonik-manager-2.0/issues/34) | After #33; accepted plan items keep Trello card ID/project; check dates feed #39 |
 | 9 | [#39 — Working rhythm: brief, Monday plan, Friday review, exception signals](https://github.com/danielkokr/djonik-manager-2.0/issues/39) | Depends on #40; after #33 (host) and #34; design in [docs/25](25_PM_AGENT_BEHAVIOR_AUDIT.md) §5 and [docs/01](01_CLAUDE_NATIVE_ARCHITECTURE.md) §10 |
 | 10 | [#35 — Working-rhythm pilot (≈ two working weeks)](https://github.com/danielkokr/djonik-manager-2.0/issues/35) | After #39; Daniel decides what works and what to change next |
 
 Only one item is NOW. The next item starts when this roadmap is updated. There is no parallel source work: we intentionally return to one NOW item to reduce variables. Live runs follow docs/04 §27 one at a time.
+
+**#38 model decision and migration — 2026-09-23:** The Product Owner discontinued Haiku as coordinator after repeated live failures in [docs/36](36_ISSUE_38_LIVE_VOICE_VALIDATION.md) and [docs/37](37_ISSUE_38_TARGETED_LIVE_REVALIDATION.md), informed by [docs/38](38_DJONIK_COORDINATOR_MODEL_ARCHITECTURE_AUDIT.md). Production Agent v21 → v22 changed only the model to **Claude Sonnet 5, effort low, speed standard**; Project Health remains the separate Sonnet 5 specialist pinned at v4. The accepted repo prompt is still not the live Agent prompt: production retained its previous prompt because this was a model-only update. The remaining gate is a small live Sonnet 5 low acceptance smoke, not another Haiku comparison. Until that smoke passes, #38 stays open and #33 is not NOW. Existing serving Sessions keep their creation-time model configuration; #33 handles the serving transition.
+
+**#38 configuration synchronization — 2026-09-23:** The subsequent authorized v22 → v23 update changed only the production Agent's `system` field to the accepted `managed-agents/djonik.md` prompt (2572 bytes; SHA-256 `fa361ed9…817f`). Model, Skills, tools, MCP, permissions, Calendar state and specialist v4 roster were unchanged. A separate idle Session pinned to v23 is prepared for the small smoke with read-only Memory; it has no events, tokens or list cost. The preceding v21 → v22 paragraph records that earlier step and is superseded as a *current configuration* statement by this update. No Telegram serving Session transition occurred; #38 remains NOW until smoke PASS.
 
 ### Acceptance record — #40 / #36 / #37
 
@@ -356,7 +360,7 @@ Verified outcome:
 - embedded source instructions remain untrusted data;
 - a live wrong-project create exposed a safety gap under the intentional Haiku baseline; `task-management` was hardened so a new task cannot inherit project identity from mere conversational recency;
 - the final deconfounded live retest asked for project clarification and performed zero mutation;
-- production Haiku remains the intentional baseline after a bounded regression gate;
+- at that Wave B gate, production Haiku remained the intentional baseline after a bounded regression gate (superseded by the 2026-09-23 #38 model decision);
 - intermittent Managed Agents image failures (`Could not process image`) were isolated as provider-side/non-local and remain a residual caveat;
 - local typecheck passed and tests passed 178/178.
 
@@ -509,7 +513,7 @@ Boundaries remain those of GitHub issue #29:
 
 ### Wave C — Project health and reviews
 - project-health capability (accepted, Wave C1);
-- bounded Sonnet Project Health specialist behind the primary Haiku coordinator (accepted, Wave C1);
+- bounded Sonnet Project Health specialist behind the primary coordinator (accepted in Wave C1 under Haiku; coordinator baseline changed to Sonnet 5 low in #38);
 - weekly transitions review from Trello's own action history (Wave C2 spike; replaces #29 current-state review); historical trend analytics remain deferred;
 - stale/blocked/risk judgement;
 - meaningful follow-up lifecycle.
