@@ -106,6 +106,14 @@ test("prompt sets Ukrainian, informal address and a colleague register as the de
   assert.match(system, /not like a report/i);
 });
 
+test("prompt asks for clean, natural Ukrainian without Russianisms or mixed-language phrasing", () => {
+  // Live gate docs/36: Russianisms and mixed forms recurred in two independent samples. One
+  // cross-cutting principle, deliberately not a vocabulary list or banned-word check.
+  assert.match(system, /natural Ukrainian/i);
+  assert.match(system, /no Russianisms/i);
+  assert.match(system, /mixed-language/i);
+});
+
 test("prompt states the conclusion-first shape with a bounded number of supporting facts", () => {
   assert.match(system, /Conclusion first/i);
   assert.match(system, /one to three/i);
@@ -141,9 +149,19 @@ test("prompt keeps fact and judgement distinguishable without a mechanical label
 test("prompt handles an unknown in one sentence and asks at most one clarification, only when it matters", () => {
   assert.match(system, /Say an unknown in one sentence/i);
   assert.match(system, /no apology paragraph/i);
-  assert.match(system, /Ask one short clarification only when/i);
-  assert.match(system, /would change what you do or say/i);
+  assert.match(system, /Ask only when the missing piece would change what you do or say/i);
   assert.match(system, /reasonable low-risk assumption/i);
+});
+
+test("a necessary clarification is exactly one question for the single most important missing fact", () => {
+  // Live gate docs/36 Session D: "one clarification" let Haiku bundle three questions, one of them
+  // about where to look. The rule stays general — no scenario wording, no decision tree.
+  assert.match(system, /exactly one question/i);
+  assert.match(system, /in one sentence/i);
+  assert.match(system, /single missing fact that matters most/i);
+  assert.match(system, /never bundle questions/i);
+  // Choosing where or how to look is Djonik's job, never a question for Daniel.
+  assert.match(system, /ask Daniel to pick a tool, board or source/i);
 });
 
 test("prompt bans filler and routine praise", () => {
@@ -221,11 +239,25 @@ test("prompt keeps Project Health delegation to the coordinator-level rule that 
   assert.match(system, /Djonik Project Health Specialist/);
   assert.match(system, /Specialist, not to you/i);
   assert.match(system, /adding nothing of your own/i);
-  assert.match(system, /what comes back is the finished answer for him/i);
   // Dropped: the transport/correlation detail #28/#32 and SpecialistTurnProvenance already guarantee.
   assert.doesNotMatch(system, /wait silently/i);
-  assert.doesNotMatch(system, /no acknowledgement/i);
   assert.doesNotMatch(system, /thread/i);
+});
+
+test("prompt requires the coordinator to return the specialist's answer exactly, with nothing added or changed", () => {
+  // Not a duplicate of code. #32 guarantees the specialist's AUTHORITY: the verified string is always
+  // shown byte for byte, and any different coordinator text is withheld behind a fixed notice
+  // (`composeWithSpecialist`). Only the coordinator can make that notice unnecessary, by replying with
+  // the specialist's string itself. Live gate docs/36 (B, C): without this rule Haiku reworded 2/2.
+  const projectHealthSection = system.slice(system.indexOf("# Project Health"));
+  assert.match(projectHealthSection, /specialist's answer exactly as received/i);
+  for (const change of ["add", "remove", "reword", "reformat", "acknowledge"]) {
+    assert.match(projectHealthSection, new RegExp(`\\b${change}\\b[^.]*nothing`, "i"), `must forbid: ${change}`);
+  }
+  assert.match(projectHealthSection, /before or after it/i);
+});
+
+test("Project Health stays a small part of the coordinator prompt", () => {
   const projectHealthSection = system.slice(system.indexOf("# Project Health"));
   assert.ok(
     projectHealthSection.length < system.length / 4,
