@@ -282,10 +282,9 @@ export type SpecialistCompositionMode = "specialist_only" | "exact" | "coordinat
 const SECTION_BREAK = "\n\n———\n";
 const SPECIALIST_LABEL = "Висновок Project Health (без змін):";
 
-const COORDINATOR_WITHHELD_NOTICE =
-  "ℹ️ Джонік також сформував власний текст у цьому ході, але з подій не можна довести, що він не " +
-  "переказує й не суперечить висновку Project Health вище, тому його приховано. Чинний лише цей " +
-  "висновок. Якщо ви просили ще щось окреме (наприклад, план дня), надішліть це окремим повідомленням.";
+/** #38: one short, natural user-facing sentence. It keeps a possible second part of a mixed request
+ *  visibly re-askable without technical vocabulary and without claiming a second part existed. */
+const COORDINATOR_WITHHELD_CUE = "Якщо в цьому ж запиті було ще щось — напиши це окремим повідомленням.";
 
 /** The labelled specialist block appended to a deterministic mutation message (never the model's text). */
 export function specialistBlockForError(specialist: string): string {
@@ -306,10 +305,10 @@ export function specialistBlockForError(specialist: string): string {
  *  - the verified specialist string is the Project Health answer, byte for byte, and is always shown;
  *  - coordinator text that is empty or EXACTLY the specialist string adds nothing to withhold
  *    (`specialist_only` / `exact` — the accepted #28 relay, no notice);
- *  - any other coordinator text is NOT shown (`coordinator_withheld`); a fixed notice tells the user
- *    it was withheld and why, and to re-ask any separate request in its own message. Never silent.
+ *  - any other coordinator text is NOT shown (`coordinator_withheld`); a fixed natural cue (#38)
+ *    asks the user to re-send anything else from the same request separately. Never silent.
  * A turn with Trello writes leads with `systemReply` (the verified/failed mutation outcome derived
- * from tool events), then the specialist block, then the notice when applicable.
+ * from tool events), then the specialist block, then the cue when applicable.
  */
 export function composeWithSpecialist(
   coordinatorReply: string,
@@ -318,7 +317,7 @@ export function composeWithSpecialist(
 ): { text: string; mode: SpecialistCompositionMode } {
   const mode: SpecialistCompositionMode =
     coordinatorReply === "" ? "specialist_only" : coordinatorReply === specialist ? "exact" : "coordinator_withheld";
-  const notice = mode === "coordinator_withheld" ? `${SECTION_BREAK}${COORDINATOR_WITHHELD_NOTICE}` : "";
+  const notice = mode === "coordinator_withheld" ? `${SECTION_BREAK}${COORDINATOR_WITHHELD_CUE}` : "";
   const body = systemReply === null ? specialist : `${systemReply}${specialistBlockForError(specialist)}`;
   return { text: `${body}${notice}`, mode };
 }

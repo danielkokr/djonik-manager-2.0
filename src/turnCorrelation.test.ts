@@ -11,6 +11,8 @@ import {
 
 const NAME = "Djonik Project Health Specialist";
 const THREAD = "sthr_ph_1";
+/** #38 natural cue, pinned independently of the source constant so an accidental change fails. */
+const WITHHELD_CUE = "Якщо в цьому ж запиті було ще щось — напиши це окремим повідомленням.";
 
 const created = (threadId = THREAD, agentName = NAME) => ({ agent_name: agentName, session_thread_id: threadId });
 const sent = (threadId = THREAD, agentName: string | null = NAME) => ({ to_agent_name: agentName, to_session_thread_id: threadId });
@@ -208,17 +210,29 @@ test("composeWithSpecialist: a verified specialist string stays authoritative; o
     assert.equal(composed.mode, "coordinator_withheld");
     assert.ok(composed.text.startsWith(S), "the specialist string is first, byte for byte");
     assert.ok(!composed.text.includes(coordinator), "no coordinator prose is ever shown beside it");
-    assert.match(composed.text, /\n\n———\nℹ️ Джонік також сформував власний текст .* приховано\./);
-    assert.match(composed.text, /надішліть це окремим повідомленням\.$/);
+    // #38: exactly the specialist bytes, then one short natural cue — nothing else.
+    assert.equal(composed.text, `${S}\n\n———\n${WITHHELD_CUE}`);
   }
+  // The cue is one plain sentence with no technical vocabulary and no claim that a second part existed.
+  assert.equal(WITHHELD_CUE.split(/[.!?]\s/).length, 1);
+  assert.doesNotMatch(WITHHELD_CUE, /координатор|спеціаліст|coordinator|specialist|withheld|runtime|приховано|помилк|ℹ️|⚠️/i);
+  assert.match(WITHHELD_CUE, /^Якщо /, "conditional: it never asserts a second request existed");
 
   // A turn with Trello writes leads with the system-owned mutation reply, then the specialist block.
   const withWrite = composeWithSpecialist("Готово, все зроблено!", S, "✅ Підтверджено читанням картки: A");
   assert.equal(withWrite.mode, "coordinator_withheld");
   assert.ok(withWrite.text.startsWith("✅ Підтверджено читанням картки: A\n\n———\nВисновок Project Health (без змін):\nHEALTH ONLY"));
   assert.ok(!withWrite.text.includes("Готово, все зроблено!"));
+  assert.equal(
+    withWrite.text,
+    `✅ Підтверджено читанням картки: A\n\n———\nВисновок Project Health (без змін):\nHEALTH ONLY\n\n———\n${WITHHELD_CUE}`,
+  );
   assert.deepEqual(composeWithSpecialist(S, S, "✅ A"), {
     mode: "exact",
+    text: "✅ A\n\n———\nВисновок Project Health (без змін):\nHEALTH ONLY",
+  });
+  assert.deepEqual(composeWithSpecialist("", S, "✅ A"), {
+    mode: "specialist_only",
     text: "✅ A\n\n———\nВисновок Project Health (без змін):\nHEALTH ONLY",
   });
 

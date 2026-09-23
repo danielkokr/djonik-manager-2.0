@@ -1581,8 +1581,8 @@ test("Scenario F (#23 regression): deterministic Kyiv due-date finalization is u
 const PH_NAME = "Djonik Project Health Specialist";
 const PH_THREAD = "sthr_ph_1";
 
-/** Start of the fixed notice shown when coordinator text is withheld beside a verified specialist result (#32). */
-const WITHHELD_NOTICE = "ℹ️ Джонік також сформував власний текст";
+/** The fixed natural cue shown when coordinator text is withheld beside a verified specialist result (#32, wording #38). */
+const WITHHELD_CUE = "Якщо в цьому ж запиті було ще щось — напиши це окремим повідомленням.";
 
 /** Asserts the turn fails visibly because the specialist-backed result could not be established (#32). */
 async function assertSpecialistUnverified(promise: Promise<string>, reason: string, label = ""): Promise<Error> {
@@ -1698,7 +1698,8 @@ test("#28 2 (#32): a proven Project Health result stays the authoritative answer
 
   assert.ok(reply.startsWith("SPECIALIST EXACT"), "the exact specialist string is the answer");
   assert.ok(!reply.includes("HAIKU REWRITE"), "Haiku's rewrite can never appear beside it as another Project Health answer (#28)");
-  assert.ok(reply.includes(WITHHELD_NOTICE), "but the withholding is never silent (#32)");
+  assert.ok(reply.includes(WITHHELD_CUE), "but the withholding is never silent (#32)");
+  assert.strictEqual(reply, `SPECIALIST EXACT\n\n———\n${WITHHELD_CUE}`, "exact bytes + one natural cue (#38)");
   assert.deepEqual(
     traces.filter((event) => event.type === "specialist_reply_composed"),
     [{ type: "specialist_reply_composed", mode: "coordinator_withheld" }],
@@ -1720,7 +1721,7 @@ test("#28 3: the specialist string is returned with no trim, normalization or re
   assert.ok(reply.startsWith(exact), "no trim, normalization or reformatting of the specialist string");
   assert.strictEqual(reply.slice(0, exact.length), exact);
   assert.ok(!reply.includes("сумарія"));
-  assert.ok(reply.includes(WITHHELD_NOTICE));
+  assert.ok(reply.includes(WITHHELD_CUE));
   session.close();
 });
 
@@ -1843,7 +1844,7 @@ test("#28 7: a verified Trello write turn is left to the existing write pipeline
   assert.match(reply, /^✅ Підтверджено читанням картки/, "the mutation outcome is system-owned and leads (#31)");
   assert.ok(reply.includes("SPECIALIST EXACT"), "the read-only specialist result is preserved beside it (#32)");
   assert.ok(!reply.includes("Готово, картку оновлено."), "model text is never shown beside a verified specialist result");
-  assert.ok(reply.includes(WITHHELD_NOTICE));
+  assert.ok(reply.includes(WITHHELD_CUE));
   assert.equal(sendCalls.length, 1);
   session.close();
 });
@@ -1969,7 +1970,7 @@ test("#28 11: the decision is made on authoritative session.status_idle, not a t
   const reply = await turn;
   assert.ok(reply.startsWith("SPECIALIST EXACT"));
   assert.ok(!reply.includes("HAIKU REWRITE") && !reply.includes("INTERIM COORDINATOR TEXT"));
-  assert.ok(reply.includes(WITHHELD_NOTICE));
+  assert.ok(reply.includes(WITHHELD_CUE));
   session.close();
 });
 
@@ -1983,7 +1984,7 @@ test("#28 12: thread proof lives for the Session, but each turn's result is its 
   push(primaryMessage("REWRITE ONE"));
   push(IDLE);
   const r1 = await t1;
-  assert.ok(r1.startsWith("EXACT ONE") && !r1.includes("REWRITE ONE") && r1.includes(WITHHELD_NOTICE));
+  assert.ok(r1.startsWith("EXACT ONE") && !r1.includes("REWRITE ONE") && r1.includes(WITHHELD_CUE));
 
   // Turn 2: the existing child thread is messaged again — no new session.thread_created, but the
   // coordinator's own agent.thread_message_sent to it is this turn's delegation evidence (#32).
@@ -2554,7 +2555,7 @@ test("#31: Project Health read-only path is unaffected — Trello reads plus one
     projectHealthSessionAgent(),
   );
   const reply = await session.send("Що зараз по Extract?");
-  assert.ok(reply.startsWith("SPECIALIST EXACT") && !reply.includes("coordinator rewrite") && reply.includes(WITHHELD_NOTICE));
+  assert.ok(reply.startsWith("SPECIALIST EXACT") && !reply.includes("coordinator rewrite") && reply.includes(WITHHELD_CUE));
   assert.equal(sendCalls.length, 1, "read-only turns never trigger a verification nudge");
   session.close();
 });

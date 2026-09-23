@@ -168,8 +168,10 @@ async function open(agent?: unknown, withIds = false, customToolExecutor?: Djoni
   return { ...scripted, session, traces, telemetry };
 }
 
-/** Start of the fixed notice shown when coordinator text is withheld beside a verified specialist result. */
-const WITHHELD_NOTICE = "ℹ️ Джонік також сформував власний текст";
+/** The fixed natural cue (#38) shown when coordinator text is withheld beside a verified specialist result. */
+const WITHHELD_CUE = "Якщо в цьому ж запиті було ще щось — напиши це окремим повідомленням.";
+/** Fragments of the pre-#38 technical notice that must never reach the user again. */
+const OLD_TECHNICAL_NOTICE = /ℹ️|Джонік також сформував|з подій не можна довести|приховано|Project Health вище/;
 
 /** The turn must fail visibly because the specialist-backed Project Health result was not established. */
 async function unverifiedSpecialist(promise: Promise<unknown>, reason: string): Promise<DjonikSpecialistUnverifiedError> {
@@ -589,7 +591,7 @@ test("#32 14 (R7): the canonical specialist keeps its protection beside an unrel
   push(created(), sentTo(), childResult(S), msg("HAIKU REWRITE"), IDLE_OK);
   const reply = await session.send("Що по Extract?");
   assert.ok(reply.startsWith(S), "the canonical result is preserved verbatim");
-  assert.ok(!reply.includes("HAIKU REWRITE") && reply.includes(WITHHELD_NOTICE));
+  assert.ok(!reply.includes("HAIKU REWRITE") && reply.includes(WITHHELD_CUE));
   session.close();
 });
 
@@ -611,7 +613,9 @@ test("#32 16 (R4/#28): pure PH — a coordinator rewrite can never appear beside
   const reply = await session.send("Що по Extract?");
   assert.ok(reply.startsWith("СТАН: ЗДОРОВИЙ, ризиків немає."));
   assert.ok(!reply.includes("КРИТИЧНИЙ") && !reply.includes("2 дні"), "the contradicting Haiku judgement is never shown");
-  assert.ok(reply.includes(WITHHELD_NOTICE), "and its absence is announced, never silent");
+  // #38: exact specialist bytes + one natural cue, with no technical notice vocabulary.
+  assert.strictEqual(reply, `СТАН: ЗДОРОВИЙ, ризиків немає.\n\n———\n${WITHHELD_CUE}`, "and its absence is announced, never silent");
+  assert.doesNotMatch(reply, OLD_TECHNICAL_NOTICE);
   assert.deepEqual(
     traces.filter((t) => t.type === "specialist_reply_composed"),
     [{ type: "specialist_reply_composed", mode: "coordinator_withheld" }],
@@ -625,7 +629,25 @@ test("#32 16b (R4): PH + a genuinely separate daily-plan output — events canno
   const reply = await session.send("Що по Extract і що робити сьогодні?");
   assert.ok(reply.startsWith("HEALTH ONLY"));
   assert.ok(!reply.includes("DAILY PLAN"), "the plan text is not shown: it cannot be proven independent of Project Health");
-  assert.match(reply, /Якщо ви просили ще щось окреме \(наприклад, план дня\), надішліть це окремим повідомленням\./);
+  // The possible second part stays visibly re-askable (#38 cue), never silently dropped.
+  assert.strictEqual(reply, `HEALTH ONLY\n\n———\n${WITHHELD_CUE}`);
+  session.close();
+});
+
+test("#38 cue: a tool-free second part of a mixed request is still signalled visibly, never silently dropped", async () => {
+  // Coordinator made no tool calls; its text holds a PH paraphrase with an unsupported countdown and a
+  // tool-free opinion answering the rest of the request. Neither is shown; the cue is.
+  const { session, push, traces } = await open(roster());
+  const coordinator = "Extract: брендбук горить, лишилось 2 дні. А далі я б радив взятися за банер.";
+  push(created(), sentTo(), childResult(S), msg("Питаю спеціаліста."), msg(coordinator), IDLE_OK);
+  const reply = await session.send("Як там Extract? І що ти думаєш, мені краще робити далі?");
+  assert.strictEqual(reply, `${S}\n\n———\n${WITHHELD_CUE}`);
+  assert.ok(!reply.includes("2 дні") && !reply.includes("банер") && !reply.includes("Питаю"), "no coordinator text leaks");
+  assert.doesNotMatch(reply, OLD_TECHNICAL_NOTICE);
+  assert.deepEqual(
+    traces.filter((t) => t.type === "specialist_reply_composed"),
+    [{ type: "specialist_reply_composed", mode: "coordinator_withheld" }],
+  );
   session.close();
 });
 
@@ -634,7 +656,7 @@ test("#32 17: coordinator text that merely CONTAINS the specialist string is not
   const coordinator = `Ось стан проєкту:\n${S}\n\nА ось план на сьогодні: 1) A 2) B`;
   push(created(), sentTo(), childResult(S), msg(coordinator), IDLE_OK);
   const reply = await session.send("Extract і план?");
-  assert.ok(reply.startsWith(S) && !reply.includes("А ось план") && reply.includes(WITHHELD_NOTICE));
+  assert.ok(reply.startsWith(S) && !reply.includes("А ось план") && reply.includes(WITHHELD_CUE));
   assert.deepEqual(
     traces.filter((t) => t.type === "specialist_reply_composed"),
     [{ type: "specialist_reply_composed", mode: "coordinator_withheld" }],

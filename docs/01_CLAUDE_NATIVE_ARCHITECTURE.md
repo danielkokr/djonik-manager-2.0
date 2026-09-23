@@ -211,6 +211,12 @@ Rules for that specialist:
 - Do **not** add an Advisor for this C1 slice. Advisor is reserved for future consultative cases where the primary agent should remain the executor and only needs strategic guidance.
 - Referenced specialist agents are versioned/pinned by the coordinator roster; updating the specialist requires an explicit coordinator roster update and review.
 - Keep delegation one level deep. Do not create specialist-of-specialist chains.
+- **Visible Project Health composition (final #38 contract, 2026-09-23; [docs/47](47_ISSUE_38_PROJECT_HEALTH_COMPOSITION_AUDIT.md), [docs/48](48_ISSUE_38_PROJECT_HEALTH_NATURAL_CUE_IMPLEMENTATION.md)).** The thin client, not the model, delivers the provenance-verified specialist string byte for byte (#32 `composeWithSpecialist`):
+  - empty coordinator text → `specialist_only`;
+  - identical text → `exact`;
+  - any other text → `coordinator_withheld`: the coordinator text is never shown, and one fixed natural sentence invites Daniel to re-send any other part of the same request.
+
+  Managed Agents has no native child-result ownership, so the client adds no intent router, no text parsing and no coordinator-evidence gate. A request never silently loses a part.
 - Validation and production telemetry must distinguish coordinator and specialist usage; Sonnet 5 medium is now the default coordinator model.
 - The #18 same-turn fresh-read limitation remains a separate platform constraint. Do not represent subagent delegation as fixing it.
 
