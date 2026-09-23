@@ -2853,3 +2853,113 @@ test("#31 #23 due: an explicit card due:null after a set-due write is NOT a diff
   assert.deepEqual(error.outcomes.map((o) => o.status), ["field_mismatch"]);
   session.close();
 });
+
+// ---------------------------------------------------------------------------------------------
+// Issue #37: project label on create, verified by the #31 per-mutation boundary. Events use the
+// live Trello MCP shapes recorded in Session history (docs/33 §3): ARIs, `attach_label` as its own
+// `trelloWriteCard` mutation, and `{cards:{nodes:[card],totalCount:1}}` results.
+// ---------------------------------------------------------------------------------------------
+
+const L37_WS = "5f1a2b3c4d5e6f708192a3b4";
+const L37_CARD = `ari:cloud:trello::card/workspace/${L37_WS}/6aad12eb1d878e89bdc4a657`;
+const L37_LIST = `ari:cloud:trello::list/workspace/${L37_WS}/68c0a1b2c3d4e5f60718293a`;
+const L37_LABEL = `ari:cloud:trello::label/workspace/${L37_WS}/68c0aaaaaaaaaaaaaaaaaa01`;
+const L37_EXTRACT = { color: "green", id: L37_LABEL, name: "Extract" };
+
+function liveCardContent(overrides: Record<string, unknown> = {}): Array<{ type: string; text: string }> {
+  const node = {
+    id: L37_CARD,
+    name: "Hero банер",
+    desc: "",
+    due: null,
+    list: { id: L37_LIST, name: "Inbox" },
+    labels: [],
+    labelsHasMore: false,
+    ...overrides,
+  };
+  return [{ type: "text", text: JSON.stringify({ cards: { nodes: [node], totalCount: 1 } }) }];
+}
+
+const L37_CREATE = mcpToolUse("c", "trelloWriteCard", { action: "create", listId: L37_LIST, name: "Hero банер" });
+const L37_ATTACH = mcpToolUse("l", "trelloWriteCard", { action: "attach_label", cardId: L37_CARD, labelId: L37_LABEL });
+
+test("#37: create + attach_label + direct read showing the label is full success on live result shapes (no nudge)", async () => {
+  const { session, sendCalls } = await connect([
+    L37_CREATE,
+    mcpToolResult("c", false, liveCardContent()),
+    L37_ATTACH,
+    mcpToolResult("l", false, liveCardContent({ labels: [L37_EXTRACT] })),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: L37_CARD }),
+    mcpToolResult("r", false, liveCardContent({ labels: [L37_EXTRACT] })),
+    msg("Створив «Hero банер» в Inbox з label Extract."),
+    IDLE,
+  ]);
+  const reply = await session.send("Створи задачу по Extract: Hero банер");
+  assert.equal(reply, "Створив «Hero банер» в Inbox з label Extract.");
+  assert.equal(sendCalls.length, 1, "a fully verified create + label needs no corrective nudge");
+  session.close();
+});
+
+test("#37: create verified + attach_label tool error → deterministic partial report, never the model's full-success text", async () => {
+  const { session, sendCalls } = await connect([
+    L37_CREATE,
+    mcpToolResult("c", false, liveCardContent()),
+    L37_ATTACH,
+    mcpToolResult("l", true, [{ type: "text", text: "TrelloAddLabelToCard failed" }]),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: L37_CARD }),
+    mcpToolResult("r", false, liveCardContent()),
+    msg(FALSE_SUCCESS),
+    IDLE,
+  ]);
+  const reply = await session.send("Створи задачу по Extract: Hero банер");
+  assert.equal(
+    reply,
+    [
+      `✅ Підтверджено читанням картки: «Hero банер» (${L37_CARD})`,
+      `❌ Не виконано (помилка інструмента): label проєкту на картці «Hero банер» (${L37_CARD}) — TrelloAddLabelToCard failed`,
+      "⚠️ Картку створено, але належність до проєкту (label) НЕ підтверджено — поки що вона без проєкту.",
+    ].join("\n"),
+  );
+  assert.equal(sendCalls.length, 1, "a failed label write is never nudged into a retry");
+  session.close();
+});
+
+test("#37: create verified + label absent on the direct read → one read nudge, then fail closed as a partial project assignment", async () => {
+  const { session, sendCalls } = await connect([
+    L37_CREATE,
+    mcpToolResult("c", false, liveCardContent()),
+    L37_ATTACH,
+    mcpToolResult("l", false, liveCardContent({ labels: [L37_EXTRACT] })),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: L37_CARD }),
+    mcpToolResult("r", false, liveCardContent()),
+    msg("Готово, картка в проєкті Extract."),
+    IDLE,
+    mcpToolUse("r2", "trelloReadCard", { action: "get", cardIdOrUrl: L37_CARD }),
+    mcpToolResult("r2", false, liveCardContent()),
+    msg("Так, усе в Extract."),
+    IDLE,
+  ]);
+  const error = await unverified(session.send("Створи задачу по Extract: Hero банер"));
+  assert.equal(sendCalls.length, 2, "exactly one bounded corrective read nudge");
+  assert.match(sentText(sendCalls, 1), /НЕ повторюй запис/);
+  assert.deepEqual(error.outcomes.map((o) => o.status), ["verified", "field_mismatch"]);
+  assert.match(error.message, /✅ Підтверджено читанням картки: «Hero банер»/);
+  assert.match(error.message, /⚠️ НЕ підтверджено: label проєкту на картці «Hero банер»/);
+  assert.match(error.message, /Картку створено, але належність до проєкту \(label\) НЕ підтверджено/);
+  session.close();
+});
+
+test("#37: the live {cards:{nodes}} read shape now carries the #23 verified-due confirmation end to end", async () => {
+  const { session, sendCalls } = await connect([
+    mcpToolUse("w", "trelloWriteCard", { action: "update", cardId: L37_CARD, due: DUE_A }),
+    mcpToolResult("w", false, liveCardContent({ due: DUE_A })),
+    mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: L37_CARD }),
+    mcpToolResult("r", false, liveCardContent({ due: DUE_A })),
+    msg("Дедлайн — понеділок, 21 вересня."),
+    IDLE,
+  ]);
+  const reply = await session.send("Дедлайн Hero банер");
+  assert.equal(reply, `Готово. Trello підтвердив дедлайн: ${DUE_KYIV_A}.`);
+  assert.equal(sendCalls.length, 1);
+  session.close();
+});

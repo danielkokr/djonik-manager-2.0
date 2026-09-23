@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   TrelloMutationLedger,
+  cardLabelState,
   describeMutationOutcomes,
   extractCardObject,
   identifiersMatch,
@@ -54,7 +55,8 @@ class Script {
 
 // --- extractCardObject: one anchored card object, never a nested/unrelated one ---
 
-test("extractCardObject: accepts a bare card object and a single-key {card} wrapper only", () => {
+// (The live provider's single-node `{cards:{nodes:[card]}}` connection is covered in the #37 section below.)
+test("extractCardObject: accepts a bare card object and a single-key {card} wrapper, never a deeper wrapper", () => {
   assert.equal(extractCardObject(card({ id: "A", name: "x" }))?.id, "A");
   assert.equal(extractCardObject(card({ card: { id: "A" } }))?.id, "A");
   assert.equal(extractCardObject(card({ card: { id: "A" }, extra: 1 })), null, "a wrapper with siblings is not a card");
@@ -516,4 +518,346 @@ test("#40: a replay of an already-recorded tool-use id after its result preserve
     .write("w", { action: "update", cardId: "A", name: "Other" }, card({ id: "A", name: "Other" }))
     .read("r", "A", card({ id: "A", name: "New" }));
   assert.deepEqual(doubled.statuses(), ["verified"], "one write, first observation kept");
+});
+
+// ---------------------------------------------------------------------------------------------
+// Issue #37: a new task whose project is anchored must carry that project's EXISTING Trello label,
+// proven by a direct post-write read of THAT card. Fixtures use the live provider shapes recorded in
+// Session events (docs/33 §3): ARIs for every id, `{cards:{nodes:[card],totalCount:1}}` for
+// `trelloWriteCard` results and `trelloReadCard` `get` results, and `labels:[{color,id,name}]` plus
+// `labelsHasMore` on the card node.
+//
+// Which project a task belongs to stays Claude's judgement in the task-management Skill (its semantic
+// rules are covered in skills.test.ts); code owns only this post-write verification boundary.
+// ---------------------------------------------------------------------------------------------
+
+const WS = "5f1a2b3c4d5e6f708192a3b4";
+const ari = (entity: string, oid: string) => `ari:cloud:trello::${entity}/workspace/${WS}/${oid}`;
+const CARD_NEW = ari("card", "6aad12eb1d878e89bdc4a657");
+const CARD_OTHER = ari("card", "6aad12eb1d878e89bdc4a658");
+const LIST_INBOX = ari("list", "68c0a1b2c3d4e5f60718293a");
+const LABEL_EXTRACT = ari("label", "68c0aaaaaaaaaaaaaaaaaa01");
+const LABEL_SEQTHERA = ari("label", "68c0aaaaaaaaaaaaaaaaaa02");
+
+const asText = (value: unknown): Content => [{ type: "text", text: JSON.stringify(value) }];
+
+function cardNode(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id,
+    name: "Hero банер",
+    desc: "",
+    due: null,
+    dueComplete: false,
+    closed: false,
+    complete: false,
+    list: { id: LIST_INBOX, name: "Inbox" },
+    board: { id: ari("board", "68c0bbbbbbbbbbbbbbbbbb01"), name: "Djonik" },
+    labels: [],
+    labelsHasMore: false,
+    members: [],
+    ...overrides,
+  };
+}
+
+/** A live single-card connection result. */
+const liveCard = (id: string, overrides: Record<string, unknown> = {}): Content =>
+  asText({ cards: { nodes: [cardNode(id, overrides)], totalCount: 1 } });
+
+const extractLabel = { color: "green", id: LABEL_EXTRACT, name: "Extract" };
+const seqtheraLabel = { color: "purple", id: LABEL_SEQTHERA, name: "Seqthera" };
+const ATTACH_ERROR_RESULT: Content = [{ type: "text", text: '{"error":true,"message":"TrelloAddLabelToCard failed"}' }];
+
+/** Scripted driver for the create + `attach_label` flow on live shapes. */
+class LabelScript extends Script {
+  create(id: string, content?: Content, isError = false): this {
+    return this.use(id, "trelloWriteCard", { action: "create", listId: LIST_INBOX, name: "Hero банер" }).result(
+      id,
+      content,
+      isError,
+    );
+  }
+
+  /** `labelId: null` omits the label from the input. */
+  attach(id: string, cardId = CARD_NEW, labelId: string | null = LABEL_EXTRACT, content?: Content, isError = false): this {
+    const input: Record<string, unknown> = { action: "attach_label", cardId };
+    if (labelId !== null) input.labelId = labelId;
+    return this.use(id, "trelloWriteCard", input).result(id, content ?? liveCard(cardId, { labels: [extractLabel] }), isError);
+  }
+
+  outcomes(): MutationOutcome[] {
+    return this.ledger.outcomes();
+  }
+}
+
+test("#37: extractCardObject accepts the live single-node {cards:{nodes}} connection and nothing looser", () => {
+  assert.equal(extractCardObject(liveCard(CARD_NEW))?.id, CARD_NEW);
+  assert.equal(extractCardObject(asText({ cards: { nodes: [cardNode(CARD_NEW)] } }))?.id, CARD_NEW);
+  assert.equal(
+    extractCardObject(asText({ cards: { nodes: [cardNode(CARD_NEW)], totalCount: 1, hasNextPage: false } }))?.id,
+    CARD_NEW,
+  );
+  for (const value of [
+    { cards: { nodes: [], totalCount: 0 } },
+    { cards: { nodes: [cardNode(CARD_NEW), cardNode(CARD_OTHER)], totalCount: 2 } },
+    { cards: { nodes: [cardNode(CARD_NEW)], totalCount: 2 } },
+    { cards: { nodes: [cardNode(CARD_NEW)], totalCount: 1, hasNextPage: true } },
+    { cards: { nodes: [cardNode(CARD_NEW)], totalCount: 1, extra: 1 } },
+    { cards: { nodes: [cardNode(CARD_NEW)] }, boards: {} },
+    { cards: [cardNode(CARD_NEW)] },
+    { cards: { nodes: [{ name: "no id" }] } },
+    { nodes: [cardNode(CARD_NEW)] },
+  ]) {
+    assert.equal(extractCardObject(asText(value)), null, JSON.stringify(Object.keys(value)));
+  }
+});
+
+test("#37: no label-creation path can ever count as a verified project assignment", () => {
+  // Label creation is not a `trelloWriteCard` action; any other Trello write tool is never verified.
+  const s = new LabelScript()
+    .use("mk", "trelloWriteBoard", { action: "create_label", boardId: ari("board", "68c0bbbbbbbbbbbbbbbbbb01"), name: "Limen" })
+    .result("mk", asText({ id: ari("label", "68c0aaaaaaaaaaaaaaaaaa09"), name: "Limen" }))
+    .read("r", CARD_NEW, liveCard(CARD_NEW));
+  const [outcome] = s.outcomes();
+  assert.equal(outcome.status, "target_unknown");
+  assert.ok(isUnresolved(outcome) && !isConfirmed(outcome));
+});
+
+test("#37: create + attach_label + a later direct read of that card showing the label verifies both", () => {
+  const s = new LabelScript()
+    .create("c", liveCard(CARD_NEW))
+    .attach("l")
+    .read("r", CARD_NEW, liveCard(CARD_NEW, { labels: [extractLabel] }));
+  const [create, label] = s.outcomes();
+  assert.equal(create.status, "verified");
+  assert.equal(label.status, "verified");
+  assert.deepEqual(label.targetCardIds, [CARD_NEW]);
+  assert.deepEqual(label.projectLabel, { action: "attach", labelId: LABEL_EXTRACT, name: "Extract" });
+  assert.equal(label.label, "Hero банер", "the label line is reported under the created card's name");
+  assert.equal(
+    describeMutationOutcomes(s.outcomes()),
+    [
+      `✅ Підтверджено читанням картки: «Hero банер» (${CARD_NEW})`,
+      `✅ Підтверджено читанням картки: label проєкту «Extract» на картці «Hero банер» (${CARD_NEW})`,
+    ].join("\n"),
+  );
+});
+
+test("#37: the label is compared by provider id, not display name", () => {
+  const s = new LabelScript()
+    .create("c", liveCard(CARD_NEW))
+    .attach("l")
+    .read("r", CARD_NEW, liveCard(CARD_NEW, { labels: [{ color: "green", id: LABEL_SEQTHERA, name: "Extract" }] }));
+  assert.equal(s.outcomes()[1].status, "field_mismatch", "a same-named label with another id is not the attached label");
+
+  const raw = new LabelScript()
+    .create("c", liveCard(CARD_NEW))
+    .attach("l")
+    .read("r", CARD_NEW, liveCard(CARD_NEW, { labels: [{ color: "green", id: "68c0aaaaaaaaaaaaaaaaaa01", name: "Extract" }] }));
+  assert.equal(raw.outcomes()[1].status, "verified", "an ARI and its bare object id name the same label");
+});
+
+test("#37: a valid direct read without the expected label is NOT plain verified — partial project assignment", () => {
+  const s = new LabelScript()
+    .create("c", liveCard(CARD_NEW))
+    .attach("l")
+    .read("r", CARD_NEW, liveCard(CARD_NEW, { labels: [seqtheraLabel] }));
+  const [create, label] = s.outcomes();
+  assert.equal(create.status, "verified", "the card itself exists and is not erased");
+  assert.equal(label.status, "field_mismatch");
+  assert.deepEqual(label.unconfirmedFields, ["label"]);
+  assert.ok(isUnresolved(label) && isNudgeable(label) && !isConfirmed(label));
+  assert.deepEqual(nudgeTargetIds(s.outcomes()), [CARD_NEW]);
+  assert.equal(
+    describeMutationOutcomes(s.outcomes()),
+    [
+      `✅ Підтверджено читанням картки: «Hero банер» (${CARD_NEW})`,
+      `⚠️ НЕ підтверджено: label проєкту на картці «Hero банер» (${CARD_NEW}) — Trello після запису показує інші значення: label проєкту`,
+      "⚠️ Картку створено, але належність до проєкту (label) НЕ підтверджено — поки що вона без проєкту.",
+    ].join("\n"),
+  );
+});
+
+test("#37: absent, non-array, malformed or paged label data never confirms an attach", () => {
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ["no labels field", { labels: undefined }],
+    ["labels not an array", { labels: { nodes: [extractLabel] } }],
+    ["malformed element", { labels: [{ name: "Extract" }] }],
+    ["null element", { labels: [null] }],
+    ["label absent on a further page", { labels: [seqtheraLabel], labelsHasMore: true }],
+  ];
+  for (const [name, overrides] of cases) {
+    const node = cardNode(CARD_NEW, overrides);
+    if (overrides.labels === undefined) delete node.labels;
+    const s = new LabelScript()
+      .create("c", liveCard(CARD_NEW))
+      .attach("l")
+      .read("r", CARD_NEW, asText({ cards: { nodes: [node], totalCount: 1 } }));
+    const label = s.outcomes()[1];
+    assert.equal(label.status, "field_unconfirmed", name);
+    assert.ok(!isConfirmed(label), name);
+  }
+  // Presence is still proof even when more labels exist on a further page.
+  const paged = new LabelScript()
+    .create("c", liveCard(CARD_NEW))
+    .attach("l")
+    .read("r", CARD_NEW, liveCard(CARD_NEW, { labels: [extractLabel], labelsHasMore: true }));
+  assert.equal(paged.outcomes()[1].status, "verified");
+  // An attach that names no label can never be confirmed.
+  const noLabelId = new LabelScript()
+    .attach("l", CARD_NEW, null)
+    .read("r", CARD_NEW, liveCard(CARD_NEW, { labels: [extractLabel] }));
+  assert.equal(noLabelId.outcomes()[0].status, "field_unconfirmed");
+});
+
+test("#37: cardLabelState — present by id, absent only from a complete parseable array", () => {
+  assert.equal(cardLabelState(cardNode(CARD_NEW, { labels: [extractLabel] }), LABEL_EXTRACT), "present");
+  assert.equal(cardLabelState(cardNode(CARD_NEW, { labels: [] }), LABEL_EXTRACT), "absent");
+  assert.equal(cardLabelState(cardNode(CARD_NEW, { labels: [], labelsHasMore: true }), LABEL_EXTRACT), "unavailable");
+  assert.equal(cardLabelState(cardNode(CARD_NEW, { labels: "Extract" }), LABEL_EXTRACT), "unavailable");
+  assert.equal(cardLabelState(cardNode(CARD_NEW, { labels: [{ id: "" }] }), LABEL_EXTRACT), "unavailable");
+});
+
+test("#37: a direct read of a DIFFERENT card carrying the label cannot verify the attach", () => {
+  const s = new LabelScript()
+    .create("c", liveCard(CARD_NEW))
+    .attach("l")
+    .read("r", CARD_OTHER, liveCard(CARD_OTHER, { labels: [extractLabel] }));
+  const [create, label] = s.outcomes();
+  assert.equal(create.status, "awaiting_read");
+  assert.equal(label.status, "awaiting_read");
+  // A read that asks for card X but returns card Y is trusted for neither.
+  const lying = new LabelScript()
+    .create("c", liveCard(CARD_NEW))
+    .attach("l")
+    .read("r", CARD_NEW, liveCard(CARD_OTHER, { labels: [extractLabel] }));
+  assert.equal(lying.outcomes()[1].status, "awaiting_read");
+});
+
+test("#37: a read taken before the label write — or started before its result — cannot verify it", () => {
+  const before = new LabelScript()
+    .create("c", liveCard(CARD_NEW))
+    .read("r", CARD_NEW, liveCard(CARD_NEW, { labels: [extractLabel] }))
+    .attach("l");
+  assert.equal(before.outcomes()[0].status, "verified", "the create is verified by the read after it");
+  assert.equal(before.outcomes()[1].status, "awaiting_read", "the attach has no read after it");
+
+  const interleaved = new LabelScript().create("c", liveCard(CARD_NEW));
+  interleaved.use("l", "trelloWriteCard", { action: "attach_label", cardId: CARD_NEW, labelId: LABEL_EXTRACT });
+  interleaved.use("r", "trelloReadCard", { action: "get", cardIdOrUrl: CARD_NEW });
+  interleaved.result("l", liveCard(CARD_NEW, { labels: [extractLabel] }));
+  interleaved.result("r", liveCard(CARD_NEW, { labels: [extractLabel] }));
+  assert.equal(interleaved.outcomes()[1].status, "awaiting_read");
+});
+
+test("#37: the write tool's own echoed labels are never the verification", () => {
+  const s = new LabelScript()
+    .create("c", liveCard(CARD_NEW))
+    .attach("l", CARD_NEW, LABEL_EXTRACT, liveCard(CARD_NEW, { labels: [extractLabel] }));
+  assert.equal(s.outcomes()[1].status, "awaiting_read");
+});
+
+test("#37: an unrelated later label write cannot satisfy or overwrite the expected label", () => {
+  // Attaching another label to the same card does not own the Extract field.
+  const other = new LabelScript()
+    .create("c", liveCard(CARD_NEW))
+    .attach("l1")
+    .attach("l2", CARD_NEW, LABEL_SEQTHERA, liveCard(CARD_NEW, { labels: [seqtheraLabel] }))
+    .read("r", CARD_NEW, liveCard(CARD_NEW, { labels: [seqtheraLabel] }));
+  assert.deepEqual(other.outcomes().map((o) => o.status), ["verified", "field_mismatch", "verified"]);
+
+  // The same label attached to ANOTHER card does not own it either.
+  const otherCard = new LabelScript()
+    .create("c", liveCard(CARD_NEW))
+    .attach("l1")
+    .attach("l2", CARD_OTHER, LABEL_EXTRACT, liveCard(CARD_OTHER, { labels: [extractLabel] }))
+    .read("r1", CARD_OTHER, liveCard(CARD_OTHER, { labels: [extractLabel] }))
+    .read("r2", CARD_NEW, liveCard(CARD_NEW));
+  assert.deepEqual(otherCard.outcomes().map((o) => o.status), ["verified", "field_mismatch", "verified"]);
+
+  // An explicit later detach of the SAME label on the same card owns it (sequential-writer rule).
+  const corrected = new LabelScript()
+    .create("c", liveCard(CARD_NEW))
+    .attach("l1")
+    .use("d", "trelloWriteCard", { action: "detach_label", cardId: CARD_NEW, labelId: LABEL_EXTRACT })
+    .result("d", liveCard(CARD_NEW))
+    .read("r", CARD_NEW, liveCard(CARD_NEW));
+  const [, attach, detach] = corrected.outcomes();
+  assert.equal(detach.status, "verified");
+  assert.deepEqual(detach.projectLabel, { action: "detach", labelId: LABEL_EXTRACT, name: null });
+  assert.equal(attach.superseded, true);
+});
+
+test("#37: a detach is confirmed only when that label is absent from the card's own complete labels", () => {
+  const stillThere = new LabelScript()
+    .use("d", "trelloWriteCard", { action: "detach_label", cardId: CARD_NEW, labelId: LABEL_EXTRACT })
+    .result("d", liveCard(CARD_NEW))
+    .read("r", CARD_NEW, liveCard(CARD_NEW, { labels: [extractLabel] }));
+  assert.equal(stillThere.outcomes()[0].status, "field_mismatch");
+  assert.equal(
+    describeMutationOutcomes(stillThere.outcomes()),
+    `⚠️ НЕ підтверджено: зняття label «Extract» з картки ${CARD_NEW} — Trello після запису показує інші значення: label проєкту`,
+  );
+});
+
+test("#37: create identity is the card its OWN successful create result returned", () => {
+  // An input `cardId` on a create is ignored; only the result names the new card.
+  const s = new LabelScript()
+    .use("c", "trelloWriteCard", { action: "create", listId: LIST_INBOX, name: "Hero банер", cardId: CARD_OTHER })
+    .result("c", liveCard(CARD_NEW))
+    .read("r1", CARD_OTHER, liveCard(CARD_OTHER))
+    .read("r2", CARD_NEW, liveCard(CARD_NEW));
+  assert.deepEqual(s.outcomes()[0].targetCardIds, [CARD_NEW]);
+  assert.equal(s.outcomes()[0].status, "verified");
+  // A create result that is not ONE card has no identity: never verified.
+  const many = new LabelScript()
+    .create("c", asText({ cards: { nodes: [cardNode(CARD_NEW), cardNode(CARD_OTHER)], totalCount: 2 } }))
+    .read("r", CARD_NEW, liveCard(CARD_NEW));
+  assert.equal(many.outcomes()[0].status, "target_unknown");
+});
+
+test("#37: create verified + attach tool error → the card is reported created, the project NOT assigned", () => {
+  const s = new LabelScript()
+    .create("c", liveCard(CARD_NEW))
+    .attach("l", CARD_NEW, LABEL_EXTRACT, ATTACH_ERROR_RESULT, true)
+    .read("r", CARD_NEW, liveCard(CARD_NEW));
+  const [create, label] = s.outcomes();
+  assert.equal(create.status, "verified");
+  assert.ok(isFailed(label));
+  assert.equal(
+    describeMutationOutcomes(s.outcomes()),
+    [
+      `✅ Підтверджено читанням картки: «Hero банер» (${CARD_NEW})`,
+      `❌ Не виконано (помилка інструмента): label проєкту на картці «Hero банер» (${CARD_NEW}) — ${ATTACH_ERROR_RESULT[0].text}`,
+      "⚠️ Картку створено, але належність до проєкту (label) НЕ підтверджено — поки що вона без проєкту.",
+    ].join("\n"),
+  );
+});
+
+test("#37: create verified + attach with no result is unresolved and partial", () => {
+  const s = new LabelScript().create("c", liveCard(CARD_NEW)).read("r", CARD_NEW, liveCard(CARD_NEW));
+  s.use("l", "trelloWriteCard", { action: "attach_label", cardId: CARD_NEW, labelId: LABEL_EXTRACT });
+  const [create, label] = s.outcomes();
+  assert.equal(create.status, "verified");
+  assert.equal(label.status, "no_result");
+  assert.match(describeMutationOutcomes(s.outcomes()), /Картку створено, але належність до проєкту \(label\) НЕ підтверджено/);
+});
+
+test("#37: the partial line is for a created card only — never for an attach on an existing card or a failed create", () => {
+  const existing = new LabelScript().attach("l", CARD_OTHER, LABEL_EXTRACT, [{ type: "text", text: "boom" }], true);
+  assert.doesNotMatch(describeMutationOutcomes(existing.outcomes()), /Картку створено/);
+
+  const failedCreate = new LabelScript()
+    .create("c", [{ type: "text", text: "boom" }], true)
+    .attach("l", CARD_NEW, LABEL_EXTRACT, [{ type: "text", text: "boom" }], true);
+  assert.doesNotMatch(describeMutationOutcomes(failedCreate.outcomes()), /Картку створено/);
+});
+
+test("#37 (#40): a same-id replay of the attach tool use/result after its result preserves the outcome", () => {
+  const s = new LabelScript().create("c", liveCard(CARD_NEW)).attach("l");
+  s.read("r", CARD_NEW, liveCard(CARD_NEW, { labels: [extractLabel] }));
+  const before = s.outcomes();
+  s.use("l", "trelloWriteCard", { action: "attach_label", cardId: CARD_NEW, labelId: LABEL_SEQTHERA });
+  s.result("l", [{ type: "text", text: "late duplicate" }], true);
+  assert.deepEqual(s.outcomes(), before);
+  assert.equal(s.outcomes()[1].status, "verified");
 });

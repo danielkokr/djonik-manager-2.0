@@ -21,6 +21,10 @@
  *    `id` is the write's target. Search/board/list/member reads, other cards, errors, ambiguous
  *    or unparseable results, and reads before the write never count;
  *  - a verified read is compared against the fields the write requested (name, desc, list, due);
+ *  - #37: a project-label write (`attach_label`/`detach_label`, its own mutation — a create never
+ *    carries a label) requests the `label` field: that label id present (attach) / absent (detach)
+ *    in the verified card's OWN `labels`, compared by provider id. Absent/unparseable/paged labels
+ *    never confirm; only a later write of the SAME label to the same card owns that field;
  *  - sequential writes to one card: the latest write to a field owns that field; earlier writes'
  *    overwritten fields inherit the later write's outcome. The latest valid read after a write
  *    is the reference read.
@@ -63,12 +67,33 @@ function hasCardId(value: unknown): value is Record<string, unknown> & { id: str
 
 export type CardObject = Record<string, unknown> & { id: string };
 
+const SINGLE_CARD_CONNECTION_KEYS: ReadonlySet<string> = new Set(["nodes", "totalCount", "hasNextPage"]);
+
+/**
+ * Issue #37: the live official Trello MCP returns `trelloWriteCard` results and `trelloReadCard`
+ * `get` results as a one-node connection, `{ "cards": { "nodes": [<card>], "totalCount": 1 } }`
+ * (recorded Session events, docs/33 §3). That exact single-card form is accepted; a connection
+ * with zero or several nodes, a `totalCount` other than 1, a further page, or any other key is not
+ * one card.
+ */
+function singleCardFromConnection(parsed: Record<string, unknown>): unknown {
+  if (Object.keys(parsed).length !== 1 || !isPlainObject(parsed.cards)) return null;
+  const connection = parsed.cards;
+  if (!Object.keys(connection).every((key) => SINGLE_CARD_CONNECTION_KEYS.has(key))) return null;
+  if (!Array.isArray(connection.nodes) || connection.nodes.length !== 1) return null;
+  if (connection.totalCount !== undefined && connection.totalCount !== 1) return null;
+  if (connection.hasNextPage !== undefined && connection.hasNextPage !== false) return null;
+  return connection.nodes[0];
+}
+
 /**
  * The ONE card object a tool result describes, or null when that is not unambiguous.
- * Accepted shapes: the parsed JSON text block is itself a card object (has a string `id`), or a
- * single-key `{ card: <card object> }` wrapper. Nothing deeper — a nested `board`/`list`/`members`
- * object is never a candidate, and arrays (search/list results) are never a single card. Several
- * text blocks that each parse to a card object are ambiguous unless they are the same card id.
+ * Accepted shapes: the parsed JSON text block is itself a card object (has a string `id`), a
+ * single-key `{ card: <card object> }` wrapper, or the live provider's single-node
+ * `{ cards: { nodes: [<card object>] } }` connection (#37). Nothing deeper — a nested
+ * `board`/`list`/`members` object is never a candidate, and arrays (search/list results) are never
+ * a single card. Several text blocks that each parse to a card object are ambiguous unless they are
+ * the same card id.
  */
 export function extractCardObject(content: ToolContent): CardObject | null {
   if (!Array.isArray(content)) return null;
@@ -85,6 +110,9 @@ export function extractCardObject(content: ToolContent): CardObject | null {
       candidates.push(parsed);
     } else if (isPlainObject(parsed) && Object.keys(parsed).length === 1 && hasCardId(parsed.card)) {
       candidates.push(parsed.card);
+    } else if (isPlainObject(parsed)) {
+      const node = singleCardFromConnection(parsed);
+      if (hasCardId(node)) candidates.push(node);
     }
   }
   if (candidates.length === 0) return null;
@@ -133,20 +161,35 @@ function readString(input: Record<string, unknown>, field: string): string | nul
 // Requested fields (what a write asked Trello to change) and their postconditions
 // ---------------------------------------------------------------------------------------------
 
-export type CheckedField = "name" | "desc" | "list" | "due";
+export type CheckedField = "name" | "desc" | "list" | "due" | "label";
 
 /** `due` in a write's input: a value to set, or a clear request (`""`/`null`). */
 type RequestedDue = { kind: "set"; value: string } | { kind: "clear" };
+
+/**
+ * #37: the live `trelloWriteCard` label contract is its own mutation — `action: "attach_label"` /
+ * `"detach_label"` with `cardId` and `labelId` (ARIs). A create never carries a label. `labelId`
+ * is null when the input named none: such a write can never be confirmed.
+ */
+export type LabelAction = "attach" | "detach";
+type RequestedLabel = { action: LabelAction; labelId: string | null };
+
+const LABEL_ACTIONS: Readonly<Record<string, LabelAction>> = { attach_label: "attach", detach_label: "detach" };
 
 interface RequestedFields {
   name?: string;
   desc?: string;
   listId?: string;
   due?: RequestedDue;
+  label?: RequestedLabel;
 }
 
 function requestedFieldsOf(input: Record<string, unknown>): RequestedFields {
   const requested: RequestedFields = {};
+  const labelAction = typeof input.action === "string" ? LABEL_ACTIONS[input.action] : undefined;
+  if (labelAction !== undefined) {
+    requested.label = { action: labelAction, labelId: readString(input, "labelId") };
+  }
   const name = readString(input, "name") ?? readString(input, "title");
   if (name !== null) requested.name = name;
   const desc = readString(input, "desc") ?? readString(input, "description");
@@ -167,7 +210,48 @@ function requestedFieldNames(requested: RequestedFields): CheckedField[] {
   if (requested.desc !== undefined) fields.push("desc");
   if (requested.listId !== undefined) fields.push("list");
   if (requested.due !== undefined) fields.push("due");
+  if (requested.label !== undefined) fields.push("label");
   return fields;
+}
+
+/** Two writes request the SAME label (so a later one owns the earlier one's `label` field). */
+function sameRequestedLabel(a: RequestedFields, b: RequestedFields): boolean {
+  const idA = a.label?.labelId;
+  const idB = b.label?.labelId;
+  return typeof idA === "string" && typeof idB === "string" && identifiersMatch(idA, idB);
+}
+
+export type CardLabelState = "present" | "absent" | "unavailable";
+
+/**
+ * Whether ONE card object's own `labels` carry `labelId`, compared by provider id — never by
+ * display name. Presence needs one well-formed element with that id. Absence is only claimed from a
+ * complete, fully parseable array: a missing/non-array `labels`, a malformed element, or a further
+ * page (`labelsHasMore: true`) make an absent label `unavailable`, never proven absent.
+ */
+export function cardLabelState(card: Record<string, unknown>, labelId: string): CardLabelState {
+  const labels = card.labels;
+  if (!Array.isArray(labels)) return "unavailable";
+  let complete = card.labelsHasMore !== true;
+  for (const element of labels) {
+    if (!isPlainObject(element) || typeof element.id !== "string" || element.id.trim().length === 0) {
+      complete = false;
+      continue;
+    }
+    if (identifiersMatch(element.id, labelId)) return "present";
+  }
+  return complete ? "absent" : "unavailable";
+}
+
+/** The display name of `labelId` on this card object, when it carries a well-formed element for it. */
+function cardLabelName(card: Record<string, unknown>, labelId: string): string | null {
+  if (!Array.isArray(card.labels)) return null;
+  for (const element of card.labels) {
+    if (isPlainObject(element) && typeof element.id === "string" && identifiersMatch(element.id, labelId)) {
+      return typeof element.name === "string" && element.name.trim().length > 0 ? element.name : null;
+    }
+  }
+  return null;
 }
 
 type FieldResult = "match" | "mismatch" | "unavailable";
@@ -221,6 +305,14 @@ function evaluateField(field: CheckedField, requested: RequestedFields, card: Re
       if (isValidUtcDue(actual)) return { result: "match", verifiedDue: actual };
       return { result: actual === null ? "mismatch" : "unavailable" };
     }
+    case "label": {
+      const wanted = requested.label!;
+      if (wanted.labelId === null) return { result: "unavailable" };
+      const state = cardLabelState(card, wanted.labelId);
+      if (state === "unavailable") return { result: "unavailable" };
+      const wantedState: CardLabelState = wanted.action === "attach" ? "present" : "absent";
+      return { result: state === wantedState ? "match" : "mismatch" };
+    }
   }
 }
 
@@ -257,10 +349,18 @@ export type MutationStatus =
 export interface MutationOutcome {
   toolUseId: string;
   status: MutationStatus;
-  /** Card identifiers the mutation is bound to (empty when `target_unknown`/`no_result`/`failed` before resolution). */
+  /** Card identifiers the mutation is bound to (empty when `target_unknown`). For `failed`/`no_result` only the
+   *  input `cardId` of a non-create, shown for honest reporting and never used to verify anything. */
   targetCardIds: string[];
-  /** The requested card name, when the write carried one — for honest reporting only. */
+  /** The requested card name, when the write carried one — for honest reporting only. A label
+   *  write (#37) carries no name, so it shows the name another write in this turn requested for the
+   *  same card, if any. */
   label: string | null;
+  /** #37: present only for a project-label write (`attach_label`/`detach_label`). `name` is the
+   *  label's display name taken from the verified card read; null when not confirmed there. */
+  projectLabel?: { action: LabelAction; labelId: string | null; name: string | null };
+  /** #37: true when the write was a `create` (its target is the card its own result returned). */
+  isCreate?: boolean;
   /** Requested fields whose latest-writer check did NOT confirm (mismatch/unavailable). */
   unconfirmedFields: CheckedField[];
   /** True when every requested field was overwritten by a later write to the same card. */
@@ -375,12 +475,17 @@ export class TrelloMutationLedger {
         label: requested.name ?? null,
         unconfirmedFields: [],
         superseded: false,
+        ...(requested.label
+          ? { projectLabel: { action: requested.label.action, labelId: requested.label.labelId, name: null } }
+          : {}),
+        ...(call.toolName === CARD_WRITE_TOOL && call.input.action === "create" ? { isCreate: true } : {}),
       };
+      // Display-only target for the report; a failed or result-less write is never bound to a
+      // verification target (#37 needs it to tie an unconfirmed label write to its created card).
+      const shownId = call.input.action === "create" ? null : readString(call.input, "cardId");
       if (call.resultSeq === undefined) {
-        preliminary.set(call.id, { ...base, status: "no_result" });
+        preliminary.set(call.id, { ...base, status: "no_result", targetCardIds: shownId !== null ? [shownId] : [] });
       } else if (call.isError) {
-        // Display-only target for the report; a failed write is never bound to a verification target.
-        const shownId = call.input.action === "create" ? null : readString(call.input, "cardId");
         const errorText = boundedErrorText(call.content);
         preliminary.set(call.id, {
           ...base,
@@ -412,7 +517,19 @@ export class TrelloMutationLedger {
     };
     for (const write of resolved) evaluate(write);
 
-    return writeCalls.map((call) => evaluated.get(call.id) ?? preliminary.get(call.id)!);
+    const outcomes = writeCalls.map((call) => evaluated.get(call.id) ?? preliminary.get(call.id)!);
+    return outcomes.map((outcome) => this.withBorrowedCardName(outcome, outcomes));
+  }
+
+  /** Display only (#37): a label write names no card, so report it under the name another write in
+   *  this turn requested for the same card. Never affects status or identity. */
+  private withBorrowedCardName(outcome: MutationOutcome, all: MutationOutcome[]): MutationOutcome {
+    if (outcome.label !== null || !outcome.projectLabel) return outcome;
+    const ids = outcome.targetCardIds;
+    const named = all.find(
+      (other) => other.label !== null && other.targetCardIds.some((otherId) => ids.some((id) => identifiersMatch(id, otherId))),
+    );
+    return named ? { ...outcome, label: named.label } : outcome;
   }
 
   /** Identifiers a successful card write is bound to; empty when its identity is not unambiguous. */
@@ -481,6 +598,8 @@ export class TrelloMutationLedger {
         if (other === write || !sameCard(other)) continue;
         if (other.call.resultSeq <= write.call.resultSeq || other.call.resultSeq >= reference.useSeq) continue;
         if (!requestedFieldNames(other.requested).includes(field)) continue;
+        // A label write only owns the same label: attaching label B never settles label A (#37).
+        if (field === "label" && !sameRequestedLabel(write.requested, other.requested)) continue;
         if (owner === null || other.call.resultSeq > owner.call.resultSeq) owner = other;
       }
       if (owner !== null) {
@@ -508,12 +627,16 @@ export class TrelloMutationLedger {
     const dueDiffers = due !== undefined && new Date(due.intendedDue).getTime() !== new Date(due.verifiedDue).getTime();
     const status: MutationStatus =
       unconfirmed.length > 0 ? (mismatch ? "field_mismatch" : "field_unconfirmed") : dueDiffers ? "due_differs" : "verified";
+    const labelId = write.requested.label?.labelId ?? null;
     return {
       ...base,
       status,
       unconfirmedFields: unconfirmed,
       superseded: fields.length > 0 && supersededFields === fields.length,
       ...((status === "verified" || status === "due_differs") && due ? { due } : {}),
+      ...(base.projectLabel && labelId !== null
+        ? { projectLabel: { ...base.projectLabel, name: cardLabelName(reference.card, labelId) } }
+        : {}),
     };
   }
 }
@@ -522,10 +645,22 @@ export class TrelloMutationLedger {
 // Honest reporting (deterministic, user-facing Ukrainian; never derived from model prose)
 // ---------------------------------------------------------------------------------------------
 
-function describeTarget(outcome: MutationOutcome): string {
+function describeCard(outcome: MutationOutcome): string {
   const id = outcome.targetCardIds[0];
   if (outcome.label !== null) return id ? `«${outcome.label}» (${id})` : `«${outcome.label}»`;
   return id ? `картка ${id}` : "картка без відомого ID";
+}
+
+/** #37: a project-label write is reported as that label change on its card, never as the card write. */
+function describeTarget(outcome: MutationOutcome): string {
+  const projectLabel = outcome.projectLabel;
+  if (!projectLabel) return describeCard(outcome);
+  const id = outcome.targetCardIds[0];
+  const card = outcome.label !== null ? describeCard(outcome) : (id ?? "без відомого ID");
+  const name = projectLabel.name !== null ? ` «${projectLabel.name}»` : "";
+  return projectLabel.action === "attach"
+    ? `label проєкту${name} на картці ${card}`
+    : `зняття label${name} з картки ${card}`;
 }
 
 const FIELD_LABEL_UK: Record<CheckedField, string> = {
@@ -533,7 +668,26 @@ const FIELD_LABEL_UK: Record<CheckedField, string> = {
   desc: "опис",
   list: "список",
   due: "дедлайн",
+  label: "label проєкту",
 };
+
+/**
+ * #37 partial success: a create Trello confirmed, followed by a project-label attach on THAT card
+ * which is not confirmed (failed, unverified or unknown). The card exists and is not erased from the
+ * report, but it must not read as belonging to its project.
+ */
+function partialProjectAssignmentLine(outcomes: MutationOutcome[]): string | null {
+  const createdIds = outcomes.filter((outcome) => outcome.isCreate === true && isConfirmed(outcome)).flatMap((o) => o.targetCardIds);
+  const unconfirmedAttach = outcomes.some(
+    (outcome) =>
+      outcome.projectLabel?.action === "attach" &&
+      !isConfirmed(outcome) &&
+      outcome.targetCardIds.some((id) => createdIds.some((createdId) => identifiersMatch(id, createdId))),
+  );
+  return unconfirmedAttach
+    ? "⚠️ Картку створено, але належність до проєкту (label) НЕ підтверджено — поки що вона без проєкту."
+    : null;
+}
 
 function describeReason(outcome: MutationOutcome): string {
   const fields = outcome.unconfirmedFields.map((field) => FIELD_LABEL_UK[field]).join(", ");
@@ -584,6 +738,8 @@ export function describeMutationOutcomes(outcomes: MutationOutcome[], describeDu
       lines.push(`⚠️ НЕ підтверджено: ${describeTarget(outcome)} — ${describeReason(outcome)}`);
     }
   }
+  const partial = partialProjectAssignmentLine(outcomes);
+  if (partial !== null) lines.push(partial);
   return lines.join("\n");
 }
 

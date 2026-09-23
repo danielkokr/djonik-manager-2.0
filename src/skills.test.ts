@@ -430,15 +430,17 @@ test("studio-intake Skill's style guidance does not force a rigid reply template
   assert.match(content, /not a fixed reply template/i);
 });
 
-test("task-management Skill's write-surface boundary and verification rules are unchanged", () => {
+// Issue #37 deliberately widens the write surface by exactly one thing — attaching/detaching an EXISTING
+// project label — and keeps label creation/renaming, non-project labels and bulk relabeling out of scope.
+test("task-management Skill's write-surface boundary and verification rules are unchanged apart from the #37 project label", () => {
   const content = readSkill("task-management");
   assert.match(
     content,
-    /Writes are limited to create, update title\/description\/due date, move between lists, and mark done\./,
+    /Writes are limited to create, update title\/description\/due date, move between lists, mark done, and attaching\/detaching an existing project label as described above\./,
   );
   assert.match(
     content,
-    /Archiving, deleting, checklists, labels, and anything on boards\/lists\/inbox\/planner as their own targets are out of scope/,
+    /Archiving, deleting, checklists, creating or renaming labels, labels used for anything other than the project, bulk relabeling, and anything on boards\/lists\/inbox\/planner as their own targets are out of scope/,
   );
   assert.match(
     content,
@@ -508,12 +510,71 @@ test("task-management Skill: the new-task rule stays a one-question/zero-write c
 
 test("task-management Skill: same-card verification and due-date rules are untouched by the new-task hardening", () => {
   const content = readSkill("task-management");
-  assert.match(
-    content,
-    /Writes are limited to create, update title\/description\/due date, move between lists, and mark done\./,
-  );
+  assert.match(content, /Writes are limited to create, update title\/description\/due date, move between lists, mark done,/);
   assert.match(content, /Trello's `due` is UTC\./);
   assert.match(content, /After every mutation, before replying:/);
+});
+
+// Issue #37: a new task whose project is anchored carries that project's EXISTING label, proven by a
+// direct read. Skill checks are semantic presence checks; the hard boundary (the label must be on the
+// card's own verified read) is enforced and tested in code (trelloMutationLedger.test.ts, djonikClient.test.ts).
+
+function taskManagementSection(heading: string): string {
+  const content = readSkill("task-management");
+  const start = content.indexOf(`## ${heading}`);
+  assert.ok(start >= 0, `expected a '${heading}' section in task-management`);
+  const nextHeading = content.indexOf("\n## ", start + 1);
+  return nextHeading >= 0 ? content.slice(start, nextHeading) : content.slice(start);
+}
+
+test("task-management Skill (#37): no longer forbids labels wholesale", () => {
+  const content = readSkill("task-management");
+  assert.doesNotMatch(content, /checklists, labels, and anything on boards/);
+});
+
+test("task-management Skill (#37): board conventions — project = label only, new task → Inbox unless a list is stated", () => {
+  const section = taskManagementSection("Board conventions");
+  assert.match(section, /project\/client is a \*\*label\*\*/);
+  assert.match(section, /never task type, priority, status or an arbitrary tag/);
+  assert.match(section, /new task goes to \*\*Inbox\*\* unless Daniel explicitly names another list/);
+});
+
+test("task-management Skill (#37): anchored project → fresh list_labels, one existing label, attach_label on the created card, direct-read verify", () => {
+  const section = taskManagementSection("Project label on a new task");
+  assert.match(section, /anchored \(previous section\)/);
+  assert.match(section, /`trelloReadBoard`, `action: "list_labels"`/);
+  assert.match(section, /Never take a label or its id from Memory/);
+  assert.match(section, /`action: "attach_label"`/);
+  assert.match(section, /`cardId` from the create's own result/);
+  assert.match(section, /two separate writes; the create itself takes no label/);
+  assert.match(section, /direct `trelloReadCard` \(`action: "get"`\) of the new card, after the label write/);
+  assert.match(section, /Only then report the task created in the project/);
+});
+
+test("task-management Skill (#37): missing label → no creation, one question, zero write; ambiguous → clarify, zero write", () => {
+  const section = taskManagementSection("Project label on a new task");
+  assert.match(section, /No match → never create or rename a label and never attach a different one/);
+  assert.match(section, /Zero write until Daniel answers/);
+  assert.match(section, /More than one plausible match → ask which one\. Zero write until it's resolved/);
+  assert.match(section, /never a partial or "close enough" name/);
+});
+
+test("task-management Skill (#37): unverified label after a create is a partial result, never full success or a duplicate", () => {
+  const section = taskManagementSection("Project label on a new task");
+  assert.match(section, /card exists but is not confirmed in the project/);
+  assert.match(section, /don't create a second card, don't delete it/);
+});
+
+test("task-management Skill (#37): an existing card's project label changes only on Daniel's explicit request, never in bulk", () => {
+  const section = taskManagementSection("Project label on an existing card");
+  assert.match(section, /Never add, change or remove an existing card's project label on your own/);
+  assert.match(section, /only on Daniel's explicit request or correction/);
+  assert.match(section, /never relabel cards in bulk/);
+});
+
+test("task-management Skill (#37): the no-anchor one-question/zero-write rule is kept, and studio-intake still defers to it", () => {
+  assert.match(taskManagementSection("Project identity for a new task"), /ask which project, zero write/i);
+  assert.match(readSkill("studio-intake"), /does not own Trello mutation, verification, or target\/project resolution/i);
 });
 
 test("task-management Skill: trelloWriteChecklist remains unmentioned/unenabled after the new-task hardening", () => {
