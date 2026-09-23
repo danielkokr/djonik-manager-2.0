@@ -257,16 +257,45 @@ test("project-health stays Skill-only with no new read-only-breaking behavior", 
   assert.doesNotMatch(content, /trelloWrite[A-Z]/);
 });
 
-test("daily, weekly and task-management boundaries are unchanged by project-health activity/date rules", () => {
+test("planning and task Skills share global semantics without adopting Project Health workflow", () => {
   const health = readSkill("project-health");
   assert.match(health, /hand off to the daily-planning or weekly-planning Skill/i);
   assert.match(health, /task-management owns that mutation request/i);
-  // The health-only activity signal and date-wording rules must not leak into other Skills.
   for (const name of ["daily-planning", "weekly-planning", "task-management", "studio-intake"]) {
     const other = readSkill(name);
-    assert.doesNotMatch(other, /lastActivityAt/, `${name} must not adopt the health-only activity signal`);
     assert.doesNotMatch(other, /project-health/, `${name} must not depend on project-health`);
   }
+  assert.doesNotMatch(readSkill("studio-intake"), /lastActivityAt/, "intake does not interpret Trello activity");
+});
+
+test("daily planning distinguishes Waiting and Blocked without using activity or due as capacity evidence", () => {
+  const daily = readSkill("daily-planning");
+  assert.match(daily, /waiting work.*separately.*blocked/is);
+  assert.match(daily, /concrete dependency that prevents progress/i);
+  assert.match(daily, /Waiting card is not automatically Blocked/i);
+  assert.match(daily, /lastActivityAt.*not show Daniel worked or made progress/i);
+  assert.match(daily, /due date alone.*spare capacity.*enough time/i);
+  assert.doesNotMatch(daily, /explicit blockers \(waiting on/i);
+});
+
+test("weekly planning separates recorded due, confirmed commitment, Waiting and Blocked", () => {
+  const weekly = readSkill("weekly-planning");
+  assert.match(weekly, /recorded Trello due dates/i);
+  assert.match(weekly, /hard external\/client deadline only when that commitment is separately confirmed/i);
+  assert.match(weekly, /waiting work.*not automatically blocked/is);
+  assert.match(weekly, /blocked work.*concrete dependency or problem prevents progress/is);
+  assert.match(weekly, /lastActivityAt.*not proof of Daniel's work or progress/i);
+  assert.match(weekly, /does not know the user's actual hours\/availability unless the user has stated them/i);
+  assert.doesNotMatch(weekly, /hard deadlines.*tasks with a due date landing this week/i);
+  assert.doesNotMatch(weekly, /waiting\/blocked work/i);
+});
+
+test("read-only task lookup does not invent completion time or work from current card metadata", () => {
+  const task = readSkill("task-management");
+  assert.match(task, /Done.*dueComplete.*current completion state.*neither gives a completion timestamp/i);
+  assert.match(task, /lastActivityAt.*does not date completion or prove Daniel worked or made progress/i);
+  assert.match(task, /trelloSearch.*discovery only/i);
+  assert.match(task, /direct `trelloReadCard`/i);
 });
 
 test("project-health keeps Memory below fresh operational state", () => {

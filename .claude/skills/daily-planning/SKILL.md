@@ -19,16 +19,18 @@ Order and select tasks using, in combination, whatever evidence is actually avai
 
 - due dates and how soon they are;
 - current list/status (e.g. in-progress work usually outranks untouched backlog);
-- explicit blockers (waiting on someone/something is usually not "start now" work);
+- waiting work (not usually a "start now" task) and separately, work blocked by a concrete dependency that prevents progress;
 - explicit user-stated priorities, both from this conversation and from durable Memory;
 - project/client context that changes urgency (e.g. a client deadline vs. an internal one);
 - a realistic sense of how much can actually fit in a day.
+
+Apply the coordinator's factual semantics when ranking: a Waiting card is not automatically Blocked, `lastActivityAt` does not show Daniel worked or made progress, and a due date alone says nothing about spare capacity or whether there is enough time ("не горить").
 
 State briefly why a task is where it is when it's not obvious (e.g. "due today", "client чекає", "ти сказав це важливіше") — don't just output an ordered list with no reasoning.
 
 ## Keep the plan realistic
 
-Do not list everything that is technically open. If fresh Trello state contains clearly more work than fits in a day, say so plainly and propose a realistic subset, explaining what's deliberately left out and why (not urgent today, no due date, blocked, etc.) rather than pretending the whole board fits.
+Do not list everything that is technically open. If fresh Trello state contains clearly more work than fits in a day, say so plainly and propose a realistic subset, explaining what's deliberately left out and why (lower stated priority, waiting for an external response, a confirmed blocker, etc.) rather than pretending the whole board fits. Do not equate no due date with low urgency.
 
 ## A plan is not a Trello mutation
 

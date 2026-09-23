@@ -186,12 +186,72 @@ test("prompt states Daniel's working timezone and leaves date arithmetic to code
   assert.match(system, /Europe\/Kyiv/);
   // Board conventions (projects as labels, new task → Inbox) are task-management's, not the coordinator's.
   assert.doesNotMatch(system, /labels on one Trello board/i);
-  // Date derivation is owned by code (#23/#31), stated once, not as a conversion policy.
-  assert.match(system, /Dates and weekdays come from the tool data and the code that formats it/i);
+  // Date derivation is owned by accepted evidence/formatters, not model arithmetic.
+  assert.match(system, /relative timing/i);
+  assert.match(system, /weekday/i);
+  assert.match(system, /local time/i);
+  assert.match(system, /authoritative evidence or a formatter/i);
+  assert.match(system, /never your own arithmetic/i);
   assert.ok(
     system.split("\n").filter((line) => /weekday/i.test(line)).length <= 1,
-    "weekday handling stays one line; the algorithm lives in code",
+    "weekday handling stays one line; the algorithm stays out of the prompt",
   );
+});
+
+test("coordinator has one global factual-semantics contract independent of Skill activation", () => {
+  const section = system.split("# Factual semantics\n")[1]?.split("\n# ")[0];
+  assert.ok(section, "global factual-semantics section must exist");
+  // Keep related evidence close to its field without requiring a particular sentence boundary.
+  const contextFor = (field: RegExp, length = 300) => {
+    const match = field.exec(section);
+    assert.ok(match, `expected a semantic clause for ${field}`);
+    return section.slice(match.index, match.index + length);
+  };
+  const negation = /\b(?:not|never|neither|cannot|doesn't)\b/i;
+
+  const search = contextFor(/search/i, 100);
+  assert.match(search, /discover|candidate/i);
+  assert.match(search, /direct/i);
+  assert.match(search, /card|list|board/i);
+  assert.match(search, /field/i);
+  assert.match(system, /fresh read/i);
+  assert.match(system, /outrank Memory/i);
+
+  const activity = contextFor(/lastActivityAt/i, 220);
+  assert.match(activity, /Trello activity/i);
+  assert.match(activity, negation);
+  for (const concept of [/Daniel.*work|work.*Daniel/i, /progress/i, /complet/i, /stale|staleness/i]) {
+    assert.match(activity, concept, `lastActivityAt must not establish ${concept}`);
+  }
+
+  const completion = contextFor(/Done/i, 190);
+  assert.match(completion, /dueComplete/i);
+  assert.match(completion, /current.*state/i);
+  assert.match(completion, negation);
+  assert.match(completion, /when|time|timestamp/i);
+  assert.match(section, /action.history/i);
+  assert.match(section, /transition/i);
+
+  const waiting = contextFor(/Blocked/i, 190);
+  assert.match(waiting, /concrete/i);
+  assert.match(waiting, /dependency|problem/i);
+  assert.match(waiting, /prevents? progress/i);
+  assert.match(section, /Waiting alone.*(?:not|does not|never)/is);
+
+  const due = contextFor(/Trello `due`/i, 260);
+  assert.match(due, negation);
+  for (const concept of [/client commitment/i, /capacity/i, /urgency/i, /risk/i, /enough time|sufficient time/i]) {
+    assert.match(due, concept, `due alone must not establish ${concept}`);
+  }
+
+  const judgement = contextFor(/external facts/i, 240);
+  assert.match(judgement, /external fact/i);
+  assert.match(judgement, /separate|distinguish/i);
+  assert.match(section, /(?:do not|never).*actor.*work history/is);
+  assert.match(section, /relative timing/i);
+  assert.match(section, /weekday/i);
+  assert.match(section, /local time/i);
+  assert.match(section, /authoritative evidence|formatter/i);
 });
 
 // --- F. Verified-write principle ----------------------------------------------------------------
@@ -214,9 +274,12 @@ test("prompt delegates domain detail to the Skills instead of restating their pr
   assert.doesNotMatch(system, /attach_label|list_labels/i);
   assert.doesNotMatch(system, /Inbox/);
   assert.doesNotMatch(system, /checklist/i);
-  assert.doesNotMatch(system, /Waiting|Blocked|Backlog/);
-  assert.doesNotMatch(system, /dueComplete/i);
-  assert.doesNotMatch(system, /lastActivityAt/i);
+  // Cross-domain field meanings belong here; domain procedures still belong in Skills.
+  assert.doesNotMatch(system, /Backlog/);
+  assert.match(system, /lastActivityAt/);
+  assert.match(system, /dueComplete/);
+  assert.match(system, /Waiting/);
+  assert.match(system, /Blocked/);
 });
 
 test("prompt shares no long verbatim block with any coordinator Skill", () => {
@@ -266,11 +329,10 @@ test("Project Health stays a small part of the coordinator prompt", () => {
 });
 
 test("prompt stays a role/voice/boundaries document rather than growing into a policy manual", () => {
-  // A source-architecture ceiling, not a rule about how long Djonik's answers may be. Production v21
-  // was 3686 bytes, a third of it detail that Skills and code already own; #38 brought the coordinator
-  // back to role, voice and boundaries. The ceiling is deliberately generous (the current body is well
-  // under it) so wording can breathe — but it fails loudly if domain or runtime documentation starts
-  // migrating back into the coordinator instead of into a Skill.
+  // Editorial review heuristic, not a Product Contract invariant or an answer-length rule. The
+  // old 2600-byte source ceiling was superseded when #38 added always-visible factual semantics.
+  // Review this upper bound whenever an intentional architecture change needs more core text;
+  // there is no minimum prompt size.
   const bytes = Buffer.byteLength(system, "utf8");
-  assert.ok(bytes <= 2600, `coordinator system prompt should stay ~2 KB (was ${bytes} bytes)`);
+  assert.ok(bytes <= 3800, `review coordinator prompt growth (${bytes} bytes); 3800 is an editorial heuristic`);
 });

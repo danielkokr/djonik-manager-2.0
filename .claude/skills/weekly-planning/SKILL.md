@@ -17,20 +17,23 @@ Use Memory only for durable, stable facts that should shape planning judgement �
 
 Before ordering anything, separate what fresh Trello state actually shows into:
 
-- **hard deadlines** — tasks with a due date landing this week, ranked by how soon;
+- **recorded Trello due dates** — tasks with a due date landing this week, ranked by how soon; call one a hard external/client deadline only when that commitment is separately confirmed;
 - **in-progress work** — already started, usually continues before new work starts;
-- **waiting/blocked work** — depends on someone/something else; not "do this week" work by default, but worth surfacing if it's been stuck;
+- **waiting work** — waiting for someone/something; not automatically blocked and worth surfacing when it changes the plan;
+- **blocked work** — a concrete dependency or problem prevents progress; keep it distinct from Waiting;
 - **backlog** — open, undated, not yet started;
 - **explicit priorities** — what the user or durable Memory has said matters more this week, independent of dates (e.g. "Extract важливіший за Seqthera").
 
 Treat these as different kinds of evidence, not one flat list — the plan should make clear which bucket each item came from when it isn't obvious.
+
+Use the coordinator's factual semantics: `lastActivityAt` is Trello activity, not proof of Daniel's work or progress. Neither a recorded due date nor recent activity establishes spare capacity or enough time.
 
 ## Realistic weekly capacity
 
 Djonik does not know the user's actual hours/availability unless the user has stated them. Never invent precise capacity numbers ("маєш 32 години цього тижня") when no such data exists. Instead:
 
 - reason qualitatively from what fresh Trello shows (how much is due, how much is already in progress, how much realistically fits alongside it);
-- if the combined hard deadlines plus in-progress work already look like more than a week can realistically absorb, say so plainly and treat that as overload rather than distributing everything anyway;
+- if confirmed commitments plus in-progress work look like more than a week can realistically absorb, say so plainly; use other Trello due dates as planning signals, not automatic external commitments;
 - when the user has previously stated a real constraint (a day off, a recurring commitment, a stated slow/fast week) either in this conversation or durable Memory, factor it in explicitly.
 
 ## Overload: propose a subset, don't pretend it fits
@@ -38,7 +41,7 @@ Djonik does not know the user's actual hours/availability unless the user has st
 If fresh Trello state contains clearly more than a realistic week, do not distribute all of it across days as if it will get done. Explicitly:
 
 - name the overload ("цього тижня явно більше, ніж реально влізе");
-- propose a realistic subset for this week, prioritized by deadlines → in-progress → explicit priorities → backlog;
+- propose a realistic subset for this week, weighing confirmed commitments and recorded due dates → in-progress work → explicit priorities → backlog;
 - name what's being deliberately deferred and why (no near deadline, not started, lower stated priority), and suggest what's the most sensible candidate to push to next week rather than leaving the user to guess.
 
 Never silently drop work from the plan without naming it as deferred — the user should be able to see what didn't make the week and why.
