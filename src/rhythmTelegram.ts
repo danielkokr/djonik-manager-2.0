@@ -48,6 +48,8 @@ export const ALREADY_ANSWERED_TEXT = "Відповідь на це повідо�
 export const BUTTON_TTL_HOURS = 48;
 
 export interface RhythmCallbackQuery {
+  /** Telegram's callback query id, for the acknowledgement. */
+  id?: string;
   data?: string;
   fromId?: number;
   chatId?: number;
@@ -61,8 +63,8 @@ export interface RhythmCallbackDeps {
   now(): Date;
   /** The Session currently serving; a button from an earlier Session has lost its context. */
   currentSessionId(): string | null;
-  /** Acknowledges the callback query; `alert` text is shown as a dismissible notice. */
-  answer(alert?: string): Promise<unknown>;
+  /** Acknowledges this callback query; `alert` text is shown as a dismissible notice. */
+  answer(query: RhythmCallbackQuery, alert?: string): Promise<unknown>;
   /** Best-effort removal of the keyboard after a click (buttons are single-use). */
   clearButtons?(chatId: number, messageId: number): Promise<unknown>;
   /** The same entry point typed text uses: the grouping buffer → FIFO Session turn. */
@@ -71,16 +73,14 @@ export interface RhythmCallbackDeps {
 }
 
 /**
- * The `enqueueUserText` the wiring should use. A click carries the id of the (older) bot message, so if it
- * joined a still-buffering group of text Daniel just typed, sorting by message id would put the click
- * first. Flushing the pending group first keeps arrival order: typed text is one turn, the click the next,
- * both through the same buffer and FIFO Session queue.
+ * The `enqueueUserText` the wiring uses. A click carries the id of the (older) bot message, so it must
+ * never join a still-buffering group (sorting by message id would put it first). `enqueueAfterPending`
+ * makes it its own intake after everything this chat already sent — a still-arriving album is not split,
+ * it settles on its own window — and before anything sent next, through the same buffer and FIFO Session
+ * queue. Only this chat/user is affected (no global flush).
  */
-export function enqueueClickAfterPendingText(buffer: Pick<MessageGroupBuffer, "flushAll" | "addFragment">): RhythmCallbackDeps["enqueueUserText"] {
-  return (fragment) => {
-    buffer.flushAll();
-    buffer.addFragment(fragment);
-  };
+export function enqueueClickAfterPendingText(buffer: Pick<MessageGroupBuffer, "enqueueAfterPending">): RhythmCallbackDeps["enqueueUserText"] {
+  return (fragment) => buffer.enqueueAfterPending(fragment);
 }
 
 export type CallbackResolution =
@@ -103,7 +103,7 @@ export function createRhythmCallbackHandler(deps: RhythmCallbackDeps): (query: R
 
     const reject = async (reason: string, alert = STALE_BUTTON_TEXT): Promise<CallbackResolution> => {
       log(`[rhythm] callback_rejected reason=${reason}`);
-      await deps.answer(alert).catch(() => undefined);
+      await deps.answer(query, alert).catch(() => undefined);
       return { outcome: "rejected", reason };
     };
 
@@ -140,9 +140,11 @@ export function createRhythmCallbackHandler(deps: RhythmCallbackDeps): (query: R
 
     const { kind, when } = accepted as { kind: Parameters<typeof utteranceFor>[1]; when: string };
     const utterance = utteranceFor(decoded.action, kind, when);
-    await deps.answer().catch(() => undefined);
-    await deps.clearButtons?.(query.chatId, query.messageId).catch(() => undefined);
+    // Enqueue first (synchronously, still inside this serialized handler), so arrival order is fixed before
+    // any network acknowledgement; the acknowledgement and keyboard removal are best-effort.
     deps.enqueueUserText({ chatId: query.chatId, userId: query.fromId!, messageId: query.messageId, text: utterance });
+    await deps.answer(query).catch(() => undefined);
+    await deps.clearButtons?.(query.chatId, query.messageId).catch(() => undefined);
     log(`[rhythm] callback_enqueued action=${decoded.action}`);
     return { outcome: "enqueued", action: decoded.action, utterance };
   }

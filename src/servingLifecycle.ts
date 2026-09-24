@@ -2,6 +2,8 @@
  * Graceful stop of the Telegram serving process (#33).
  *
  * Order, each step bounded:
+ *  0. stop background work (the Working Rhythm timer, #39): no new scheduled tick starts; one already in
+ *     flight is drained together with the intake in step 3;
  *  1. stop long polling (grammY confirms the last received update offset to Telegram, so a successor
  *     instance does not receive it again) and wait for the in-progress update batch to finish;
  *  2. flush the grouping buffer — fragments already acknowledged to Telegram become their turn now;
@@ -18,6 +20,8 @@ export const INTERRUPTED_TURN_NOTICE =
   "Якщо там була зміна в Trello, спершу перевір, чи вона застосувалась, і лише потім повтори запит.";
 
 export interface ShutdownDeps {
+  /** Stops background work at once; settles when its in-flight work has finished (drained with intake). */
+  stopBackground?: () => Promise<unknown>;
   stopPolling: () => Promise<unknown>;
   /** Settles when the polling loop (and the update batch it was handling) has finished. */
   pollingDone: () => Promise<unknown>;
@@ -69,10 +73,11 @@ export function createShutdownCoordinator(deps: ShutdownDeps): ShutdownCoordinat
 
   async function run(reason: string, exitCode: number): Promise<ShutdownResult> {
     deps.log(`[shutdown] begin reason=${reason} drain_ms=${deps.drainMs}`);
+    const background = deps.stopBackground ? Promise.resolve().then(deps.stopBackground) : Promise.resolve();
     await within(Promise.resolve().then(deps.stopPolling), stepMs, sleep);
     await within(Promise.resolve().then(deps.pollingDone), stepMs, sleep);
     deps.flushIntake();
-    const drained = await within(deps.intakeIdle(), deps.drainMs, sleep);
+    const drained = await within(Promise.all([deps.intakeIdle(), background]), deps.drainMs, sleep);
     let interruptedChats = 0;
     if (!drained) {
       const chats = deps.inFlightChatIds();

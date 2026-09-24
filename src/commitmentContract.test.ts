@@ -364,11 +364,33 @@ test("#34 N runtime: a Memory read-back never counts as verification of a Trello
   session.close();
 });
 
-test("#34 scope: the application never reads, writes, parses or caches Memory content itself", () => {
+/** The ONE reviewed direct Memory API read (#39, Product Lead 2026-09-24): `/rhythm.md`, read-only. */
+const RHYTHM_CONFIG_SOURCE = "rhythmMemoryConfig.ts";
+
+test("#34 scope: the application never reads, writes, parses or caches Memory content itself (sole exception: the #39 /rhythm.md read)", () => {
   const runtimeFiles = readdirSync(join(repoRoot, "src")).filter((name) => name.endsWith(".ts") && !name.includes(".test"));
   for (const name of runtimeFiles) {
     const source = read("src", name);
-    assert.doesNotMatch(source, /memoryStores|\.memories\.|memoryVersions|memory_versions/, `${name} must not call the Memory API`);
+    if (name !== RHYTHM_CONFIG_SOURCE) {
+      assert.doesNotMatch(source, /memoryStores|\.memories\.|memoryVersions|memory_versions/, `${name} must not call the Memory API`);
+    }
     if (name !== "djonikClient.ts") assert.doesNotMatch(source, /commitments\//, `${name} must not handle commitment records`);
   }
+});
+
+test("#39 exception is narrow: the rhythm config source only lists the store root and retrieves /rhythm.md — no write, no other path", () => {
+  const source = read("src", RHYTHM_CONFIG_SOURCE);
+  // Exactly the two read operations, on the memories resource only.
+  const calls = [...source.matchAll(/memories\.(\w+)\(/g)].map((match) => match[1]).sort();
+  assert.deepEqual(calls, ["list", "retrieve"]);
+  assert.doesNotMatch(source, /\.(create|update|delete)\(|memoryVersions|memory_versions|redact|archive/);
+  assert.match(source, /export const RHYTHM_CONFIG_PATH = "\/rhythm\.md";/);
+  assert.match(source, /path_prefix: "\/", depth: 1, view: "basic"/, "root listing, paths only, never recursive");
+  assert.doesNotMatch(source, /commitments/, "never names, opens or parses commitment records");
+  // Only the serving entry point binds it, and only to the release's own production Memory Store.
+  const users = readdirSync(join(repoRoot, "src")).filter(
+    (name) => name.endsWith(".ts") && !name.includes(".test") && name !== RHYTHM_CONFIG_SOURCE && read("src", name).includes("rhythmMemoryConfig.js"),
+  );
+  assert.deepEqual(users, ["telegramCli.ts"]);
+  assert.match(read("src", "telegramCli.ts"), /memoryStoreId: release\.session\.memoryStoreId/);
 });

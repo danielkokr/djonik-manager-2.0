@@ -5,7 +5,7 @@
  * `/rhythm.md` is a native Memory file that Claude edits on Daniel's natural-language request
  * ("бриф о 10", "не пиши в п'ятницю зранку"). This module only parses text it is given; it never
  * reads Memory itself. How the adapter obtains the file is the `RhythmConfigSource` boundary below,
- * which this revision deliberately leaves unwired (docs/61 §17).
+ * implemented by the reviewed read-only `rhythmMemoryConfig.ts` (docs/62 §3).
  *
  * Parsing never throws: every invalid value falls back to its safe default with a warning, unknown
  * keys are kept for forward compatibility, and a missing file yields the agreed defaults.
@@ -406,9 +406,8 @@ export function parseRhythmConfig(text: string | null): ParsedRhythmConfig {
 
 /**
  * Where the adapter obtains `/rhythm.md` text (null = file absent). Throwing means "unknown": the
- * scheduler then skips the tick rather than guessing. The production implementation (a read of the
- * native Memory store) is intentionally not part of this revision: the accepted #34 boundary forbids
- * runtime Memory API calls, so adding one needs its own review (docs/61 §17).
+ * scheduler then skips the tick rather than guessing. The production implementation is the one reviewed
+ * read-only Memory API exception, `rhythmMemoryConfig.ts` (docs/62 §3).
  */
 export interface RhythmConfigSource {
   read(): Promise<string | null>;

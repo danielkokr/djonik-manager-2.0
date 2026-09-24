@@ -247,9 +247,9 @@ export function formatGroupFailureError(error: unknown): string {
   return `⚠️ Джонік не зміг обробити цю групу повідомлень: ${message}`;
 }
 
-export interface DjonikSessionManager {
+export interface DjonikSessionManager<H extends DjonikSessionHandle = DjonikSessionHandle> {
   /** Resolves the single in-process Djonik session, connecting it on first use. */
-  getSession(): Promise<DjonikSessionHandle>;
+  getSession(): Promise<H>;
   /** Closes the session's event stream if one was ever opened. */
   closeIfOpen(): void;
   /**
@@ -270,15 +270,28 @@ export interface DjonikSessionManager {
  * adapter-side state. A failed connect attempt is not cached, so the next
  * message can retry.
  */
-export function createSessionManager(connect: () => Promise<DjonikSessionHandle>): DjonikSessionManager {
-  let sessionPromise: Promise<DjonikSessionHandle> | null = null;
+export function createSessionManager<H extends DjonikSessionHandle>(
+  connect: () => Promise<H>,
+): DjonikSessionManager<H> & {
+  /** Id of the connected Session, or null while none is connected (never connected, or invalidated). */
+  currentSessionId(): string | null;
+} {
+  let sessionPromise: Promise<H> | null = null;
+  let connected: H | null = null;
 
-  function getSession(): Promise<DjonikSessionHandle> {
+  function getSession(): Promise<H> {
     if (!sessionPromise) {
-      sessionPromise = connect().catch((error: unknown) => {
-        sessionPromise = null;
-        throw error;
-      });
+      const attempt: Promise<H> = connect().then(
+        (session) => {
+          if (sessionPromise === attempt) connected = session;
+          return session;
+        },
+        (error: unknown) => {
+          if (sessionPromise === attempt) sessionPromise = null;
+          throw error;
+        },
+      );
+      sessionPromise = attempt;
     }
     return sessionPromise;
   }
@@ -289,9 +302,10 @@ export function createSessionManager(connect: () => Promise<DjonikSessionHandle>
 
   function invalidate(): void {
     sessionPromise = null;
+    connected = null;
   }
 
-  return { getSession, closeIfOpen, invalidate };
+  return { getSession, closeIfOpen, invalidate, currentSessionId: () => connected?.sessionId ?? null };
 }
 
 /**

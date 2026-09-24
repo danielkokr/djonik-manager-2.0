@@ -120,6 +120,48 @@ export interface DjonikSessionHandle {
   close(): void;
 }
 
+/** The handle `connectToDjonik` returns: the ordinary handle plus a traced send (#39). */
+export interface DjonikTracedSessionHandle extends DjonikSessionHandle {
+  /**
+   * `sendOrdered` for a turn whose caller must inspect what the turn did (#39 scheduled Working Rhythm
+   * turns). Same FIFO queue and the same `sendPartsSerial` pipeline (#31/#32/#36/#40, final-only); the only
+   * difference is the return shape: the final reply, the id of the Session that produced it, and the
+   * content-free list of every tool the turn invoked. A failed turn rejects with `DjonikTracedTurnError`,
+   * which carries the same Session id and tool list around the original error.
+   */
+  sendTraced(parts: DjonikTurnPart[]): Promise<DjonikTracedTurn>;
+}
+
+/**
+ * One tool invocation seen on the primary event stream during a turn — kind and name only, never input
+ * or result (#39). `mcp` = `agent.mcp_tool_use`, `builtin` = `agent.tool_use` (read/write/edit/…, including
+ * Memory file access), `custom` = `agent.custom_tool_use`. Events quarantined as an earlier turn's late
+ * tail (#32) are not part of the turn and are not listed.
+ */
+export interface DjonikToolUse {
+  kind: "mcp" | "builtin" | "custom";
+  name: string;
+}
+
+export interface DjonikTracedTurn {
+  reply: string;
+  /** The Session that actually produced `reply` (not whatever Session is current afterwards). */
+  sessionId: string;
+  toolUses: DjonikToolUse[];
+}
+
+/** A traced turn that failed: the original error plus what the turn did before failing. */
+export class DjonikTracedTurnError extends Error {
+  constructor(
+    readonly error: unknown,
+    readonly sessionId: string,
+    readonly toolUses: DjonikToolUse[],
+  ) {
+    super(error instanceof Error ? error.message : String(error));
+    this.name = "DjonikTracedTurnError";
+  }
+}
+
 export type DjonikTurnSource = "telegram" | "diagnostic" | "unknown";
 
 export interface DjonikCumulativeUsage {
@@ -891,7 +933,7 @@ export async function connectToDjonik(
   turnSource: DjonikTurnSource = "unknown",
   customToolExecutor: DjonikCustomToolExecutor = executeTrelloWorkHistoryFromEnvironment,
   sessionOptions: DjonikSessionOptions = {},
-): Promise<DjonikSessionHandle> {
+): Promise<DjonikTracedSessionHandle> {
   const memoryAccess = sessionOptions.memoryAccess ?? "read_write";
   const session = await client.beta.sessions.create({
     agent: sessionOptions.agentVersion === undefined ? agentId : { type: "agent", id: agentId, version: sessionOptions.agentVersion },
@@ -947,6 +989,9 @@ export async function connectToDjonik(
   let turnCustomToolUseIds: string[] = [];
   /** This turn's per-mutation Trello verification ledger (#31); replaced at the start of every turn. */
   let ledger = new TrelloMutationLedger();
+  /** Content-free tool uses of the CURRENT visible turn (#39), including a verification-nudge rerun.
+   *  Reset once per visible turn in `sendPartsSerial`, like `turnCustomToolUseIds`. */
+  let turnToolUses: DjonikToolUse[] = [];
 
   type WorkHistoryVerdict = { status: "none" } | { status: "verified"; answerText: string } | { status: "unverified" };
 
@@ -1057,6 +1102,7 @@ export async function connectToDjonik(
             input: event.input as Record<string, unknown>,
           });
           turnTelemetry?.recordMcpToolUse(event.name);
+          turnToolUses.push({ kind: "mcp", name: event.name });
           break;
         case "agent.mcp_tool_result": {
           const call = mcpToolCallsById.get(event.mcp_tool_use_id);
@@ -1084,8 +1130,10 @@ export async function connectToDjonik(
           // Result routing is exclusively by the observed blocking custom-tool event id (#40 lifecycle).
           customTools.observeUse({ id: event.id, name: event.name, input: event.input });
           if (!turnCustomToolUseIds.includes(event.id)) turnCustomToolUseIds.push(event.id);
+          turnToolUses.push({ kind: "custom", name: event.name });
           break;
         case "agent.tool_use":
+          turnToolUses.push({ kind: "builtin", name: event.name });
           if (event.name === "read") {
             turnTelemetry?.recordBuiltInRead(event.input as Record<string, unknown>);
           }
@@ -1209,6 +1257,7 @@ export async function connectToDjonik(
     ledger = new TrelloMutationLedger();
     specialist.beginTurn();
     turnCustomToolUseIds = [];
+    turnToolUses = [];
     preAnchorEventsQuarantined = 0;
     mcpToolCallsById.clear();
     turnTelemetry = createTurnTelemetryCollector(turnSource, session.id, previousSessionUsage);
@@ -1410,9 +1459,23 @@ export async function connectToDjonik(
     return enqueue(() => sendPartsSerial(parts));
   }
 
+  function sendTraced(parts: DjonikTurnPart[]): Promise<DjonikTracedTurn> {
+    let traced: DjonikTracedTurn | null = null;
+    // Same queue and pipeline; the trace is read inside the queued run, before the next turn resets it.
+    return enqueue(async () => {
+      try {
+        const reply = await sendPartsSerial(parts);
+        traced = { reply, sessionId: session.id, toolUses: [...turnToolUses] };
+        return reply;
+      } catch (error) {
+        throw new DjonikTracedTurnError(error, session.id, [...turnToolUses]);
+      }
+    }).then(() => traced!);
+  }
+
   function close(): void {
     stream.controller.abort();
   }
 
-  return { sessionId: session.id, send, sendOrdered, close };
+  return { sessionId: session.id, send, sendOrdered, sendTraced, close };
 }

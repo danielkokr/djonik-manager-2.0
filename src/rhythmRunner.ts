@@ -7,7 +7,7 @@ import {
   type RhythmConfigSource,
 } from "./rhythmConfig.js";
 import { boundTelegramText, buttonsFor, RHYTHM_ACTIONS, type OutboundMessage, type ProactiveKind } from "./rhythmActions.js";
-import { evaluateRituals, kyivLocal, type RitualKind, type RitualOccurrence } from "./rhythmSchedule.js";
+import { evaluateRituals, isQuietTime, kyivLocal, type RitualKind, type RitualOccurrence } from "./rhythmSchedule.js";
 import {
   advanceSignalLedger,
   detectSignals,
@@ -35,8 +35,9 @@ import {
  * send. It holds no conversation logic: Claude composes every brief/review/exception in the normal
  * serving Session, following the `pm-rhythm` Skill.
  *
- * Nothing here is wired into `telegramCli.ts` in this revision. Activation is a separate, authorized
- * stage (docs/61 §12, §17).
+ * Wired into `telegramCli.ts` through `rhythmRuntime.ts` (docs/62), behind two locks that are both closed
+ * in production: the `DJONIK_WORKING_RHYTHM` switch and a genuine pre-execution read-only boundary, which
+ * the serving runner does not have yet. Activation is a separate, authorized stage.
  */
 
 /**
@@ -60,8 +61,25 @@ export interface AutonomousTurnRequest {
 export interface AutonomousTurnResult {
   /** The final visible reply (#38 final-only: never an interim `agent.message`). */
   reply: string;
+  /** The Session that actually produced `reply`. The delivery record is bound to it, never to whatever
+   *  Session happens to be current afterwards, so a button under this message goes stale on any change. */
+  sessionId: string;
   /** Every tool the turn invoked, for the read-only guard. */
   toolUses: ToolUseRecord[];
+}
+
+/**
+ * A scheduled turn that failed after possibly invoking tools. The runner still applies the read-only guard
+ * to `toolUses`: a failed turn that tried to write gets the same fixed notice as a completed one.
+ */
+export class AutonomousTurnFailure extends Error {
+  constructor(
+    readonly toolUses: ToolUseRecord[],
+    readonly sessionId: string | null,
+  ) {
+    super("autonomous turn failed");
+    this.name = "AutonomousTurnFailure";
+  }
 }
 
 export type AutonomousTurnRunner = (request: AutonomousTurnRequest) => Promise<AutonomousTurnResult>;
@@ -141,7 +159,19 @@ function hintLines(signals: readonly Signal[]): string[] {
   return signals.map((signal) => `- ${signal.subject}${signal.project ? ` (${signal.project})` : ""}: ${signal.fact} [${occurrenceHandle(signal)}]`);
 }
 
-export function buildRitualPrompt(ritual: RitualOccurrence, config: RhythmConfig, observations: readonly Signal[], now: Date): string {
+/** Content-free identity of a set of `/rhythm.md` warnings; null when there are none. */
+export function configNoticeDigest(warnings: readonly string[]): string | null {
+  if (warnings.length === 0) return null;
+  return createHash("sha256").update([...warnings].sort().join("\n")).digest("hex").slice(0, 16);
+}
+
+export function buildRitualPrompt(
+  ritual: RitualOccurrence,
+  config: RhythmConfig,
+  observations: readonly Signal[],
+  now: Date,
+  configWarnings: readonly string[] = [],
+): string {
   const lines = [
     `[Робочий ритм · автоматичний хід · ${RITUAL_SECTION[ritual.kind]} · ${kyivLabel(now, true)}]`,
     `Це запланований хід, а не повідомлення від Daniel. Склади повідомлення за Skill pm-rhythm, розділ «${RITUAL_SECTION[ritual.kind]}», зі свіжим Trello.`,
@@ -152,6 +182,13 @@ export function buildRitualPrompt(ritual: RitualOccurrence, config: RhythmConfig
   ];
   if (observations.length > 0) {
     lines.push("Підказки коду (перевір свіжим Trello; це не готові висновки):", ...hintLines(observations));
+  }
+  if (configWarnings.length > 0) {
+    lines.push(
+      "У /rhythm.md є значення, які не вдалося застосувати; для них діють дефолти. Одним реченням наприкінці скажи про це Daniel " +
+        "і запропонуй виправити словами (сам /rhythm.md у цьому ході не змінюй):",
+      ...configWarnings.map((warning) => `- ${warning}`),
+    );
   }
   return lines.filter(Boolean).join("\n");
 }
@@ -187,6 +224,9 @@ export function buildExceptionPrompt(signals: readonly Signal[], now: Date): str
  */
 export type AutonomousReadOnlyBoundary = "pre_execution" | "post_hoc_detection_only";
 
+/** Default cadence for exception-only fact collection (see `RhythmTickDeps.factsIntervalMs`). */
+export const DEFAULT_FACTS_INTERVAL_MS = 15 * 60_000;
+
 export interface RhythmTickDeps {
   activation: RhythmActivation;
   /** Declared by the wiring for its `runTurn`; see `AutonomousReadOnlyBoundary`. */
@@ -196,10 +236,14 @@ export interface RhythmTickDeps {
   store: RhythmStateStore;
   runTurn: AutonomousTurnRunner;
   send: ProactiveSender;
-  /** The serving Session the turn ran in; recorded so an old button after a restart is recognised as stale. */
-  currentSessionId(): string | null;
   /** Fresh deterministic facts for signals; absent → rituals only, no exceptions. */
-  collectFacts?: () => Promise<SignalFacts>;
+  collectFacts?: (context: { now: Date; config: RhythmConfig }) => Promise<SignalFacts>;
+  /**
+   * Minimum time between fact collections that serve only exception checks (default 15 min). A due ritual
+   * always collects fresh facts; outside an exception window (off, quiet hours, non-workday without
+   * weekend exceptions) nothing is collected unless a ritual is due.
+   */
+  factsIntervalMs?: number;
   newRef?: () => string;
   log?: (line: string) => void;
 }
@@ -260,8 +304,11 @@ export interface RhythmScheduler {
 export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
   const log = deps.log ?? (() => {});
   const newRef = deps.newRef ?? newDeliveryRef;
+  const factsIntervalMs = deps.factsIntervalMs ?? DEFAULT_FACTS_INTERVAL_MS;
   let running = false;
   let recovered = false;
+  /** In-memory cadence only (not task state): when facts were last requested. */
+  let lastFactsAt: number | null = null;
 
   async function attempt(
     state: RhythmState,
@@ -280,7 +327,8 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
       status: "claimed",
       attempts: (previous?.attempts ?? 0) + 1,
       ref: previous?.ref ?? newRef(),
-      sessionId: deps.currentSessionId(),
+      // Unknown until the turn reports the Session that produced its reply.
+      sessionId: null,
       createdAt: previous?.createdAt ?? stamp(),
       updatedAt: stamp(),
       actions: [],
@@ -296,12 +344,17 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
     try {
       report.modelCalls += 1;
       result = await deps.runTurn({ origin, occurrenceKey: key, kind, prompt });
-    } catch {
-      // Never re-run a turn blindly: it may have done something before failing.
-      record = { ...record, status: "failed", failure: "turn_failed", retryable: false, updatedAt: stamp() };
-      await persist();
-      log(`[rhythm] ${key} turn_failed`);
-      return { state, outcome: record.status };
+    } catch (error) {
+      // Never re-run a turn blindly: it may have done something before failing. A failed turn that tried to
+      // write still gets the fixed notice (below); any other failure is silent here and logged.
+      const attempted = error instanceof AutonomousTurnFailure ? autonomousWriteViolations(error.toolUses) : [];
+      if (attempted.length === 0) {
+        record = { ...record, status: "failed", failure: "turn_failed", retryable: false, updatedAt: stamp() };
+        await persist();
+        log(`[rhythm] ${key} turn_failed`);
+        return { state, outcome: record.status };
+      }
+      result = { reply: "", sessionId: (error as AutonomousTurnFailure).sessionId ?? "", toolUses: (error as AutonomousTurnFailure).toolUses };
     }
 
     const violations = autonomousWriteViolations(result.toolUses);
@@ -325,7 +378,15 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
     }
 
     // Durable "send started" before the Telegram call: a crash from here on is ambiguous, never resent.
-    record = { ...record, status: "sending", actions: [...message.actions], sessionId: deps.currentSessionId(), sendStartedAt: stamp(), updatedAt: stamp() };
+    record = {
+      ...record,
+      status: "sending",
+      actions: [...message.actions],
+      // The exact Session that produced this reply (a blocked notice has no buttons; its id is informational).
+      sessionId: result.sessionId === "" ? null : result.sessionId,
+      sendStartedAt: stamp(),
+      updatedAt: stamp(),
+    };
     await persist();
 
     let outcome: SendOutcome;
@@ -378,29 +439,52 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
       state = await deps.store.update((current) => recoverRhythmState(current, now));
       recovered = true;
     }
-    const today = kyivLocal(now).date;
+    const local = kyivLocal(now);
+    const today = local.date;
+
+    // Rituals first; at most one proactive message per tick.
+    const dueRitual = evaluateRituals(now, config).find((ritual) => ritual.status === "due" && mayAttempt(state.deliveries[ritual.key]));
+    const exceptionWindowOpen =
+      config.exceptions.enabled &&
+      config.exceptions.maxPerDay > 0 &&
+      !isQuietTime(local.minutes, config.quietHours) &&
+      (config.workdays.includes(local.weekday) || config.exceptions.weekends);
+    const factsDue =
+      deps.collectFacts !== undefined &&
+      (dueRitual !== undefined || (exceptionWindowOpen && (lastFactsAt === null || now.getTime() - lastFactsAt >= factsIntervalMs)));
 
     let signals: Signal[] = [];
-    if (deps.collectFacts) {
+    let factsCollected = false;
+    if (factsDue) {
+      lastFactsAt = now.getTime();
       try {
-        const detected = detectSignals(await deps.collectFacts(), now, config);
+        const detected = detectSignals(await deps.collectFacts!({ now, config }), now, config);
         state = await deps.store.update((current) => ({ ...current, signals: advanceSignalLedger(current.signals, detected, now) }));
         signals = detected;
+        factsCollected = true;
       } catch {
         log("[rhythm] facts_unavailable");
         signals = [];
       }
     }
 
-    // Rituals first; at most one proactive message per tick.
-    for (const ritual of evaluateRituals(now, config)) {
-      if (ritual.status !== "due" || !mayAttempt(state.deliveries[ritual.key])) continue;
-      const prompt = buildRitualPrompt(ritual, config, ritualObservations(signals, config, now), now);
-      const result = await attempt(state, ritual.key, ritual.kind, "rhythm_ritual", prompt, report);
-      return { ...report, delivery: { key: ritual.key, kind: ritual.kind, status: result.outcome } };
+    if (dueRitual) {
+      // A changed set of /rhythm.md warnings is mentioned once, inside the next ritual — never on its own.
+      const notice = configNoticeDigest(parsed.warnings);
+      const noteWarnings = notice !== null && state.configNotice?.digest !== notice;
+      const prompt = buildRitualPrompt(dueRitual, config, ritualObservations(signals, config, now), now, noteWarnings ? parsed.warnings : []);
+      const result = await attempt(state, dueRitual.key, dueRitual.kind, "rhythm_ritual", prompt, report);
+      if (noteWarnings && (result.outcome === "sent" || result.outcome === "ambiguous")) {
+        await deps.store.update((current) => ({ ...current, configNotice: { digest: notice, notedAt: now.toISOString() } }));
+      }
+      return { ...report, delivery: { key: dueRitual.key, kind: dueRitual.kind, status: result.outcome } };
+    }
+    if (parsed.warnings.length === 0 && state.configNotice !== undefined) {
+      // Warnings fixed: forget the note, so a later, reintroduced problem is mentioned again.
+      state = await deps.store.update(({ configNotice: _cleared, ...current }) => current);
     }
 
-    if (!deps.collectFacts) return report;
+    if (!factsCollected || !exceptionWindowOpen) return report;
     const history = exceptionHistory(state);
     // Today's only: a record stuck from an earlier day (until restart recovery) must not block exceptions forever.
     const inFlight = Object.values(state.deliveries).some(

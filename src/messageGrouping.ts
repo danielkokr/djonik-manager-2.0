@@ -161,6 +161,12 @@ interface ActiveGroup {
   startedAt: number;
   /** True once this group has been dispatched or failed — guards against any double-settling race. */
   settled: boolean;
+  /** The previous intake of the same chat/user, when it was not yet handed off at creation (#39). */
+  prev: ActiveGroup | null;
+  /** True once this intake was handed to `onDispatch`/`onFailure`, or discarded by `clearAll`. */
+  handed: boolean;
+  handedOff: Promise<void>;
+  markHandedOff: () => void;
 }
 
 function groupKey(chatId: number, userId: number): string {
@@ -188,6 +194,12 @@ function groupKey(chatId: number, userId: number): string {
  */
 export class MessageGroupBuffer {
   private readonly groups = new Map<string, ActiveGroup>();
+  /** Albums still settling after a button click closed them to other fragments (#39), per chat/user. */
+  private readonly sealedAlbums = new Map<string, ActiveGroup[]>();
+  /** Per chat/user: the hand-off of the most recently created intake. A later intake is never handed to
+   *  `onDispatch` before an earlier one of the same chat/user, so they reach the FIFO Session queue in
+   *  arrival order even when an earlier intake is still resolving an attachment. */
+  private readonly tails = new Map<string, ActiveGroup>();
   /** Settled groups whose dispatch/failure handling (the whole Djonik turn and its reply) has not finished
    *  yet, keyed to their chat — what a graceful shutdown drains (#33). */
   private readonly inFlight = new Map<Promise<void>, number>();
@@ -209,13 +221,22 @@ export class MessageGroupBuffer {
 
   /** True while a group for this chat/user is still buffering (test/introspection helper). */
   hasActiveGroup(chatId: number, userId: number): boolean {
-    return this.groups.has(groupKey(chatId, userId));
+    const key = groupKey(chatId, userId);
+    return this.groups.has(key) || (this.sealedAlbums.get(key)?.length ?? 0) > 0;
+  }
+
+  private buffering(): ActiveGroup[] {
+    return [...[...this.sealedAlbums.values()].flat(), ...this.groups.values()];
   }
 
   /** Cancels every pending timer without dispatching or failing anything (process shutdown only). */
   clearAll(): void {
-    for (const group of this.groups.values()) this.scheduler.clearTimeout(group.timer);
+    for (const group of this.buffering()) {
+      this.scheduler.clearTimeout(group.timer);
+      group.markHandedOff();
+    }
     this.groups.clear();
+    this.sealedAlbums.clear();
   }
 
   /**
@@ -224,7 +245,35 @@ export class MessageGroupBuffer {
    * would silently lose an accepted user turn (contract §10).
    */
   flushAll(): void {
-    for (const group of [...this.groups.values()]) this.dispatchGroup(group);
+    for (const group of this.buffering()) this.dispatchGroup(group);
+  }
+
+  /**
+   * Adds a fragment that must be its own intake, placed after everything this chat/user already sent and
+   * before anything they send next — a Working Rhythm button click (#39), which carries the id of an older
+   * bot message and so must never be sorted into, or merged with, a group of fresh input.
+   *
+   * - A still-buffering text/single group is closed now: nothing still arriving belongs to it, and a later
+   *   message belongs after the click.
+   * - A still-arriving album is NOT split: it keeps its own settle window and stays one intake; only its own
+   *   `media_group_id` fragments may still join it. Anything else starts a new group.
+   * - The click is handed to `onDispatch` only after every earlier intake of this chat/user (including an
+   *   album still settling or an attachment still downloading), so it reaches the same FIFO Session queue
+   *   as the following turn.
+   */
+  enqueueAfterPending(fragment: IncomingFragment): void {
+    const key = groupKey(fragment.chatId, fragment.userId);
+    const active = this.groups.get(key);
+    if (active) {
+      if (active.mediaGroupId !== null) {
+        this.groups.delete(key);
+        this.sealedAlbums.set(key, [...(this.sealedAlbums.get(key) ?? []), active]);
+      } else {
+        this.dispatchGroup(active);
+      }
+    }
+    fragment.media?.promise.catch(() => {});
+    this.dispatchGroup(this.newGroup(key, fragment));
   }
 
   /** Resolves once no settled group is still being dispatched, including any that start while waiting. */
@@ -249,7 +298,10 @@ export class MessageGroupBuffer {
 
   addFragment(fragment: IncomingFragment): void {
     const key = groupKey(fragment.chatId, fragment.userId);
-    const existing = this.groups.get(key);
+    // A late fragment of an album a button click sealed (#39) still joins that album, never anything else.
+    const sealed =
+      fragment.mediaGroupId === undefined ? undefined : this.sealedAlbums.get(key)?.find((album) => album.mediaGroupId === fragment.mediaGroupId);
+    const existing = sealed ?? this.groups.get(key);
 
     let group: ActiveGroup;
     if (existing && existing.mediaGroupId !== null && fragment.mediaGroupId !== undefined && fragment.mediaGroupId !== existing.mediaGroupId) {
@@ -301,7 +353,11 @@ export class MessageGroupBuffer {
     return group.mediaGroupId !== null ? this.albumSettleWindowMs : this.adjacentWindowMs;
   }
 
-  private createGroup(key: string, fragment: IncomingFragment): ActiveGroup {
+  /** A new intake, chained after the previous intake of the same chat/user; not buffered, no timer. */
+  private newGroup(key: string, fragment: IncomingFragment): ActiveGroup {
+    let resolveHandedOff: () => void = () => {};
+    const handedOff = new Promise<void>((resolve) => (resolveHandedOff = resolve));
+    const tail = this.tails.get(key);
     const group: ActiveGroup = {
       key,
       chatId: fragment.chatId,
@@ -311,7 +367,22 @@ export class MessageGroupBuffer {
       startedAt: this.scheduler.now(),
       timer: null,
       settled: false,
+      prev: tail !== undefined && !tail.handed ? tail : null,
+      handed: false,
+      handedOff,
+      markHandedOff: () => {
+        if (group.handed) return;
+        group.handed = true;
+        if (this.tails.get(key) === group) this.tails.delete(key);
+        resolveHandedOff();
+      },
     };
+    this.tails.set(key, group);
+    return group;
+  }
+
+  private createGroup(key: string, fragment: IncomingFragment): ActiveGroup {
+    const group = this.newGroup(key, fragment);
     group.timer = this.scheduler.setTimeout(() => this.dispatchGroup(group), this.windowFor(group));
     this.groups.set(key, group);
     return group;
@@ -322,12 +393,23 @@ export class MessageGroupBuffer {
     group.settled = true;
     this.scheduler.clearTimeout(group.timer);
     if (this.groups.get(group.key) === group) this.groups.delete(group.key);
+    const sealed = this.sealedAlbums.get(group.key);
+    if (sealed?.includes(group)) {
+      const rest = sealed.filter((album) => album !== group);
+      if (rest.length > 0) this.sealedAlbums.set(group.key, rest);
+      else this.sealedAlbums.delete(group.key);
+    }
     return true;
   }
 
   private failGroup(group: ActiveGroup, error: unknown): void {
     if (!this.settle(group)) return;
-    this.track(group.chatId, Promise.resolve(this.onFailure(group.chatId, group.userId, error)));
+    const fail = () => {
+      group.markHandedOff();
+      return this.onFailure(group.chatId, group.userId, error);
+    };
+    const prev = group.prev;
+    this.track(group.chatId, prev === null || prev.handed ? Promise.resolve(fail()) : prev.handedOff.then(fail));
   }
 
   private dispatchGroup(group: ActiveGroup): void {
@@ -367,6 +449,8 @@ export class MessageGroupBuffer {
       // the race when the rejection happens *before* the timer fires).
       // `settle()` already ran once for this group, so this is the only
       // place reporting the failure in that ordering — never a duplicate.
+      if (group.prev !== null && !group.prev.handed) await group.prev.handedOff;
+      group.markHandedOff();
       await this.onFailure(group.chatId, group.userId, error);
       return;
     }
@@ -387,6 +471,11 @@ export class MessageGroupBuffer {
       groupingWaitMs: this.scheduler.now() - group.startedAt,
     };
 
+    // Arrival order (#39): hand off only after the previous intake of this chat/user was handed off.
+    // `onDispatch` reaches the Session queue synchronously after that (its first await is the shared
+    // `getSession()` promise, whose continuations run in registration order), so FIFO order follows.
+    if (group.prev !== null && !group.prev.handed) await group.prev.handedOff;
+    group.markHandedOff();
     await this.onDispatch(group.chatId, group.userId, intake);
   }
 }

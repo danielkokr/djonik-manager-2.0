@@ -100,3 +100,22 @@ test("polling failures map to supervisor-meaningful exit codes (409 = another po
   assert.deepEqual(classifyPollingFailure({ error_code: 401 }), { reason: "telegram_unauthorized", exitCode: 78 });
   assert.deepEqual(classifyPollingFailure(new Error("x")), { reason: "polling_failed", exitCode: 1 });
 });
+
+test("#39 background work (Working Rhythm timer) stops first; its in-flight tick is drained with the intake before the Session closes", async () => {
+  let finishTick: () => void = () => {};
+  const tick = new Promise<void>((resolve) => (finishTick = resolve));
+  const { deps, steps } = harness({
+    stopBackground: async () => {
+      steps.push("stopBackground");
+      await tick;
+    },
+  });
+  const done = createShutdownCoordinator(deps).shutdown("SIGTERM", 0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(steps.filter((s) => !s.startsWith("log:"))[0], "stopBackground", "no new tick can start during shutdown");
+  assert.ok(!steps.includes("closeSession"), "an in-flight scheduled turn is not cut off before the drain");
+  finishTick();
+  const result = await done;
+  assert.equal(result.drained, true);
+  assert.equal(steps.at(-2), "closeSession");
+});

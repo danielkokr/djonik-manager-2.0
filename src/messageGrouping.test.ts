@@ -767,3 +767,89 @@ test("a failing dispatch still settles whenIdle (drain can never hang on a rejec
 function flushMicrotasks(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
+
+// --- #39: a Working Rhythm button click enters after pending input, without splitting an album ---------------
+
+const image = (label: string): IncomingFragment["media"] => ({
+  kind: "image",
+  promise: Promise.resolve({ data: label, mediaType: "image/jpeg", byteSize: label.length }),
+});
+
+test("#39 album + click: an active album stays ONE intake; the click becomes the following intake", async () => {
+  const scheduler = new FakeScheduler();
+  const { buffer, dispatches } = makeBuffer({ scheduler });
+  buffer.addFragment(textFragment({ messageId: 10, mediaGroupId: "alb", text: "Референси до Limen", media: image("p1") }));
+  buffer.addFragment(textFragment({ messageId: 11, mediaGroupId: "alb", text: "", media: image("p2") }));
+  // Daniel taps an old button (bot message id 5 < 10) while the album is still arriving.
+  buffer.enqueueAfterPending(textFragment({ messageId: 5, text: "Так, приймаю цей план (план тижня від пн 28.09)." }));
+  // The rest of the album arrives after the click and still joins its own album.
+  buffer.addFragment(textFragment({ messageId: 12, mediaGroupId: "alb", text: "", media: image("p3") }));
+  await sleep(0);
+  assert.equal(dispatches.length, 0, "the click waits; the album is not flushed early");
+  scheduler.advance(ALBUM_SETTLE_WINDOW_MS);
+  await sleep(0);
+  assert.equal(dispatches.length, 2);
+  assert.equal(dispatches[0].intake.groupingReason, "media_group_id");
+  assert.equal(dispatches[0].intake.imageCount, 3, "complete album, one intake");
+  assert.equal(dispatches[0].intake.text, "Референси до Limen");
+  assert.deepEqual(dispatches[1].intake.parts, [{ type: "text", text: "Так, приймаю цей план (план тижня від пн 28.09)." }]);
+  assert.equal(dispatches[1].intake.fragmentCount, 1, "the click never merges with anything");
+});
+
+test("#39 click after typed text: the text group closes as it stands and goes first; nothing typed later jumps ahead of the click", async () => {
+  const scheduler = new FakeScheduler();
+  const { buffer, dispatches } = makeBuffer({ scheduler });
+  buffer.addFragment(textFragment({ messageId: 20, text: "Тільки Limen прибери." }));
+  buffer.enqueueAfterPending(textFragment({ messageId: 7, text: "CLICK" }));
+  buffer.addFragment(textFragment({ messageId: 21, text: "і ще одне" }));
+  await sleep(0);
+  scheduler.advance(ADJACENT_WINDOW_MS);
+  await sleep(0);
+  assert.deepEqual(
+    dispatches.map((d) => d.intake.text),
+    ["Тільки Limen прибери.", "CLICK", "і ще одне"],
+  );
+});
+
+test("#39 hand-off order: a later intake never overtakes an earlier one still resolving an attachment", async () => {
+  const scheduler = new FakeScheduler();
+  const { buffer, dispatches } = makeBuffer({ scheduler });
+  let release: () => void = () => {};
+  const slow = new Promise<{ data: string; mediaType: string; byteSize: number }>((resolve) => (release = () => resolve({ data: "x", mediaType: "image/jpeg", byteSize: 1 })));
+  buffer.addFragment(textFragment({ messageId: 30, text: "скрін", media: { kind: "image", promise: slow } }));
+  scheduler.advance(ADJACENT_WINDOW_MS); // settled, still downloading
+  buffer.enqueueAfterPending(textFragment({ messageId: 8, text: "CLICK" }));
+  await sleep(0);
+  assert.equal(dispatches.length, 0, "the click waits for the earlier intake's hand-off");
+  release();
+  await sleep(0);
+  assert.deepEqual(dispatches.map((d) => d.intake.text), ["скрін", "CLICK"]);
+});
+
+test("#39 click with nothing pending dispatches at once; other chats are never affected", async () => {
+  const scheduler = new FakeScheduler();
+  const { buffer, dispatches } = makeBuffer({ scheduler });
+  buffer.addFragment(textFragment({ chatId: 2, userId: 200, messageId: 40, mediaGroupId: "other", text: "", media: image("o") }));
+  buffer.enqueueAfterPending(textFragment({ messageId: 9, text: "CLICK" }));
+  await sleep(0);
+  assert.deepEqual(dispatches.map((d) => d.intake.text), ["CLICK"]);
+  assert.equal(buffer.hasActiveGroup(2, 200), true, "another chat's album keeps buffering");
+});
+
+test("#39 shutdown flush includes an album sealed by a click; clearAll releases waiting intakes", async () => {
+  const scheduler = new FakeScheduler();
+  const { buffer, dispatches } = makeBuffer({ scheduler });
+  buffer.addFragment(textFragment({ messageId: 50, mediaGroupId: "alb2", text: "a", media: image("a") }));
+  buffer.enqueueAfterPending(textFragment({ messageId: 6, text: "CLICK" }));
+  assert.equal(buffer.hasActiveGroup(1, 100), true);
+  buffer.flushAll();
+  await buffer.whenIdle();
+  assert.deepEqual(dispatches.map((d) => d.intake.text), ["a", "CLICK"]);
+
+  const second = makeBuffer({ scheduler: new FakeScheduler() });
+  second.buffer.addFragment(textFragment({ messageId: 60, mediaGroupId: "alb3", text: "b", media: image("b") }));
+  second.buffer.enqueueAfterPending(textFragment({ messageId: 6, text: "CLICK" }));
+  second.buffer.clearAll();
+  await second.buffer.whenIdle();
+  assert.deepEqual(second.dispatches.map((d) => d.intake.text), ["CLICK"], "a discarded album never blocks the click forever");
+});

@@ -2,7 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { execFileSync } from "node:child_process";
 import {
   connectToDjonik,
-  type DjonikSessionHandle,
+  type DjonikTracedSessionHandle,
   type DjonikTraceEvent,
   type DjonikTurnSource,
   type DjonikTurnTelemetry,
@@ -234,7 +234,7 @@ export async function connectServingSession(
   config: ServingConfig,
   preflight: ReleasePreflight,
   hooks: ServingSessionHooks,
-): Promise<DjonikSessionHandle> {
+): Promise<DjonikTracedSessionHandle> {
   const { release } = config;
   const attested: { observed?: ObservedConfig } = {};
   const handle = await connectToDjonik(

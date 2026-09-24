@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OutboundMessage } from "./rhythmActions.js";
 import {
+  AutonomousTurnFailure,
   AUTONOMOUS_WRITE_NOTICE,
   autonomousWriteViolations,
   buildExceptionPrompt,
@@ -24,6 +25,9 @@ import { createMemoryRhythmStateStore, emptyRhythmState, type RhythmState } from
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+/** A scripted turn result; the Session id defaults to the harness's serving Session. */
+type ScriptedReply = Omit<AutonomousTurnResult, "sessionId"> & { sessionId?: string };
+
 interface Harness {
   deps: RhythmTickDeps;
   turns: AutonomousTurnRequest[];
@@ -38,7 +42,7 @@ function harness(options: {
   enabled?: boolean;
   config?: string | null | (() => never);
   state?: RhythmState;
-  reply?: (request: AutonomousTurnRequest) => AutonomousTurnResult | Promise<AutonomousTurnResult>;
+  reply?: (request: AutonomousTurnRequest) => ScriptedReply | Promise<ScriptedReply>;
   send?: (message: OutboundMessage) => SendOutcome | Promise<SendOutcome>;
   facts?: () => SignalFacts;
   sessionId?: string;
@@ -72,13 +76,17 @@ function harness(options: {
     store,
     runTurn: async (request) => {
       h.turns.push(request);
-      return options.reply ? options.reply(request) : { reply: "Сьогодні фокус — Cossack Labs.", toolUses: [{ kind: "mcp", name: "trelloReadCard" }] };
+      const scripted = options.reply
+        ? await options.reply(request)
+        : { reply: "Сьогодні фокус — Cossack Labs.", toolUses: [{ kind: "mcp" as const, name: "trelloReadCard" }] };
+      return { sessionId: options.sessionId ?? "sesn_serving", ...scripted };
     },
     send: async (message, ref) => {
       h.sends.push({ message, ref });
       return options.send ? options.send(message) : { status: "sent", messageId: (messageId += 1) };
     },
-    currentSessionId: () => options.sessionId ?? "sesn_serving",
+    // Stage 1 tests tick at arbitrary instants; the exception-only collection cadence has its own test.
+    factsIntervalMs: 0,
     ...(options.facts ? { collectFacts: async () => options.facts!() } : {}),
   };
   return h;
@@ -338,21 +346,55 @@ test("a scheduled turn that edited Memory (e.g. 'accepted' the plan itself) is b
   assert.equal(h.sends[0].message.text, AUTONOMOUS_WRITE_NOTICE);
 });
 
-test("the rhythm runtime has no deterministic path to Trello, the Session client or Memory", () => {
+/**
+ * Stage 2 reviewed exceptions (docs/62): each wiring module may reach exactly one external boundary, and
+ * only read-only. Every other rhythm module keeps the Stage 1 rule: no Trello, Session client or Memory path.
+ */
+const REVIEWED_RHYTHM_IMPORTS: Record<string, RegExp> = {
+  "rhythmFacts.ts": /^\.\/(rhythmConfig|rhythmSignals|trelloWorkHistory)\.js$/, // type-only use of the GET-only client
+  "rhythmMemoryConfig.ts": /^\.\/rhythmConfig\.js$/,
+  "rhythmRuntime.ts": /^\.\/(djonikClient|rhythmConfig|rhythmRunner|rhythmState|rhythmTelegram|telegramAdapter)\.js$/,
+};
+
+test("the rhythm runtime has no deterministic path to Trello writes, the Session client or Memory (reviewed exceptions only)", () => {
   const files = readdirSync(join(repoRoot, "src")).filter((name) => /^rhythm.*\.ts$/.test(name) && !name.includes(".test"));
-  assert.ok(files.length >= 6, files.join(","));
+  assert.ok(files.length >= 9, files.join(","));
   for (const name of files) {
     const source = readFileSync(join(repoRoot, "src", name), "utf8");
-    assert.doesNotMatch(source, /from "\.\/(djonikClient|trelloMutationLedger|trelloWorkHistory|customToolResolution)\.js"/, name);
-    assert.doesNotMatch(source, /\bfetch\(|api\.trello\.com|memoryStores|\.memories\./, name);
+    assert.doesNotMatch(source, /from "\.\/(trelloMutationLedger|customToolResolution)\.js"/, name);
+    assert.doesNotMatch(source, /\bfetch\(|api\.trello\.com|trelloWrite\w*\(/, name);
+    const allowed = REVIEWED_RHYTHM_IMPORTS[name];
+    if (allowed) {
+      for (const [, path] of source.matchAll(/from "(\.\/[^"]+)"/g)) assert.match(path, allowed, `${name} imports ${path}`);
+    } else {
+      assert.doesNotMatch(source, /from "\.\/(djonikClient|trelloWorkHistory)\.js"/, name);
+    }
+    if (name !== "rhythmMemoryConfig.ts") assert.doesNotMatch(source, /memoryStores|\.memories\./, name);
   }
+  // The fact collector only ever sees the GET-only reader interface.
+  const facts = readFileSync(join(repoRoot, "src", "rhythmFacts.ts"), "utf8");
+  assert.match(facts, /import type \{[^}]*\} from "\.\/trelloWorkHistory\.js"/);
+  // The runtime's only Session call is the traced send through the shared queue.
+  const runtime = readFileSync(join(repoRoot, "src", "rhythmRuntime.ts"), "utf8");
+  assert.deepEqual([...runtime.matchAll(/session\.(\w+)\(/g)].map((m) => m[1]), ["sendTraced"]);
 });
 
-test("feature-off boundary: the serving entry point does not load the rhythm runtime in this revision", () => {
+test("feature-off / non-activatable boundary: the serving entry point wires the rhythm behind both locks", () => {
   const cli = readFileSync(join(repoRoot, "src", "telegramCli.ts"), "utf8");
-  assert.doesNotMatch(cli, /rhythm/i, "activation (wiring + DJONIK_WORKING_RHYTHM=on) is a separate authorized stage");
+  assert.match(cli, /readOnlyBoundary: SERVING_READ_ONLY_BOUNDARY/, "the serving runner declares its real boundary");
+  assert.doesNotMatch(cli, /pre_execution|DJONIK_WORKING_RHYTHM\s*=|process\.env\.DJONIK_WORKING_RHYTHM\s*=/);
+  // Started only after the attested Session exists, before polling starts.
+  const attested = cli.indexOf("await djonikSession.getSession()");
+  const started = cli.indexOf("startWorkingRhythm(");
+  const polling = cli.indexOf("bot.start(");
+  assert.ok(attested > 0 && started > attested && polling > started, "attestation → rhythm wiring → polling");
+  const runtime = readFileSync(join(repoRoot, "src", "rhythmRuntime.ts"), "utf8");
+  assert.match(runtime, /export const SERVING_READ_ONLY_BOUNDARY: AutonomousReadOnlyBoundary = "post_hoc_detection_only";/);
   const unit = readFileSync(join(repoRoot, "deploy", "djonik-telegram.service"), "utf8");
-  assert.doesNotMatch(unit, /DJONIK_WORKING_RHYTHM|StateDirectory/, "the production unit is unchanged");
+  assert.doesNotMatch(unit, /^\s*Environment=.*DJONIK_WORKING_RHYTHM/m, "production activation env is absent");
+  assert.match(unit, /^StateDirectory=djonik$/m);
+  assert.match(unit, /^StateDirectoryMode=0700$/m);
+  assert.match(unit, /^ProtectSystem=strict$/m, "hardening unchanged");
 });
 
 // --- Exceptions ---------------------------------------------------------------------------------------
@@ -467,4 +509,98 @@ test("exception prompt and SILENT detection", () => {
   assert.equal(isSilentReply("Silent night"), false);
   const prompt = buildExceptionPrompt([], new Date(TUESDAY_1400));
   assert.match(prompt, /автоматичний хід · можливий виняток · вт 29\.09, 14:00/);
+});
+
+// --- Stage 2: runtime-wiring contracts -----------------------------------------------------------------
+
+test("Session provenance: the delivery is bound to the Session that produced the reply, not a later one", async () => {
+  const h = harness({ now: TUESDAY_0935, reply: () => ({ reply: "Бриф.", sessionId: "sesn_that_ran_the_turn", toolUses: [] }) });
+  await createRhythmScheduler(h.deps).tick();
+  const record = h.store.snapshot().deliveries["morning:2026-09-29"];
+  assert.equal(record.status, "sent");
+  assert.equal(record.sessionId, "sesn_that_ran_the_turn");
+});
+
+test("a scheduled turn that failed AFTER attempting a write still gets the fixed notice (blocked)", async () => {
+  const h = harness({
+    now: TUESDAY_0935,
+    reply: () => {
+      throw new AutonomousTurnFailure([{ kind: "mcp", name: "trelloWriteCard" }], "sesn_serving");
+    },
+  });
+  const report = await createRhythmScheduler(h.deps).tick();
+  assert.equal(report.delivery?.status, "blocked");
+  assert.equal(h.sends.length, 1);
+  assert.equal(h.sends[0].message.text, AUTONOMOUS_WRITE_NOTICE);
+  assert.deepEqual(h.sends[0].message.actions, []);
+});
+
+test("a scheduled turn that failed with only reads is a quiet failure: nothing sent, never re-run", async () => {
+  const h = harness({
+    now: TUESDAY_0935,
+    reply: () => {
+      throw new AutonomousTurnFailure([{ kind: "builtin", name: "read" }, { kind: "custom", name: "trello_work_history" }], "sesn_serving");
+    },
+  });
+  const scheduler = createRhythmScheduler(h.deps);
+  assert.equal((await scheduler.tick()).delivery?.status, "failed");
+  await scheduler.tick();
+  assert.equal(h.sends.length, 0);
+  assert.equal(h.turns.length, 1);
+});
+
+test("fact cadence: exception-only collection is spaced; a due ritual always collects; nothing in quiet hours", async () => {
+  let collections = 0;
+  const h = harness({ now: TUESDAY_1400, facts: () => (collections++, { cards: [], projects: [], followUps: [] }) });
+  h.deps.factsIntervalMs = 15 * 60_000;
+  const scheduler = createRhythmScheduler(h.deps);
+  await scheduler.tick();
+  h.setNow("2026-09-29T11:05:00Z");
+  await scheduler.tick();
+  assert.equal(collections, 1, "within the interval: no second Trello read");
+  h.setNow("2026-09-29T11:16:00Z");
+  await scheduler.tick();
+  assert.equal(collections, 2);
+  h.setNow("2026-09-29T19:00:00Z"); // 22:00 Kyiv, quiet hours, no ritual due
+  await scheduler.tick();
+  assert.equal(collections, 2, "no exception window → no collection");
+  h.setNow("2026-09-30T06:31:00Z"); // Wednesday 09:31: the morning ritual collects fresh facts regardless
+  await scheduler.tick();
+  assert.equal(collections, 3);
+  assert.equal(h.turns.length, 1);
+});
+
+test("invalid /rhythm.md values: mentioned once inside the next ritual, never as a separate or repeated message", async () => {
+  const config = "morning: 25:99\nfriday_review: never";
+  const h = harness({ now: TUESDAY_0935, config });
+  const scheduler = createRhythmScheduler(h.deps);
+  await scheduler.tick();
+  assert.match(h.turns[0].prompt, /У \/rhythm\.md є значення, які не вдалося застосувати/);
+  assert.match(h.turns[0].prompt, /invalid value for morning/);
+  assert.ok(h.store.snapshot().configNotice?.digest, "only a digest is stored, never the text");
+  assert.doesNotMatch(JSON.stringify(h.store.snapshot()), /morning; using|friday_review/);
+
+  h.setNow("2026-09-29T11:00:00Z");
+  await scheduler.tick();
+  h.setNow("2026-09-30T06:35:00Z"); // next morning, same warnings
+  await scheduler.tick();
+  assert.equal(h.turns.length, 2);
+  assert.doesNotMatch(h.turns[1].prompt, /не вдалося застосувати/, "unchanged warnings are not repeated");
+  assert.equal(h.sends.length, 2, "no standalone warning message ever");
+});
+
+test("invalid config note: fixed warnings are forgotten, so a later new problem is mentioned again", async () => {
+  let config = "morning: 25:99";
+  const h = harness({ now: TUESDAY_0935, config: null });
+  h.deps.configSource = { read: async () => config };
+  const scheduler = createRhythmScheduler(h.deps);
+  await scheduler.tick();
+  config = "morning: 09:30";
+  h.setNow("2026-09-29T11:00:00Z");
+  await scheduler.tick();
+  assert.equal(h.store.snapshot().configNotice, undefined);
+  config = "morning: 25:99";
+  h.setNow("2026-09-30T06:35:00Z");
+  await scheduler.tick();
+  assert.match(h.turns[1].prompt, /не вдалося застосувати/);
 });

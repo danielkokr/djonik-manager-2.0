@@ -360,3 +360,15 @@ test("handleSessionError leaves the cached session alone for an ordinary turn fa
   assert.equal(connectCalls, 1, "an ordinary turn failure must not tear down a healthy session");
   assert.equal(first, second);
 });
+
+test("#39 createSessionManager reports the connected Session id; none before connect or after invalidate", async () => {
+  let n = 0;
+  const manager = createSessionManager(async () => ({ sessionId: `sesn_${++n}`, send: async () => "", sendOrdered: async () => "", close: () => {} }));
+  assert.equal(manager.currentSessionId(), null);
+  await manager.getSession();
+  assert.equal(manager.currentSessionId(), "sesn_1");
+  manager.invalidate();
+  assert.equal(manager.currentSessionId(), null, "a button from the discarded Session must go stale");
+  await manager.getSession();
+  assert.equal(manager.currentSessionId(), "sesn_2");
+});

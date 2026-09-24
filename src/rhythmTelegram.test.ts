@@ -57,7 +57,7 @@ function setUp(options: { record?: DeliveryRecord; sessionId?: string; now?: str
     store,
     now: () => new Date(options.now ?? "2026-09-28T07:00:00Z"),
     currentSessionId: () => options.sessionId ?? "sesn_serving",
-    answer: async (alert) => {
+    answer: async (_query, alert) => {
       answers.push(alert);
     },
     clearButtons: async (_chat, messageId) => {
@@ -168,7 +168,7 @@ test("state unavailable → gentle rejection, no turn", async () => {
     store: { load: async () => { throw new Error("x"); }, update: async () => { throw new Error("x"); } },
     now: () => new Date("2026-09-28T07:00:00Z"),
     currentSessionId: () => "sesn_serving",
-    answer: async (alert) => void context.answers.push(alert),
+    answer: async (_query, alert) => void context.answers.push(alert),
     enqueueUserText: (fragment) => void context.enqueued.push(fragment),
   });
   assert.deepEqual(await handle(click()), { outcome: "rejected", reason: "state_unavailable" });
@@ -283,9 +283,12 @@ test("end to end (offline): scheduled week plan with buttons → click → ordin
     now: () => new Date("2026-09-28T06:30:00Z"),
     configSource: { read: async () => null },
     store,
-    runTurn: async () => ({ reply: "На цей тиждень я б тримав три результати… Нормальний план?", toolUses: [{ kind: "mcp", name: "trelloReadCard" }] }),
+    runTurn: async () => ({
+      reply: "На цей тиждень я б тримав три результати… Нормальний план?",
+      sessionId: "sesn_serving",
+      toolUses: [{ kind: "mcp", name: "trelloReadCard" }],
+    }),
     send: sender,
-    currentSessionId: () => "sesn_serving",
     newRef: () => "e2e000000001",
   });
   await scheduler.tick();
@@ -306,4 +309,48 @@ test("end to end (offline): scheduled week plan with buttons → click → ordin
   const live = createRhythmCallbackHandler({ ...base, currentSessionId: () => "sesn_serving" });
   assert.equal((await live({ data: acceptData, fromId: USER, chatId: CHAT, messageId: 3001 })).outcome, "enqueued");
   assert.deepEqual(enqueued, ["Так, приймаю цей план (план тижня від пн 28.09)."]);
+});
+
+test("album in progress → click: the complete album is ONE Session turn, the click the following turn (same FIFO)", async () => {
+  const calls: DjonikTurnPart[][] = [];
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let tail: Promise<unknown> = Promise.resolve();
+  const sendOrdered = (parts: DjonikTurnPart[]) => {
+    const run = tail.then(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      calls.push(parts);
+      await sleep(5);
+      inFlight -= 1;
+      return "Ок.";
+    });
+    tail = run.catch(() => undefined);
+    return run;
+  };
+  const { onDispatch, onFailure } = createGroupDispatchHandlers({
+    djonikSession: { getSession: async () => ({ sessionId: "s", send: async () => "", sendOrdered, close: () => {} }), closeIfOpen: () => {}, invalidate: () => {} },
+    sendMessage: async () => {},
+    logError: () => {},
+  });
+  const buffer = new MessageGroupBuffer({ adjacentWindowMs: 20, albumSettleWindowMs: 40, onDispatch, onFailure });
+  const context = setUp();
+  const handle = createRhythmCallbackHandler({
+    allowedUserId: String(USER),
+    store: context.store,
+    now: () => new Date("2026-09-28T07:00:00Z"),
+    currentSessionId: () => "sesn_serving",
+    answer: async () => {},
+    enqueueUserText: enqueueClickAfterPendingText(buffer),
+  });
+  const photo = (label: string) => ({ kind: "image" as const, promise: Promise.resolve({ data: label, mediaType: "image/jpeg", byteSize: 1 }) });
+  buffer.addFragment({ chatId: CHAT, userId: USER, messageId: 900, mediaGroupId: "alb", text: "Референси", media: photo("p1") });
+  await handle(click()); // bot message 777, while the album is still arriving
+  buffer.addFragment({ chatId: CHAT, userId: USER, messageId: 901, mediaGroupId: "alb", text: "", media: photo("p2") });
+  await sleep(120);
+  await buffer.whenIdle();
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0].map((part) => part.type), ["image", "text", "image"], "whole album, one turn");
+  assert.deepEqual(calls[1], [{ type: "text", text: "Так, приймаю цей план (план тижня від пн 28.09)." }]);
+  assert.equal(maxInFlight, 1, "single-flight");
 });

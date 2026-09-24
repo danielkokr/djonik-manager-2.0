@@ -36,7 +36,15 @@ Restart=on-failure
 RestartSec=15
 RestartPreventExitStatus=78
 
-# The adapter needs outbound HTTPS only: no inbound port, no disk writes.
+# Working Rhythm delivery state (#39): /var/lib/djonik, created by systemd, owned by djonik, mode 0700,
+# exported as $STATE_DIRECTORY (the app then uses $STATE_DIRECTORY/rhythm-state.json). It holds occurrence
+# keys, delivery statuses, Telegram message ids and button refs only — no secrets, no message text. It is
+# the only writable path under ProtectSystem=strict and is used only when Working Rhythm is activated
+# (DJONIK_WORKING_RHYTHM is deliberately NOT set here; activation is a separate, authorized stage).
+StateDirectory=djonik
+StateDirectoryMode=0700
+
+# The adapter needs outbound HTTPS only: no inbound port; the only disk write is the state directory above.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

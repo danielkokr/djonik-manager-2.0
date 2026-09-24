@@ -37,6 +37,8 @@ export interface TrelloAction {
     card?: { id?: string; name?: string; closed?: boolean };
     listBefore?: { id?: string; name?: string };
     listAfter?: { id?: string; name?: string };
+    /** The list a card was created in (`createCard`/`copyCard`/`moveCardToBoard`). */
+    list?: { id?: string; name?: string };
     old?: { idList?: string; closed?: boolean };
   };
 }
@@ -48,6 +50,11 @@ export interface TrelloHistoryCard {
   closed?: boolean;
   due?: string | null;
   labels?: Array<{ name?: string }>;
+}
+
+/** An open card as the Working Rhythm fact collector reads it (#39). */
+export interface TrelloBoardCard extends TrelloHistoryCard {
+  dueComplete?: boolean;
 }
 
 export interface TrelloList {
@@ -633,6 +640,34 @@ export class TrelloWorkHistoryClient {
       throw new TrelloWorkHistoryError("malformed");
     }
     return value as TrelloHistoryCard[];
+  }
+
+  /** Open cards with the fields the Working Rhythm needs (#39); never `dateLastActivity`. */
+  async readOpenCards(boardId: string): Promise<TrelloBoardCard[]> {
+    const value = await this.getJson(`/boards/${encodeURIComponent(boardId)}/cards`, { filter: "open", fields: "id,name,idList,closed,due,dueComplete,labels" });
+    if (!Array.isArray(value) || value.some((card) => !isRecord(card) || typeof card.id !== "string" || typeof card.name !== "string")) {
+      throw new TrelloWorkHistoryError("malformed");
+    }
+    return value as TrelloBoardCard[];
+  }
+
+  /** Every list of the board, archived included, so a card in an archived list still resolves a name (#39). */
+  async readLists(boardId: string): Promise<TrelloList[]> {
+    const value = await this.getJson(`/boards/${encodeURIComponent(boardId)}/lists`, { filter: "all", fields: "id,name" });
+    if (!Array.isArray(value) || value.some((list) => !isRecord(list) || typeof list.id !== "string" || typeof list.name !== "string")) {
+      throw new TrelloWorkHistoryError("malformed");
+    }
+    return value as TrelloList[];
+  }
+
+  /** The card's most recent list-changing action (a move, or its creation), however old, or null (#39). */
+  async readLatestListEntry(cardId: string): Promise<TrelloAction | null> {
+    const value = await this.getJson(`/cards/${encodeURIComponent(cardId)}/actions`, {
+      filter: "updateCard:idList,createCard,copyCard,moveCardToBoard",
+      limit: "1",
+    });
+    if (!Array.isArray(value) || value.some((action) => !isRecord(action))) throw new TrelloWorkHistoryError("malformed");
+    return (value[0] as TrelloAction | undefined) ?? null;
   }
 
   async readActions(boardId: string, window: HistoryWindow): Promise<{ actions: TrelloAction[]; coverage: HistoryCoverage }> {

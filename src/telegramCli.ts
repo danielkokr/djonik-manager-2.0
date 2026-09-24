@@ -27,6 +27,17 @@ import {
   type ServingConfig,
 } from "./servingRelease.js";
 import { classifyPollingFailure, createShutdownCoordinator } from "./servingLifecycle.js";
+import { createRhythmFactCollector } from "./rhythmFacts.js";
+import { createMemoryRhythmConfigSource, sdkRhythmMemoryReader } from "./rhythmMemoryConfig.js";
+import {
+  createCallbackListener,
+  createSessionTurnRunner,
+  SERVING_READ_ONLY_BOUNDARY,
+  startWorkingRhythm,
+} from "./rhythmRuntime.js";
+import { createFileRhythmStateStore } from "./rhythmState.js";
+import { createTelegramProactiveSender, enqueueClickAfterPendingText } from "./rhythmTelegram.js";
+import { TrelloWorkHistoryClient } from "./trelloWorkHistory.js";
 
 /**
  * The one Telegram serving process (#33). Startup order, fail-closed before any update is polled:
@@ -251,11 +262,45 @@ async function main(): Promise<number> {
     });
   });
 
+  /**
+   * Working Rhythm (#39), after the serving Session is attested and before polling starts. Two locks, both
+   * closed in this revision: `DJONIK_WORKING_RHYTHM` is unset in production, and the serving turn runner
+   * declares only `post_hoc_detection_only`. With either closed nothing is constructed or read (no Memory
+   * config read, no state file, no Trello facts, no model call, no timer); an allowed user's old button
+   * gets the stale-button answer. Buttons are only shortcuts to ordinary conversation: a valid click
+   * becomes a typed-equivalent turn through the same grouping buffer and FIFO Session.
+   */
+  const rhythm = startWorkingRhythm({
+    env: process.env,
+    readOnlyBoundary: SERVING_READ_ONLY_BOUNDARY,
+    allowedUserId: telegramConfig.allowedUserId,
+    createConfigSource: () =>
+      createMemoryRhythmConfigSource({ reader: sdkRhythmMemoryReader(anthropic), memoryStoreId: release.session.memoryStoreId }),
+    createStateStore: createFileRhythmStateStore,
+    createFactCollector: config.trello
+      ? () =>
+          createRhythmFactCollector({
+            reader: new TrelloWorkHistoryClient({ apiKey: config.trello!.apiKey, readToken: config.trello!.readToken }),
+            log: (line) => console.log(line),
+          })
+      : undefined,
+    runTurn: createSessionTurnRunner(djonikSession),
+    send: createTelegramProactiveSender(bot.api, Number(telegramConfig.allowedUserId)),
+    currentSessionId: () => djonikSession.currentSessionId(),
+    answer: (query, alert) =>
+      query.id === undefined ? Promise.resolve() : bot.api.answerCallbackQuery(query.id, alert ? { text: alert, show_alert: true } : undefined),
+    clearButtons: (chatId, messageId) => bot.api.editMessageReplyMarkup(chatId, messageId, { reply_markup: { inline_keyboard: [] } }),
+    enqueueUserText: enqueueClickAfterPendingText(groupBuffer),
+    log: (line) => console.log(line),
+  });
+  bot.on("callback_query:data", createCallbackListener(rhythm, { allowedUserId: telegramConfig.allowedUserId, log: (line) => console.warn(line) }));
+
   bot.catch((error) => {
     console.error("Unhandled Telegram bot error:", error.message);
   });
 
   const coordinator = createShutdownCoordinator({
+    stopBackground: () => rhythm.stop(),
     stopPolling: () => bot.stop(),
     pollingDone: () => polling,
     flushIntake: () => groupBuffer.flushAll(),

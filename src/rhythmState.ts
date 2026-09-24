@@ -57,6 +57,8 @@ export interface RhythmState {
   version: 1;
   deliveries: Record<string, DeliveryRecord>;
   signals: SignalLedger;
+  /** The set of `/rhythm.md` warnings already mentioned to Daniel in a ritual (a digest only, no text). */
+  configNotice?: { digest: string; notedAt: string };
 }
 
 export function emptyRhythmState(): RhythmState {
