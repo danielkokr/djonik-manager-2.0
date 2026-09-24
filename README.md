@@ -39,7 +39,7 @@ Read in this order:
 
 ## Current phase
 
-Canonical NOW is in `docs/02_DEVELOPMENT_ROADMAP.md` (currently #33: pinned release, always-on host and serving Session).
+Canonical NOW is in `docs/02_DEVELOPMENT_ROADMAP.md` (currently #34: commitments, waiting and follow-up). Production serving is always-on since #33 ([docs/55](docs/55_ISSUE_33_HOSTED_TELEGRAM_FINAL_ACCEPTANCE.md)).
 
 **Local run.**
 1. Copy `.env.example` to `.env`.

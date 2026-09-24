@@ -59,8 +59,8 @@ Verified outcome:
 | 4 | [#36 — Weekly work review from Trello action history](https://github.com/danielkokr/djonik-manager-2.0/issues/36) | DONE — accepted 2026-09-22; post-#40 live diagnostic PASS at `3312706` ([docs/32](32_ISSUE_36_POST_40_LIVE_DIAGNOSTIC.md)) |
 | 5 | [#37 — Project label on create + Memory hygiene](https://github.com/danielkokr/djonik-manager-2.0/issues/37) | DONE — accepted 2026-09-23; source+Memory at `e1f9a31`, final isolated live smoke PASS at `71975a0` ([docs/33](33_ISSUE_37_SOURCE_AND_MEMORY_PROPOSAL.md), [docs/34](34_ISSUE_37_FINAL_LIVE_SMOKE.md)) |
 | 6 | [#38 — Voice and Telegram UX](https://github.com/danielkokr/djonik-manager-2.0/issues/38) | DONE — accepted 2026-09-24: ordinary coordinator on Sonnet 5 medium/standard ([docs/46](46_ISSUE_38_ENRICHED_TRELLO_PLANNING_SMOKE.md)), Project Health F3 composition at `1014c05` ([docs/48](48_ISSUE_38_PROJECT_HEALTH_NATURAL_CUE_IMPLEMENTATION.md)), final live PH smoke PASS at `210a26d` ([docs/49](49_ISSUE_38_FINAL_PROJECT_HEALTH_LIVE_SMOKE.md)); closeout [docs/50](50_ISSUE_38_CLOSEOUT_AND_33_PROMOTION.md) |
-| 7 | **NOW — [#33 — Pinned release, always-on host, serving Session](https://github.com/danielkokr/djonik-manager-2.0/issues/33)** | Promotes the accepted #40 runtime revision together with accepted #36/#37/#38; always-on adapter host and secrets (see #33 comments). Scope decomposition and first bounded step: [docs/50](50_ISSUE_38_CLOSEOUT_AND_33_PROMOTION.md) §5–§6. Start source-only; no Agent/Skill update, serving switch, deployment or secret migration without separate authorization |
-| 8 | [#34 — Commitments, waiting and follow-up](https://github.com/danielkokr/djonik-manager-2.0/issues/34) | After #33; accepted plan items keep Trello card ID/project; check dates feed #39 |
+| 7 | [#33 — Pinned release, always-on host, serving Session](https://github.com/danielkokr/djonik-manager-2.0/issues/33) | DONE — accepted 2026-09-24: r26 (Agent v26) served always-on from Hetzner + systemd at `a6a627d`; hosted Telegram smoke, restart and provider-side attestation PASS ([docs/55](55_ISSUE_33_HOSTED_TELEGRAM_FINAL_ACCEPTANCE.md)) |
+| 8 | **NOW — [#34 — Commitments, waiting and follow-up](https://github.com/danielkokr/djonik-manager-2.0/issues/34)** | Accepted plan items keep Trello card ID/project; check dates feed #39. Not started: the first bounded step is defined in review before any source or live work |
 | 9 | [#39 — Working rhythm: brief, Monday plan, Friday review, exception signals](https://github.com/danielkokr/djonik-manager-2.0/issues/39) | Depends on #40; after #33 (host) and #34; design in [docs/25](25_PM_AGENT_BEHAVIOR_AUDIT.md) §5 and [docs/01](01_CLAUDE_NATIVE_ARCHITECTURE.md) §10 |
 | 10 | [#35 — Working-rhythm pilot (≈ two working weeks)](https://github.com/danielkokr/djonik-manager-2.0/issues/35) | After #39; Daniel decides what works and what to change next |
 
@@ -124,6 +124,16 @@ Only one item is NOW. The next item starts when this roadmap is updated. There i
   - one local Windows `release:check` confirmation;
   - then a bounded session for the hosted Session ID, two real Telegram turns and a restart test.
 - **#33 remains canonical NOW.** #34 is not promoted.
+
+**#33 ACCEPTED; #34 promoted to NOW — 2026-09-24 ([docs/55](55_ISSUE_33_HOSTED_TELEGRAM_FINAL_ACCEPTANCE.md)).** This supersedes the preceding paragraph's *READY FOR FINAL HOST ACTION / #33 remains NOW* as current state; docs/54 stays the historical preparation report.
+- **Host:** the Product Owner deployed `a6a627d` to Hetzner CX23 (Ubuntu 24.04, Node 24, one systemd unit) at $7.09/month before VAT; secrets are host-side (root 0600) and the new Trello read token is `never`.
+- **Provider evidence (read-only):**
+  - Telegram serving Sessions `sesn_01THkPzigtHy3fE8TAXDrRrk` (pre-restart) and `sesn_0114LVK44drqNW2N6ocob68S` (post-restart) are v26, `source=telegram, release=r26, app_revision=a6a627d…`, and attested by `release:check -- r26 --serving`;
+  - two real Telegram turns (ordinary + work-review with one `trello_work_history` call through the #40 lifecycle) ended with `end_turn`, $0.08, zero Trello/Memory/Calendar writes.
+- **Restart:** `drained=true interrupted_chats=0`, new Session, no 409.
+- **Soft observations** (non-blocking, follow-ups): work-review repeats facts in the PM part; F3 withholds a tool-free second part; minor wording.
+- **Manual cleanup:** revoke the superseded 30-day Trello token (still valid on 2026-09-24).
+- **Canonical NOW is #34.** It is not started; #39 still follows #34.
 
 ### Acceptance record — #40 / #36 / #37 / #38
 
