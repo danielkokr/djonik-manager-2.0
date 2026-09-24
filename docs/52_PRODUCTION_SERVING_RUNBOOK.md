@@ -1,6 +1,6 @@
 # Djonik production serving runbook (#33)
 
-Date: 2026-09-24. Status: **prepared, not executed.** Nothing in this runbook has been run against production. Every step marked **[AUTH]** is a live change that needs explicit Product Owner authorization; steps marked **[READ]** are read-only.
+Date: 2026-09-24. Status: **§4 Steps 1–2 executed** (Agent v26 created and attested; this revision serves r26) and the serving-boundary smoke passed on a validation Session — [docs/53](53_ISSUE_33_R26_CONTROLLED_CUTOVER.md). **Host setup (§2) and deploy (§3, §4 Step 3) are not executed.** Every step marked **[AUTH]** is a live change that needs explicit Product Owner authorization; steps marked **[READ]** are read-only.
 
 Design and rationale: [docs/51](51_ISSUE_33_PRODUCTION_RELEASE_HARDENING.md). Source of truth for what is served: `src/release.ts` (`SERVING_RELEASE`).
 
@@ -47,11 +47,26 @@ Fallback host (Railway): one service, `numReplicas: 1`, no public domain, restar
 
 ## 3. Deploy a revision [AUTH]
 
-`deploy/deploy.sh <full-commit-sha>` performs, in order: fetch → detached checkout of exactly that commit → refuse a dirty tree → `npm ci` → `npm run build` → **`node dist/releaseCheck.js` (read-only; aborts the deploy on mismatch, so the running process is untouched)** → record `DJONIK_APP_REVISION` → `systemctl restart` (graceful stop of the old process, then start) → show the `[release] serving` line.
+`deploy/deploy.sh <full-commit-sha>` performs, in order:
+1. fetch;
+2. detached checkout of exactly that commit;
+3. refuse a dirty tree;
+4. `npm ci`;
+5. `npm run build`;
+6. **`node dist/releaseCheck.js`** — read-only; aborts the deploy on mismatch, so the running process is untouched;
+7. record `DJONIK_APP_REVISION`;
+8. `systemctl restart` — graceful stop of the old process, then start;
+9. **wait for the new process's own `[release] serving … app=<sha>` line**, for up to 90 s while the unit stays active. Otherwise it exits 1 with the relevant `[release]`/`[shutdown]` lines.
+
+The script body is one function, so replacing `deploy.sh` during the checkout cannot corrupt the running script (docs/53 §13).
 
 Manual equivalent for a first start: the same steps, then `systemctl enable --now djonik-telegram`.
 
 ## 4. The #33 cutover — one controlled operation with two checkpoints
+
+> **Done 2026-09-24 ([docs/53](53_ISSUE_33_R26_CONTROLLED_CUTOVER.md)):** Step 1 (v26 created from v25 with the generated body; `release:check r26` OK; v25 unchanged) and Step 2 (`SERVING_RELEASE = RELEASE_R26`). The Agent's latest version is now **26**. What remains is Step 3 (host deploy) and Checkpoint A, which provides the real Telegram serving evidence. Provider fact learned at the first attestation: a Session snapshot reports each explicitly pinned coordinator Skill as an internal numeric version, not its `skver_` id. The release records that spelling per pin (`sessionVersion`), and attestation accepts exactly the two spellings of the pinned version (docs/53 §4).
+>
+> **Hazard since v26 exists:** an adapter from a revision before `15ca0c7` creates Sessions from the unpinned agent id, so it would now serve v26 unattested. Never start such an old revision.
 
 **Preconditions [READ]:**
 - `npm run release:check -- r25` → `OK` (production is still exactly v25).
@@ -96,7 +111,7 @@ Alternative if the PO prefers expiring tokens: `expiration=30days`, record the d
 
 | Situation | Action | Agent write? |
 |---|---|---|
-| r26 misbehaves after the flip | `deploy/deploy.sh <last r25 commit>`. That revision pins **v25**, which still exists unchanged | No |
+| r26 misbehaves after the flip | `deploy/deploy.sh 15ca0c711d9bef9873dd688121dfcce483641204` (the last r25 revision). That revision pins **v25**, which still exists unchanged | No |
 | v26 read-back mismatch (Step 1) | Do not flip. Leave v26 unused, or supersede it with v27 | Optional |
 | Host broken | Stop the host unit (`systemctl disable --now djonik-telegram`), then start the laptop adapter from a pinned revision. Never run both | No |
 | Bad release on the laptop, before hosting | Check out the previous revision and run `npm run telegram` | No |

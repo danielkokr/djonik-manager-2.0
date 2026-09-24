@@ -24,7 +24,14 @@ test("the serving release of this revision is one of the reviewed releases", () 
   assert.equal(RELEASES[SERVING_RELEASE.id], SERVING_RELEASE);
 });
 
-test("r26 (target) equals the declarative coordinator source managed-agents/djonik.md", () => {
+test("this revision serves r26: Agent v26, every Skill explicitly pinned, #36 exposed (docs/53)", () => {
+  assert.equal(SERVING_RELEASE, RELEASE_R26);
+  assert.equal(SERVING_RELEASE.agent.version, 26);
+  assert.ok(SERVING_RELEASE.skills.every((skill) => skill.pin.kind === "explicit"), "no `latest` is served");
+  assert.deepEqual(SERVING_RELEASE.customTools, ["trello_work_history"]);
+});
+
+test("r26 equals the declarative coordinator source managed-agents/djonik.md", () => {
   assert.equal(RELEASE_R26.systemSha256, sha(SYSTEM_PROMPT), "prompt SHA = djonik.md body");
   assert.match(frontmatter, new RegExp(`^model:\\n  id: ${RELEASE_R26.model.id}\\n  effort: ${RELEASE_R26.model.effort}\\n  speed: ${RELEASE_R26.model.speed}$`, "m"));
   const skills = [...frontmatter.matchAll(/- type: custom\n\s+skill_id: (\S+)\n\s+version: (\S+)/g)].map((m) => `${m[1]}@${m[2]}`);

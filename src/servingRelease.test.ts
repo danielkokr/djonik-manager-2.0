@@ -229,6 +229,7 @@ test("the serving Session is created pinned to {id, version} with content-free m
   assert.equal(params.resources[0].memory_store_id, RELEASE_R26.session.memoryStoreId);
   assert.equal(params.resources[0].access, "read_write");
   assert.deepEqual(params.metadata, { source: "telegram", release: "r26", app_revision: HEAD });
+  assert.equal(params.budget, undefined, "the Telegram serving Session carries no spend cap");
   assert.equal(lines.length, 1);
   assert.match(lines[0], /^\[release\] serving release=r26 app=0123456789abcdef/);
   const everything = JSON.stringify(provider.createCalls) + lines.join("\n");
@@ -259,4 +260,17 @@ test("a Session mounted with read-only Memory is not a production serving Sessio
   const config = loadServingConfig(RELEASE_R25, { ANTHROPIC_API_KEY: "x" }, cleanGit);
   const preflight = await preflightRelease(fakeProvider(RELEASE_R25).client, RELEASE_R25);
   await assert.rejects(connectServingSession(provider.client, config, preflight, { turnSource: "telegram" }), ReleaseAttestationError);
+});
+
+test("a bounded validation Session can carry a provider-enforced list-cost cap on the same serving path", async () => {
+  const provider = fakeProvider(RELEASE_R26);
+  const config = loadServingConfig(RELEASE_R26, SECRETS, cleanGit);
+  const preflight = await preflightRelease(provider.client, RELEASE_R26);
+  const handle = await connectServingSession(provider.client, config, preflight, { turnSource: "diagnostic", maxListCostUsdCents: "120" });
+  const [params] = provider.createCalls;
+  assert.deepEqual(params.budget, { type: "limit", max_list_cost: { amount: "120", currency: "USD" } });
+  assert.deepEqual(params.agent, { type: "agent", id: RELEASE_R26.agent.id, version: 26 }, "same pinned Agent version");
+  assert.equal(params.resources[0].access, "read_write", "same production Memory mode");
+  assert.deepEqual(provider.retrievedSessions, ["sesn_serving_1"], "attested the same way");
+  handle.close();
 });

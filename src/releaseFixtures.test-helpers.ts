@@ -79,6 +79,13 @@ export function servingSessionFixture(release: DjonikRelease, id = "sesn_test_se
     agent: {
       ...agent,
       archived_at: undefined,
+      // As measured on the first v26 Session (docs/53 §4): explicit coordinator pins appear in the Session
+      // snapshot as the provider's internal numeric version, while the roster keeps the `skver_` id.
+      skills: release.skills.map((skill) => ({
+        type: "custom",
+        skill_id: skill.skillId,
+        version: skill.pin.kind === "explicit" ? (skill.pin.sessionVersion ?? skill.pin.version) : "latest",
+      })),
       multiagent: {
         type: "coordinator",
         agents: [

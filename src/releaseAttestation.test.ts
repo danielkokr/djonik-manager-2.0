@@ -130,6 +130,24 @@ test("r26: a wrong explicit Skill version is rejected", () => {
   ]);
 });
 
+test("r26: the Session snapshot may spell a pinned Skill as the provider's numeric version, but only that one", () => {
+  // Provider shape measured on the first v26 Session (docs/53 §4).
+  const session = servingSessionFixture(RELEASE_R26) as Rec;
+  assert.equal(sessionAgent(session).skills[0].version, "1790164354565465");
+  assert.doesNotThrow(() => attestServingSession(RELEASE_R26, session));
+  // The `skver_` spelling of the same version is accepted too (the Agent version itself stores it).
+  sessionAgent(session).skills[0].version = "skver_01CJQkVY1kp1urhBWQgHUYxW";
+  assert.doesNotThrow(() => attestServingSession(RELEASE_R26, session));
+  // Any other numeric version — e.g. an older or newer upload of the same Skill — is drift.
+  sessionAgent(session).skills[0].version = "1789646065001525";
+  assert.deepEqual(mismatchesOf(() => attestServingSession(RELEASE_R26, session)), [
+    "skill task-management version 1789646065001525 != skver_01CJQkVY1kp1urhBWQgHUYxW",
+  ]);
+  // The numeric spelling of one Skill never vouches for another Skill.
+  sessionAgent(session).skills[0].version = "1790083840153637";
+  assert.equal(mismatchesOf(() => attestServingSession(RELEASE_R26, session)).length, 1);
+});
+
 test("r25: `latest` is accepted only while it still resolves to the accepted version", () => {
   const agent = agentVersionFixture(RELEASE_R25);
   const resolvedLatest = { ...resolvedLatestFor(RELEASE_R25), skill_01WS6JtY1GMu3rGZaKCVR9w1: "skver_uploaded_later" };

@@ -215,7 +215,9 @@ export function compareWithRelease(release: DjonikRelease, observed: ObservedCon
       continue;
     }
     if (skill.pin.kind === "explicit") {
-      expect(version === skill.pin.version, `skill ${skill.name} version ${version} != ${skill.pin.version}`);
+      // The `skver_` id (Agent version) or the provider's Session-snapshot spelling of that same version.
+      const accepted = version === skill.pin.version || (skill.pin.sessionVersion !== undefined && version === skill.pin.sessionVersion);
+      expect(accepted, `skill ${skill.name} version ${version} != ${skill.pin.version}`);
     } else {
       expect(version === "latest", `skill ${skill.name} version ${version} != latest`);
       const resolved = options.resolvedLatest?.[skill.skillId];

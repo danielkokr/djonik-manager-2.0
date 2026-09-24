@@ -48,3 +48,14 @@ test("deploy script: release check before restart, one restart (stop then start)
   assert.match(deployScript, /git status --porcelain/, "a dirty checkout is never deployed");
   assert.match(deployScript, /^set -euo pipefail$/m);
 });
+
+test("deploy script survives replacing itself and only reports success for the new revision's serving tuple", () => {
+  // The checkout rewrites deploy.sh mid-run; a function body is parsed completely before it executes.
+  assert.match(deployScript, /^main\(\) \{$/m);
+  assert.match(deployScript, /^main "\$@"\nexit$/m);
+  assert.ok(deployScript.indexOf("git checkout") > deployScript.indexOf("main() {"), "the checkout runs inside the pre-parsed function");
+  // Success is the new process's attested tuple for exactly $REV, never an old process's [shutdown] line.
+  assert.match(deployScript, /--since "@\$since"/);
+  assert.match(deployScript, /\\\[release\\\] serving \.\* app=\$REV /);
+  assert.match(deployScript, /systemctl is-active --quiet djonik-telegram/);
+});

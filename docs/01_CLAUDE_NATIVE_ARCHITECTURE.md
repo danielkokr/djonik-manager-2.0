@@ -18,6 +18,17 @@ The `trello_work_history` custom tool and the `work-review` Skill v2 were accept
 - **Target:** r26 (Agent v26, not created). It has explicit pins, #36 attached, and built-in tools limited to `read/write/edit/glob/grep`.
 - **Production:** still v25, unchanged.
 
+**#33 r26 cutover — 2026-09-24 ([docs/53](53_ISSUE_33_R26_CONTROLLED_CUTOVER.md), pending Product Owner review).** This supersedes the two bullets above as current state.
+- **Agent:** production is Agent **v26**, which is exactly r26.
+  - model/prompt/MCP/roster (specialist v4) are unchanged from v25;
+  - the five coordinator Skills are pinned to explicit `skver_` versions, byte-identical to the repo;
+  - the `trello_work_history` custom tool and `work-review` Skill are attached;
+  - built-in tools are `read/write/edit/glob/grep` only.
+- **Source:** `SERVING_RELEASE = RELEASE_R26`.
+- **Rollback:** v25 is kept unchanged as the app-level rollback target.
+- **Provider semantics:** a Session's resolved snapshot spells explicitly pinned coordinator Skills as internal numeric versions, while roster Skills keep their `skver_` ids. The release records each pin's snapshot spelling, and attestation accepts exactly those two spellings.
+- **Not yet done:** the always-on host is not deployed yet.
+
 **Coordinator baseline — Product Owner decision 2026-09-23 (historical):** Djonik coordinator = **Claude Sonnet 5, effort medium, speed standard**. Djonik Project Health Specialist = **Claude Sonnet 5, pinned v4**. Repeated #38 live failures ([docs/36](36_ISSUE_38_LIVE_VOICE_VALIDATION.md), [docs/37](37_ISSUE_38_TARGETED_LIVE_REVALIDATION.md)) ended Haiku prompt-only remediation. The Sonnet 5 low and medium acceptance smokes ([docs/39](39_ISSUE_38_SONNET_5_LOW_MODEL_MIGRATION_REPORT.md)) failed at the time; the later evidence above superseded that outcome. #33 owns the serving-Session transition.
 
 **Production configuration read-back 2026-09-23 (historical v24 state; the current v25 state is in the “#38 remote synchronization” paragraph below):** primary Agent `agent_01WGRHDBjQa3eMhoGJMmQ1dh` is v24, `claude-sonnet-5` / effort `medium` / speed `standard`. v23 → v24 changed only model effort. The live prompt remains byte-identical to the accepted source in `managed-agents/djonik.md` (SHA-256 `fa361ed9…817f`); Skills, tools, MCP, permissions and Project Health specialist v4 are unchanged. The failed low and medium isolated smokes are in [docs/39](39_ISSUE_38_SONNET_5_LOW_MODEL_MIGRATION_REPORT.md). A pre-existing Telegram serving Session keeps its creation-time configuration and #33 must attest and transition it separately. #38 acceptance has not passed.

@@ -20,9 +20,17 @@ export type BuiltInToolName = (typeof BUILT_IN_TOOL_NAMES)[number];
 
 /** A coordinator Skill reference. `explicit` is the only immutable form; `latest` is tolerated only for a
  *  release that predates pinning, and only while the Skill's current latest version still equals the
- *  reviewed one (checked at startup, reported as a weaker pin in the serving tuple). */
+ *  reviewed one (checked at startup, reported as a weaker pin in the serving tuple).
+ *
+ *  `sessionVersion` is how the provider writes that same pinned version in a **Session's** resolved agent
+ *  snapshot. Measured 2026-09-24 (docs/53 §4): an Agent version stores the `skver_…` id, but a Session
+ *  created from it reports each explicitly pinned coordinator Skill as an internal numeric version (a
+ *  microsecond timestamp the public Skill Version API does not expose). Each value below was read from the
+ *  first Session pinned to Agent v26 and matched to its `skver_` by `created_at` (0.4–2.8 s apart; the
+ *  nearest other version of the same Skill is ≥ 50 s away). Attestation accepts exactly these two spellings
+ *  of the pinned version and nothing else. */
 export type ReleaseSkill =
-  | { name: string; skillId: string; pin: { kind: "explicit"; version: string } }
+  | { name: string; skillId: string; pin: { kind: "explicit"; version: string; sessionVersion?: string } }
   | { name: string; skillId: string; pin: { kind: "latest"; expectedResolved: string } };
 
 export interface ReleaseMcpToolset {
@@ -92,19 +100,19 @@ const MCP_TOOLSETS: ReleaseMcpToolset[] = [
 
 /** Accepted #38 Skill versions, each byte-identical to the repo source (docs/42, docs/50 §2). */
 const ACCEPTED_SKILL_VERSIONS = {
-  "task-management": { skillId: "skill_01WS6JtY1GMu3rGZaKCVR9w1", version: "skver_01CJQkVY1kp1urhBWQgHUYxW" },
-  "daily-planning": { skillId: "skill_01G9DtQEzPYxgw78riFh8k99", version: "skver_01EL7d3fy4WWYBSsD3PmK9LQ" },
-  "weekly-planning": { skillId: "skill_01PTmbvLHJj1HuUxvDKhpaiE", version: "skver_01FdtnnkbePBjNJGTuJyAvhw" },
-  "studio-intake": { skillId: "skill_015c8dtDnWyDfVLwS6NLS7r6", version: "skver_018sJv1GCnzfZRG4NbExbAzj" },
+  "task-management": { skillId: "skill_01WS6JtY1GMu3rGZaKCVR9w1", version: "skver_01CJQkVY1kp1urhBWQgHUYxW", sessionVersion: "1790164354565465" },
+  "daily-planning": { skillId: "skill_01G9DtQEzPYxgw78riFh8k99", version: "skver_01EL7d3fy4WWYBSsD3PmK9LQ", sessionVersion: "1790164356765333" },
+  "weekly-planning": { skillId: "skill_01PTmbvLHJj1HuUxvDKhpaiE", version: "skver_01FdtnnkbePBjNJGTuJyAvhw", sessionVersion: "1790164359202020" },
+  "studio-intake": { skillId: "skill_015c8dtDnWyDfVLwS6NLS7r6", version: "skver_018sJv1GCnzfZRG4NbExbAzj", sessionVersion: "1789734659839542" },
 } as const;
 /** Accepted #36 work-review Skill v2 (docs/32), = repo blob `c079d285…e640`. */
-const WORK_REVIEW_SKILL = { skillId: "skill_0169h7GYNYUDDDZteDCUV2fE", version: "skver_015LYzVdivGGMsBpuki4kW4S" };
+const WORK_REVIEW_SKILL = { skillId: "skill_0169h7GYNYUDDDZteDCUV2fE", version: "skver_015LYzVdivGGMsBpuki4kW4S", sessionVersion: "1790083840153637" };
 
 /**
  * r25 — the accepted #38 production baseline as it exists today (Agent v25). Its four Skills are
  * `latest` references, so it is served only as a **latest-resolved** release: startup proves each
- * `latest` still resolves to the accepted version, and the tuple line reports the weaker pin. It stays
- * as the rollback target of r26.
+ * `latest` still resolves to the accepted version, and the tuple line reports the weaker pin. It is no
+ * longer served (docs/53) and stays only as the app-level rollback target of r26: v25 is immutable.
  */
 export const RELEASE_R25: DjonikRelease = {
   id: "r25",
@@ -125,7 +133,8 @@ export const RELEASE_R25: DjonikRelease = {
 };
 
 /**
- * r26 — the #33 target release (Agent v26, **not yet created**; see docs/51 §18). Relative to r25 it
+ * r26 — the #33 production release (Agent v26, created 2026-09-24 from v25 with the generated update body
+ * and read back exactly; docs/53). Relative to r25 it
  * changes exactly three things: explicit Skill pins (same accepted content), the accepted #36
  * capability (`work-review` Skill v2 + `trello_work_history` custom tool), and a built-in allowlist that
  * drops `bash`, `web_fetch` and `web_search` (docs/51 §8). Model, prompt, MCP, Trello write surface,
@@ -141,9 +150,13 @@ export const RELEASE_R26: DjonikRelease = {
     ...Object.entries(ACCEPTED_SKILL_VERSIONS).map(([name, pin]) => ({
       name,
       skillId: pin.skillId,
-      pin: { kind: "explicit" as const, version: pin.version },
+      pin: { kind: "explicit" as const, version: pin.version, sessionVersion: pin.sessionVersion },
     })),
-    { name: "work-review", skillId: WORK_REVIEW_SKILL.skillId, pin: { kind: "explicit" as const, version: WORK_REVIEW_SKILL.version } },
+    {
+      name: "work-review",
+      skillId: WORK_REVIEW_SKILL.skillId,
+      pin: { kind: "explicit" as const, version: WORK_REVIEW_SKILL.version, sessionVersion: WORK_REVIEW_SKILL.sessionVersion },
+    },
   ],
   specialist: SPECIALIST,
   builtInTools: ["read", "write", "edit", "glob", "grep"],
@@ -157,8 +170,8 @@ export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_
 
 /**
  * The one release this application revision serves. Changing it is the application half of a cutover
- * (docs/52): it is flipped to `r26` only after Agent v26 exists and its read-back attests, and flipped
- * back for rollback. It is deliberately not an environment variable: the reviewed revision, not host
- * configuration, decides what is served.
+ * (docs/52): it was flipped to `r26` after Agent v26 existed and its read-back attested (docs/53); flip it
+ * back (or redeploy the last r25 revision) for rollback. It is deliberately not an environment variable:
+ * the reviewed revision, not host configuration, decides what is served.
  */
-export const SERVING_RELEASE: DjonikRelease = RELEASE_R25;
+export const SERVING_RELEASE: DjonikRelease = RELEASE_R26;

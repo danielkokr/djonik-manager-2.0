@@ -92,6 +92,23 @@ Only one item is NOW. The next item starts when this roadmap is updated. There i
 
 **#33 source hardening — 2026-09-24 (implementation report, pending review; [docs/51](51_ISSUE_33_PRODUCTION_RELEASE_HARDENING.md), runbook [docs/52](52_PRODUCTION_SERVING_RUNBOOK.md)).** Source/offline only; no Agent, Skill, Session, Trello, Memory, secret or deploy change, and no paid inference. The release unit is the provider's Agent version, made immutable by explicit `skver_` pins and bound to the app revision and Session resources in reviewed `src/release.ts`. Serving Sessions are pinned to `{id, version}`, tagged `source/release/app_revision`, and attested fail-closed at startup (Agent-version preflight, then the Session's own snapshot) before Telegram is polled. The shutdown is graceful: polling stops, accepted fragments flush and in-flight turns drain; 409 and 401 exit cleanly. This revision serves **r25** (production v25; `latest` Skills proven to resolve to the accepted versions). **r26** is the fully specified target: explicit pins, accepted #36 work-review + `trello_work_history`, and a built-in allowlist without `bash`/`web_*`. The Agent v26 update body is generated from source. Session continuity is process-scoped by decision (Memory is the durable layer). Recommended host: small VPS + systemd; fallback: Railway. Remaining steps each need Product Owner authorization (docs/51 §18): accept r26 contents, rotate the Trello read token (expires about 2026-10-22), create Agent v26, provision the host, flip `SERVING_RELEASE`, deploy, run the serving-boundary smoke. **#33 remains canonical NOW.**
 
+**#33 controlled r26 cutover — 2026-09-24 (implementation report, pending Product Owner review; [docs/53](53_ISSUE_33_R26_CONTROLLED_CUTOVER.md)).** This supersedes the preceding paragraph's *this revision serves r25 / v26 not created* as current state.
+- **Agent:** production Agent `agent_01WGRHDBjQa3eMhoGJMmQ1dh` **v25 → v26** in one authorized `agents.update`:
+  - generated body, precondition `version: 25`;
+  - v26 changes only `skills` (the same accepted versions, now explicit `skver_` pins, plus `work-review`) and `tools` (built-in allowlist `read/write/edit/glob/grep`, plus `trello_work_history`);
+  - read-back: `release:check r26` OK; v25 unchanged;
+  - all six pinned Skill versions are byte-identical to the repo.
+- **Source:** this revision serves **r26**.
+- **Provider fact:** a Session snapshot reports explicitly pinned coordinator Skills as internal numeric versions. The first attestation therefore refused fail-closed (no message, $0), and it was fixed narrowly (exact per-pin `sessionVersion`).
+- **Smoke:** one pinned, attested validation Session `sesn_01UMLG3oqYCTNAbzdBXnR9iv`, 4 turns, **$0.33** of $1.20, all ended with `end_turn`, zero Trello/Memory/Calendar writes.
+  - ordinary voice: PASS;
+  - intake without mutation: PASS;
+  - #36 work review on Sonnet 5 medium: PASS. The one custom-tool call ran through the #40 lifecycle, and the relay is byte-exact;
+  - Project Health: PASS, with native delegation to specialist v4 and the F3 cue.
+- **Observations for the PO:** the model still repeats the work-history facts in its PM section (now on Sonnet 5, too), and the accepted F3 behaviour withheld a real tool-free second answer.
+- **Hosting:** `deploy.sh` gained two small correctness fixes. Recommendation: **READY FOR HOST DEPLOYMENT**. Remaining steps: VPS provisioning, Trello token rotation (by about 2026-10-22), deploy, and the real Telegram serving evidence (Checkpoint A).
+- **#33 remains canonical NOW** until that host evidence exists.
+
 ### Acceptance record — #40 / #36 / #37 / #38
 
 **#40 — ACCEPTED 2026-09-22:** principal offline pass accepted at `e5b0df2`; exact docs/29 regression failed pre-fix and passed post-fix; full suite 495/495, typecheck and `git diff --check` passed; no paid inference ([docs/31](31_ISSUE_40_IMPLEMENTATION_REPORT.md)).
