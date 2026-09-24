@@ -188,6 +188,9 @@ function groupKey(chatId: number, userId: number): string {
  */
 export class MessageGroupBuffer {
   private readonly groups = new Map<string, ActiveGroup>();
+  /** Settled groups whose dispatch/failure handling (the whole Djonik turn and its reply) has not finished
+   *  yet, keyed to their chat — what a graceful shutdown drains (#33). */
+  private readonly inFlight = new Map<Promise<void>, number>();
   private readonly adjacentWindowMs: number;
   private readonly albumSettleWindowMs: number;
   private readonly maxFragmentsPerGroup: number;
@@ -213,6 +216,35 @@ export class MessageGroupBuffer {
   clearAll(): void {
     for (const group of this.groups.values()) this.scheduler.clearTimeout(group.timer);
     this.groups.clear();
+  }
+
+  /**
+   * Dispatches every still-buffering group immediately instead of waiting for its window (graceful
+   * shutdown, #33). Its fragments were already received and acknowledged to Telegram, so dropping them
+   * would silently lose an accepted user turn (contract §10).
+   */
+  flushAll(): void {
+    for (const group of [...this.groups.values()]) this.dispatchGroup(group);
+  }
+
+  /** Resolves once no settled group is still being dispatched, including any that start while waiting. */
+  async whenIdle(): Promise<void> {
+    while (this.inFlight.size > 0) await Promise.all([...this.inFlight.keys()]);
+  }
+
+  /** Chats whose turn is still in flight (content-free: chat ids only). */
+  inFlightChatIds(): number[] {
+    return [...new Set(this.inFlight.values())];
+  }
+
+  private track(chatId: number, work: Promise<unknown>): void {
+    const entry: Promise<void> = work.then(
+      () => undefined,
+      () => undefined,
+    ).then(() => {
+      this.inFlight.delete(entry);
+    });
+    this.inFlight.set(entry, chatId);
   }
 
   addFragment(fragment: IncomingFragment): void {
@@ -295,12 +327,12 @@ export class MessageGroupBuffer {
 
   private failGroup(group: ActiveGroup, error: unknown): void {
     if (!this.settle(group)) return;
-    void this.onFailure(group.chatId, group.userId, error);
+    this.track(group.chatId, Promise.resolve(this.onFailure(group.chatId, group.userId, error)));
   }
 
   private dispatchGroup(group: ActiveGroup): void {
     if (!this.settle(group)) return;
-    void this.resolveAndDispatch(group);
+    this.track(group.chatId, this.resolveAndDispatch(group));
   }
 
   private async resolveAndDispatch(group: ActiveGroup): Promise<void> {

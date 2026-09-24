@@ -776,6 +776,14 @@ export interface DjonikSessionOptions {
   memoryAccess?: "read_write" | "read_only";
   /** Optional whole-Session public-list-cost backstop, expressed as USD cents. */
   maxListCostUsdCents?: string;
+  /** Pins the Session to this exact Agent version (#33). Omitted, the provider resolves the latest
+   *  version at creation — serving callers always pin. */
+  agentVersion?: number;
+  /** Content-free Session metadata (source, release, app revision) so a serving Session is identifiable. */
+  metadata?: Record<string, string>;
+  /** Receives the created Session before its event stream opens; throwing aborts the connection
+   *  without sending anything (startup/serving release attestation, #33). */
+  attestSession?: (session: unknown) => void | Promise<void>;
 }
 
 /** How one submitted `user.message` ended (#32). Only `end_turn` is a completed turn. */
@@ -835,9 +843,10 @@ export async function connectToDjonik(
 ): Promise<DjonikSessionHandle> {
   const memoryAccess = sessionOptions.memoryAccess ?? "read_write";
   const session = await client.beta.sessions.create({
-    agent: agentId,
+    agent: sessionOptions.agentVersion === undefined ? agentId : { type: "agent", id: agentId, version: sessionOptions.agentVersion },
     environment_id: environmentId,
     vault_ids: [vaultId],
+    ...(sessionOptions.metadata === undefined ? {} : { metadata: sessionOptions.metadata }),
     ...(sessionOptions.maxListCostUsdCents === undefined
       ? {}
       : { budget: { type: "limit" as const, max_list_cost: { amount: sessionOptions.maxListCostUsdCents, currency: "USD" as const } } }),
@@ -850,6 +859,8 @@ export async function connectToDjonik(
       },
     ],
   });
+  // Attest before the stream opens: a mismatched Session never receives a message (#33).
+  await sessionOptions.attestSession?.(session);
 
   const stream = await client.beta.sessions.events.stream(session.id);
   const iterator = stream[Symbol.asyncIterator]();

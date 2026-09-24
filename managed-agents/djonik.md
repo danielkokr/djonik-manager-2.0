@@ -8,16 +8,19 @@ model:
 skills:
   - type: custom
     skill_id: skill_01WS6JtY1GMu3rGZaKCVR9w1
-    version: latest
+    version: skver_01CJQkVY1kp1urhBWQgHUYxW
   - type: custom
     skill_id: skill_01G9DtQEzPYxgw78riFh8k99
-    version: latest
+    version: skver_01EL7d3fy4WWYBSsD3PmK9LQ
   - type: custom
     skill_id: skill_01PTmbvLHJj1HuUxvDKhpaiE
-    version: latest
+    version: skver_01FdtnnkbePBjNJGTuJyAvhw
   - type: custom
     skill_id: skill_015c8dtDnWyDfVLwS6NLS7r6
-    version: latest
+    version: skver_018sJv1GCnzfZRG4NbExbAzj
+  - type: custom
+    skill_id: skill_0169h7GYNYUDDDZteDCUV2fE
+    version: skver_015LYzVdivGGMsBpuki4kW4S
 multiagent:
   type: coordinator
   agents:
@@ -34,9 +37,34 @@ mcp_servers:
 tools:
   - type: agent_toolset_20260401
     default_config:
-      enabled: true
+      enabled: false
       permission_policy:
         type: always_allow
+    configs:
+      - name: read
+        enabled: true
+        permission_policy:
+          type: always_allow
+      - name: write
+        enabled: true
+        permission_policy:
+          type: always_allow
+      - name: edit
+        enabled: true
+        permission_policy:
+          type: always_allow
+      - name: glob
+        enabled: true
+        permission_policy:
+          type: always_allow
+      - name: grep
+        enabled: true
+        permission_policy:
+          type: always_allow
+  - type: custom
+    name: trello_work_history
+    description: "Read a compact, read-only Trello board-action digest for a requested week or explicit Kyiv date range. Use it for questions about what moved into Done, returned from Done, was created, archived, or changed during a period. It computes Kyiv dates, counts, current-label project scope, and coverage itself; do not use it for current Project Health, writes, effort, or work outside Trello."
+    input_schema: {"type":"object","additionalProperties":false,"required":["window","scope"],"properties":{"window":{"oneOf":[{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"this_week"}}},{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"last_week"}}},{"type":"object","additionalProperties":false,"required":["kind","from","to"],"properties":{"kind":{"const":"explicit"},"from":{"type":"string"},"to":{"type":"string"}}}]},"scope":{"oneOf":[{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"board"}}},{"type":"object","additionalProperties":false,"required":["kind","label"],"properties":{"kind":{"const":"project"},"label":{"type":"string","minLength":1,"maxLength":120}}}]},"response_format":{"enum":["concise","detailed"]}}}
   - type: mcp_toolset
     mcp_server_name: trello
     default_config:

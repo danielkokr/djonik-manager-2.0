@@ -28,7 +28,7 @@ test("source parses as frontmatter + system body and declares the Sonnet 5 mediu
   assert.match(frontmatter, /^name: Джонік$/m);
   assert.match(frontmatter, /^model:\n  id: claude-sonnet-5\n  effort: medium\n  speed: standard$/m);
   assert.ok(system.length > 0);
-  // The four coordinator Skills, recorded exactly as production pins them.
+  // The #33 target (r26): the four accepted coordinator Skills plus the accepted #36 work-review Skill.
   const skills = [...frontmatter.matchAll(/- type: custom\n\s+skill_id: (\S+)\n\s+version: (\S+)/g)];
   assert.deepEqual(
     skills.map((entry) => entry[1]),
@@ -37,8 +37,12 @@ test("source parses as frontmatter + system body and declares the Sonnet 5 mediu
       "skill_01G9DtQEzPYxgw78riFh8k99",
       "skill_01PTmbvLHJj1HuUxvDKhpaiE",
       "skill_015c8dtDnWyDfVLwS6NLS7r6",
+      "skill_0169h7GYNYUDDDZteDCUV2fE",
     ],
   );
+  // #33 invariant: no accidental `latest` — every Skill reference is an explicit, immutable version.
+  for (const entry of skills) assert.match(entry[2], /^skver_\w+$/, `${entry[1]} must pin an explicit skver_`);
+  assert.doesNotMatch(frontmatter, /version: latest/);
   // `project-health` is owned exclusively by the specialist (#28); the coordinator must not re-attach it.
   assert.doesNotMatch(frontmatter, /skill_01Treson5zdU1TgxXDaREwnY/);
 });
@@ -56,6 +60,26 @@ test("source records the production Trello write surface: only trelloWriteCard i
   assert.equal(writes.length, 6, "all six Trello write tools stay explicitly stated");
   const enabled = writes.filter((entry) => entry[2] === "true").map((entry) => entry[1]);
   assert.deepEqual(enabled, ["trelloWriteCard"]);
+});
+
+test("built-in toolset is an allowlist: file tools for Skills and Memory only — no bash, no web tools (#33)", () => {
+  const start = frontmatter.indexOf("  - type: agent_toolset_20260401");
+  const end = frontmatter.indexOf("\n  - type:", start + 1);
+  const block = frontmatter.slice(start, end);
+  assert.match(block, /default_config:\n\s+enabled: false/, "built-in toolset must be default-disabled");
+  const enabled = [...block.matchAll(/- name: (\w+)\n\s+enabled: true\n\s+permission_policy:\n\s+type: always_allow/g)].map((m) => m[1]);
+  assert.deepEqual(enabled, ["read", "write", "edit", "glob", "grep"]);
+  assert.doesNotMatch(block, /\b(bash|web_fetch|web_search)\b/);
+});
+
+test("source exposes exactly the accepted #36 custom tool, byte-for-byte the definition the client executes", async () => {
+  const { TRELLO_WORK_HISTORY_TOOL } = await import("./trelloWorkHistory.js");
+  const { canonicalJsonSha256 } = await import("./releaseAttestation.js");
+  const custom = [...frontmatter.matchAll(/^  - type: custom\n    name: (\S+)\n    description: (.+)\n    input_schema: (.+)$/gm)];
+  assert.equal(custom.length, 1);
+  assert.equal(custom[0][1], TRELLO_WORK_HISTORY_TOOL.name);
+  assert.equal(JSON.parse(custom[0][2]), TRELLO_WORK_HISTORY_TOOL.description);
+  assert.equal(canonicalJsonSha256(JSON.parse(custom[0][3])), canonicalJsonSha256(TRELLO_WORK_HISTORY_TOOL.input_schema));
 });
 
 test("source records the Google Calendar toolset as default-disabled, so the prompt may not promise Calendar", () => {

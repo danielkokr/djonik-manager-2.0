@@ -707,3 +707,63 @@ test("a fresh group after an over-limit failure is unaffected and dispatches nor
   assert.equal(dispatches.length, 1);
   assert.equal(dispatches[0].intake.text, "clean follow-up");
 });
+
+// --- Graceful shutdown support (#33) ---
+
+test("flushAll dispatches every still-buffering group immediately instead of dropping it", async () => {
+  const scheduler = new FakeScheduler();
+  const { buffer, dispatches } = makeBuffer({ scheduler });
+  buffer.addFragment(textFragment({ chatId: 1, messageId: 1, text: "перше" }));
+  buffer.addFragment(textFragment({ chatId: 1, messageId: 2, text: "друге" }));
+  buffer.addFragment(textFragment({ chatId: 2, userId: 200, messageId: 3, text: "інший чат" }));
+  buffer.flushAll();
+  await buffer.whenIdle();
+  assert.equal(dispatches.length, 2, "one turn per chat group, nothing lost");
+  assert.equal(dispatches[0].intake.fragmentCount, 2);
+  assert.equal(buffer.hasActiveGroup(1, 100), false);
+  scheduler.advance(10_000);
+  assert.equal(dispatches.length, 2, "a flushed group's timer never dispatches it a second time");
+});
+
+test("whenIdle waits for in-flight turns (including their reply) and reports their chats meanwhile", async () => {
+  const scheduler = new FakeScheduler();
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const buffer = new MessageGroupBuffer({
+    scheduler,
+    onDispatch: async () => {
+      await held;
+    },
+    onFailure: () => {},
+  });
+  buffer.addFragment(textFragment({ chatId: 7, messageId: 1, text: "довгий turn" }));
+  scheduler.advance(10_000);
+  await flushMicrotasks();
+  assert.deepEqual(buffer.inFlightChatIds(), [7]);
+  let idle = false;
+  const waiting = buffer.whenIdle().then(() => (idle = true));
+  await flushMicrotasks();
+  assert.equal(idle, false, "still in flight");
+  release();
+  await waiting;
+  assert.deepEqual(buffer.inFlightChatIds(), []);
+});
+
+test("a failing dispatch still settles whenIdle (drain can never hang on a rejected turn)", async () => {
+  const scheduler = new FakeScheduler();
+  const buffer = new MessageGroupBuffer({
+    scheduler,
+    onDispatch: async () => {
+      throw new Error("boom");
+    },
+    onFailure: () => {},
+  });
+  buffer.addFragment(textFragment({ messageId: 1, text: "x" }));
+  buffer.flushAll();
+  await buffer.whenIdle();
+  assert.deepEqual(buffer.inFlightChatIds(), []);
+});
+
+function flushMicrotasks(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}

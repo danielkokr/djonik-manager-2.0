@@ -11,6 +11,13 @@
 
 The `trello_work_history` custom tool and the `work-review` Skill v2 were accepted on an isolated candidate ([docs/32](32_ISSUE_36_POST_40_LIVE_DIAGNOSTIC.md)). They are **not** attached to production v25. The Telegram serving Session is not attested. Both belong to #33.
 
+**#33 serving boundary — source prepared 2026-09-24 ([docs/51](51_ISSUE_33_PRODUCTION_RELEASE_HARDENING.md), pending review).**
+- **Release unit:** the Agent version with explicit Skill pins, bound in reviewed `src/release.ts` to the app revision and the Session resources: environment, vault, Memory `read_write`.
+- **Serving Sessions:** pinned to `{id, version}` and attested fail-closed before serving.
+- **Continuity:** one Session per process; Memory is the durable layer; no cross-restart resume (docs/51 §11).
+- **Target:** r26 (Agent v26, not created). It has explicit pins, #36 attached, and built-in tools limited to `read/write/edit/glob/grep`.
+- **Production:** still v25, unchanged.
+
 **Coordinator baseline — Product Owner decision 2026-09-23 (historical):** Djonik coordinator = **Claude Sonnet 5, effort medium, speed standard**. Djonik Project Health Specialist = **Claude Sonnet 5, pinned v4**. Repeated #38 live failures ([docs/36](36_ISSUE_38_LIVE_VOICE_VALIDATION.md), [docs/37](37_ISSUE_38_TARGETED_LIVE_REVALIDATION.md)) ended Haiku prompt-only remediation. The Sonnet 5 low and medium acceptance smokes ([docs/39](39_ISSUE_38_SONNET_5_LOW_MODEL_MIGRATION_REPORT.md)) failed at the time; the later evidence above superseded that outcome. #33 owns the serving-Session transition.
 
 **Production configuration read-back 2026-09-23 (historical v24 state; the current v25 state is in the “#38 remote synchronization” paragraph below):** primary Agent `agent_01WGRHDBjQa3eMhoGJMmQ1dh` is v24, `claude-sonnet-5` / effort `medium` / speed `standard`. v23 → v24 changed only model effort. The live prompt remains byte-identical to the accepted source in `managed-agents/djonik.md` (SHA-256 `fa361ed9…817f`); Skills, tools, MCP, permissions and Project Health specialist v4 are unchanged. The failed low and medium isolated smokes are in [docs/39](39_ISSUE_38_SONNET_5_LOW_MODEL_MIGRATION_REPORT.md). A pre-existing Telegram serving Session keeps its creation-time configuration and #33 must attest and transition it separately. #38 acceptance has not passed.

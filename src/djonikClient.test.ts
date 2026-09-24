@@ -349,6 +349,39 @@ test("connectToDjonik supports a read-only Memory mount and whole-Session valida
   session.close();
 });
 
+test("connectToDjonik pins the Session to an exact Agent version and tags it when asked (#33)", async () => {
+  const { client, createCalls } = createFakeClient([IDLE]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x", undefined, undefined, "telegram", undefined, {
+    agentVersion: 26,
+    metadata: { source: "telegram", release: "r26", app_revision: "abc1234" },
+  });
+  const created = createCalls[0] as { agent: unknown; metadata: unknown };
+  assert.deepEqual(created.agent, { type: "agent", id: "agent_x", version: 26 });
+  assert.deepEqual(created.metadata, { source: "telegram", release: "r26", app_revision: "abc1234" });
+  session.close();
+});
+
+test("a Session that fails attestation is never streamed or sent to (#33)", async () => {
+  const { client, sendCalls } = createFakeClient([IDLE]);
+  let streamed = false;
+  const originalStream = client.beta.sessions.events.stream;
+  (client.beta.sessions.events as { stream: unknown }).stream = async (...args: unknown[]) => {
+    streamed = true;
+    return (originalStream as (...a: unknown[]) => unknown)(...args);
+  };
+  await assert.rejects(
+    connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x", undefined, undefined, "telegram", undefined, {
+      agentVersion: 26,
+      attestSession: () => {
+        throw new Error("mismatch");
+      },
+    }),
+    /mismatch/,
+  );
+  assert.equal(streamed, false);
+  assert.deepEqual(sendCalls, []);
+});
+
 test("a retrying session.error does not abort a turn that goes on to succeed", async () => {
   const { client } = createFakeClient([retryingError(), AGENT_MESSAGE, IDLE]);
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");

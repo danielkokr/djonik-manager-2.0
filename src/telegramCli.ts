@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { Bot, type Context } from "grammy";
-import { loadConfig, loadTelegramConfig, MissingConfigError, type DjonikClientConfig, type TelegramAdapterConfig } from "./config.js";
-import { connectToDjonik, type DjonikDocumentInput, type DjonikImageInput } from "./djonikClient.js";
+import { loadTelegramConfig, MissingConfigError, type TelegramAdapterConfig } from "./config.js";
+import { type DjonikDocumentInput, type DjonikImageInput } from "./djonikClient.js";
 import {
   createSessionManager,
   downloadTelegramDocument,
@@ -14,39 +14,100 @@ import {
 } from "./telegramAdapter.js";
 import { MessageGroupBuffer, type IncomingFragment } from "./messageGrouping.js";
 import { createGroupDispatchHandlers } from "./telegramDispatch.js";
+import { SERVING_RELEASE } from "./release.js";
+import { ReleaseAttestationError } from "./releaseAttestation.js";
+import {
+  checkTrelloHistoryHealth,
+  connectServingSession,
+  describeTrelloHistoryHealth,
+  EXIT_CONFIG,
+  loadServingConfig,
+  preflightRelease,
+  ServingConfigError,
+  type ServingConfig,
+} from "./servingRelease.js";
+import { classifyPollingFailure, createShutdownCoordinator } from "./servingLifecycle.js";
 
-async function main(): Promise<void> {
-  let djonikConfig: DjonikClientConfig;
+/**
+ * The one Telegram serving process (#33). Startup order, fail-closed before any update is polled:
+ * validated host config → read-only release preflight (pinned Agent version) → Trello token health
+ * (degrades, never blocks) → Telegram token check → one Session pinned to the release version, attested
+ * from the provider's own snapshot → the content-free serving tuple line → long polling.
+ * Resolves to the process exit code.
+ */
+async function main(): Promise<number> {
+  let config: ServingConfig;
   let telegramConfig: TelegramAdapterConfig;
   try {
-    djonikConfig = loadConfig();
+    config = loadServingConfig(SERVING_RELEASE);
     telegramConfig = loadTelegramConfig();
   } catch (error) {
-    if (error instanceof MissingConfigError) {
+    if (error instanceof ServingConfigError || error instanceof MissingConfigError) {
       console.error(error.message);
-      process.exitCode = 1;
-      return;
+      return EXIT_CONFIG;
     }
     throw error;
   }
 
-  const anthropic = new Anthropic({ apiKey: djonikConfig.apiKey });
-  const trace = process.env.DJONIK_TRACE === "1";
-  const turnTelemetry = process.env.DJONIK_TURN_TELEMETRY === "1";
-  const djonikSession = createSessionManager(() =>
-    connectToDjonik(
-      anthropic,
-      djonikConfig.agentId,
-      djonikConfig.environmentId,
-      djonikConfig.memoryStoreId,
-      djonikConfig.vaultId,
-      trace ? (event) => console.error("[trace]", JSON.stringify(event)) : undefined,
-      turnTelemetry ? (summary) => console.error("[turn]", JSON.stringify(summary)) : undefined,
-      "telegram",
-    ),
-  );
+  const { release } = config;
+  console.log(`[release] preflight release=${release.id} app=${config.appRevision} agent=${release.agent.id}@${release.agent.version}`);
+  const anthropic = new Anthropic({ apiKey: config.apiKey });
+  let preflight;
+  try {
+    preflight = await preflightRelease(anthropic, release);
+  } catch (error) {
+    if (error instanceof ReleaseAttestationError) {
+      console.error(error.message);
+      return EXIT_CONFIG;
+    }
+    throw error;
+  }
+
+  const trello = describeTrelloHistoryHealth(await checkTrelloHistoryHealth(config.trello));
+  if (trello.warning) console.warn(`[release] warning ${trello.warning}`);
 
   const bot = new Bot(telegramConfig.botToken);
+  try {
+    await bot.init();
+  } catch (error) {
+    const { reason, exitCode } = classifyPollingFailure(error);
+    console.error(`[release] Telegram bot check failed: ${reason}`);
+    return exitCode;
+  }
+
+  const trace = process.env.DJONIK_TRACE === "1";
+  const turnTelemetry = process.env.DJONIK_TURN_TELEMETRY === "1";
+  let polling: Promise<unknown> = Promise.resolve();
+  /** Set once serving has started; before that a failure simply ends `main` with its exit code. */
+  let requestStop: ((reason: string, code: number) => void) | null = null;
+  const djonikSession = createSessionManager(async () => {
+    try {
+      return await connectServingSession(anthropic, config, preflight, {
+        turnSource: "telegram",
+        onTrace: trace ? (event) => console.error("[trace]", JSON.stringify(event)) : undefined,
+        onTurnTelemetry: turnTelemetry ? (summary) => console.error("[turn]", JSON.stringify(summary)) : undefined,
+        onServing: (line) => console.log(line),
+        trelloHistoryField: trello.field,
+      });
+    } catch (error) {
+      // A Session re-created after a dead stream must attest too; drift there means the remote release
+      // changed under a running process — stop serving rather than answer from an unreviewed tuple.
+      if (error instanceof ReleaseAttestationError) {
+        console.error(error.message);
+        requestStop?.("release_attestation_failed", EXIT_CONFIG);
+      }
+      throw error;
+    }
+  });
+
+  // Serving evidence before the first update is polled: the attested tuple line is logged here.
+  try {
+    await djonikSession.getSession();
+  } catch (error) {
+    if (error instanceof ReleaseAttestationError) return EXIT_CONFIG;
+    throw error;
+  }
+
 
   /**
    * Downloads one Telegram image attachment, reusing the exact #22 transport
@@ -194,23 +255,58 @@ async function main(): Promise<void> {
     console.error("Unhandled Telegram bot error:", error.message);
   });
 
-  function shutdown(): void {
-    console.log("\nShutting down Djonik Telegram adapter...");
-    groupBuffer.clearAll();
-    djonikSession.closeIfOpen();
-    void bot.stop();
+  const coordinator = createShutdownCoordinator({
+    stopPolling: () => bot.stop(),
+    pollingDone: () => polling,
+    flushIntake: () => groupBuffer.flushAll(),
+    intakeIdle: () => groupBuffer.whenIdle(),
+    inFlightChatIds: () => groupBuffer.inFlightChatIds(),
+    notify: (chatId, text) => bot.api.sendMessage(chatId, text),
+    closeSession: () => djonikSession.closeIfOpen(),
+    log: (line) => console.log(line),
+    drainMs: config.drainMs,
+  });
+  let resolveExit: (code: number) => void = () => {};
+  const exitCode = new Promise<number>((resolve) => (resolveExit = resolve));
+  function stop(reason: string, code: number): Promise<void> {
+    return coordinator.shutdown(reason, code).then((result) => resolveExit(result.exitCode));
+  }
+  requestStop = (reason, code) => void stop(reason, code);
+
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.on(signal, () => {
+      if (coordinator.stopping) {
+        // A second signal skips the drain: the operator explicitly wants the process gone now.
+        console.log(`[shutdown] second ${signal}: exiting without drain`);
+        process.exit(130);
+      }
+      void stop(signal, 0);
+    });
   }
 
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
-
   console.log("Starting Djonik Telegram adapter (long polling)...");
-  await bot.start({
+  polling = bot.start({
     onStart: () => console.log("Telegram adapter is running. Press Ctrl+C to stop."),
   });
+  polling.then(
+    () => {
+      if (!coordinator.stopping) void stop("polling_stopped", 1);
+    },
+    (error: unknown) => {
+      // 409: another poller took over this bot token (never serve from two instances); 401: bad token.
+      const { reason, exitCode } = classifyPollingFailure(error);
+      console.error(`[shutdown] polling failed: ${reason}`);
+      void stop(reason, exitCode);
+    },
+  );
+
+  return exitCode;
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+main().then(
+  (code) => process.exit(code),
+  (error: unknown) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  },
+);

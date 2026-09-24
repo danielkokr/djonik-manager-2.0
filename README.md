@@ -39,21 +39,36 @@ Read in this order:
 
 ## Current phase
 
-**Foundation 3:** a thin local Telegram adapter in front of the existing Djonik Managed Agent client.
+Canonical NOW is in `docs/02_DEVELOPMENT_ROADMAP.md` (currently #33: pinned release, always-on host and serving Session).
 
-Copy `.env.example` to `.env` and fill in `ANTHROPIC_API_KEY`, `DJONIK_AGENT_ID`, `DJONIK_ENVIRONMENT_ID`, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_ID` (your own Telegram numeric user id — the single-user allowlist for this dev bot). Then run:
+**Local run.**
+1. Copy `.env.example` to `.env`.
+2. Set `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_ID` (your own Telegram numeric user id: the single-user allowlist).
+3. Run:
 
 ```bash
 npm run telegram
 ```
 
-Only messages from `TELEGRAM_ALLOWED_USER_ID` reach Djonik; every Telegram text message from that user during the running process reuses the same Djonik Managed Session, so conversational continuity works exactly like the console/CLI client. Stop the adapter with Ctrl+C.
+The Agent version, environment, Memory store and vault come from the reviewed release in `src/release.ts`, not from `.env`. At startup the adapter:
+- checks the pinned Agent version;
+- creates one Session pinned to it;
+- attests the provider's snapshot;
+- logs a content-free `[release] serving …` line before it polls Telegram.
 
-A console-only client (no Telegram) remains available via `npm run dev`.
+A mismatch refuses to start (exit 78). Only messages from `TELEGRAM_ALLOWED_USER_ID` reach Djonik. Every message during the running process reuses the same Managed Session. Ctrl+C stops polling and drains in-flight turns; a second Ctrl+C exits at once.
+
+Run only **one** adapter per bot token at a time. A console-only client remains available via `npm run dev`. `npm run release:check [release]` is a read-only check of a release against the live Agent version.
+
+**Production** (`npm run build`, then `npm start`, under systemd): see [docs/52](docs/52_PRODUCTION_SERVING_RUNBOOK.md).
 
 ## Trello work-history credentials
 
-The source-only `trello_work_history` custom tool reads Trello REST action history with `TRELLO_API_KEY` and `TRELLO_READ_TOKEN`. In production they belong in the Telegram process's runtime secret store, not a Managed Agent, Skill, repository, or URL. The token must have read-only scope and is currently rotated every 30 days. Missing or rejected credentials produce a safe “history is unavailable” tool result; the client never falls back to current-state inference. The tool uses GET requests only and sends the credentials in Trello's `Authorization` header.
+The `trello_work_history` custom tool reads Trello REST action history with `TRELLO_API_KEY` and `TRELLO_READ_TOKEN`.
+- **Storage:** production keeps them in the Telegram process's runtime secret store, never in a Managed Agent, Skill, repository or URL. They are required only when the serving release exposes the tool (r26).
+- **Scope and expiry:** the token must be issued with read-only scope. Record its expiry in `TRELLO_READ_TOKEN_EXPIRES_AT` (a date or `never`) so startup can warn 7 days ahead. Rotation: docs/52 §5.
+- **Failures:** missing credentials refuse startup. Rejected credentials degrade visibly: a startup warning plus a per-turn "history is unavailable" result. The client never falls back to current-state inference.
+- **Requests:** the tool uses GET requests only and sends the credentials in Trello's `Authorization` header.
 
 ## Working model
 

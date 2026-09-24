@@ -1,0 +1,51 @@
+# Djonik Telegram adapter — systemd unit for the recommended small-VPS host (#33, docs/52).
+# Source only: installing it is a separately authorized deployment step.
+#
+# One unit = one long-polling instance per bot token. `systemctl restart` stops the old process
+# (graceful drain, then offset confirmation) BEFORE starting the new one, so two pollers never overlap.
+
+[Unit]
+Description=Djonik Telegram adapter (single long-polling instance)
+Wants=network-online.target
+After=network-online.target
+# A crash loop stops after 5 starts in 10 minutes instead of hammering Telegram/Anthropic.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=djonik
+Group=djonik
+WorkingDirectory=/opt/djonik/app
+# Secrets (0600, root-owned): ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_ID,
+# TRELLO_API_KEY, TRELLO_READ_TOKEN, TRELLO_READ_TOKEN_EXPIRES_AT, optional DJONIK_EXPECTED_RELEASE.
+EnvironmentFile=/etc/djonik/djonik.env
+# Written by deploy/deploy.sh: DJONIK_APP_REVISION=<deployed commit>.
+EnvironmentFile=/etc/djonik/revision.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node dist/telegramCli.js
+
+# SIGTERM starts the graceful stop: polling stops, buffered fragments are flushed, in-flight turns drain
+# for up to DJONIK_SHUTDOWN_DRAIN_MS (default 120 s). SIGKILL only after that, with margin.
+KillSignal=SIGTERM
+TimeoutStopSec=150
+
+# Transient failures restart; 78 (configuration/release mismatch) does not — restarting cannot fix it.
+# 75 (another poller holds the bot token) restarts after RestartSec and is bounded by StartLimitBurst.
+Restart=on-failure
+RestartSec=15
+RestartPreventExitStatus=78
+
+# The adapter needs outbound HTTPS only: no inbound port, no disk writes.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
