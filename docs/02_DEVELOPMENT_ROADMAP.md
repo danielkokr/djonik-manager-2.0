@@ -109,6 +109,22 @@ Only one item is NOW. The next item starts when this roadmap is updated. There i
 - **Hosting:** `deploy.sh` gained two small correctness fixes. Recommendation: **READY FOR HOST DEPLOYMENT**. Remaining steps: VPS provisioning, Trello token rotation (by about 2026-10-22), deploy, and the real Telegram serving evidence (Checkpoint A).
 - **#33 remains canonical NOW** until that host evidence exists.
 
+**#33 always-on host preparation — 2026-09-24 (implementation report, pending Product Owner review; [docs/54](54_ISSUE_33_ALWAYS_ON_HOST_AND_TELEGRAM_CUTOVER.md)).** Verdict: **READY FOR FINAL HOST ACTION**. The host is not deployed and #33 is not accepted. This supersedes the preceding paragraph's host recommendation and remaining steps as current state; r26, Agent v26 and specialist v4 are unchanged (read-only re-check: `release:check r26`/`r25` OK, latest Agent 26).
+- **Host:** Hetzner Cloud CX23 (≈ €5.49/month), Ubuntu 24.04 LTS, Node 24 LTS, one systemd unit. **Fallback changed from Railway to Fly.io (one Machine)**: a single Fly Machine is replaced stop-before-start, while Railway and Render overlap by design.
+- **Fixes:**
+  - `release:check` no longer calls `process.exit()` after `fetch` (Windows libuv abort, nodejs/node#56645);
+  - `deploy.sh` refuses a host `DJONIK_EXPECTED_RELEASE` ≠ revision release **before** restarting. Previously a documented rollback to r25 would have stopped Djonik.
+- **New tooling:**
+  - `deploy/bootstrap-host.sh` and `deploy/set-secrets.sh`, checked in an Ubuntu 24.04 sandbox;
+  - read-only `release:check -- r26 --serving` for provider-side serving-Session evidence.
+- **Trello token:** the current one is read-only and expires 2026-10-22 07:44 UTC. Decision: read-only `never` token plus manual revocation.
+- **Checks:** 645/645 tests; $0 inference; no remote writes.
+- **Remaining:**
+  - one Product Owner action: create the server, run bootstrap, set secrets and deploy (docs/54 §18);
+  - one local Windows `release:check` confirmation;
+  - then a bounded session for the hosted Session ID, two real Telegram turns and a restart test.
+- **#33 remains canonical NOW.** #34 is not promoted.
+
 ### Acceptance record — #40 / #36 / #37 / #38
 
 **#40 — ACCEPTED 2026-09-22:** principal offline pass accepted at `e5b0df2`; exact docs/29 regression failed pre-fix and passed post-fix; full suite 495/495, typecheck and `git diff --check` passed; no paid inference ([docs/31](31_ISSUE_40_IMPLEMENTATION_REPORT.md)).

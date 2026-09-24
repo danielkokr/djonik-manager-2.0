@@ -59,3 +59,42 @@ test("deploy script survives replacing itself and only reports success for the n
   assert.match(deployScript, /\\\[release\\\] serving \.\* app=\$REV /);
   assert.match(deployScript, /systemctl is-active --quiet djonik-telegram/);
 });
+
+test("deploy script refuses a host/revision release mismatch BEFORE stopping the running process (docs/54 §16)", () => {
+  // Rolling back to an r25 revision with DJONIK_EXPECTED_RELEASE=r26 still on the host would otherwise stop
+  // the serving process and leave a new one that exits 78.
+  const guard = deployScript.indexOf('"$DJONIK_EXPECTED_RELEASE" != "$serves"');
+  const restart = deployScript.indexOf("systemctl restart djonik-telegram");
+  assert.ok(guard > 0 && restart > guard, "the expected-release guard must run before the restart");
+  assert.match(deployScript, /SERVING_RELEASE\.id/);
+  // Enabling only survives reboots; the single restart is still the only thing that starts the unit.
+  assert.ok(deployScript.indexOf("systemctl enable --quiet djonik-telegram") < restart);
+  assert.doesNotMatch(deployScript, /enable --now/);
+});
+
+const bootstrap = readFileSync(join(repoRoot, "deploy", "bootstrap-host.sh"), "utf8");
+const setSecrets = readFileSync(join(repoRoot, "deploy", "set-secrets.sh"), "utf8");
+
+test("host bootstrap installs the one unit but never starts a poller, and exposes no inbound port but SSH", () => {
+  assert.match(bootstrap, /install -m 0644 \/opt\/djonik\/app\/deploy\/djonik-telegram\.service \/etc\/systemd\/system\/djonik-telegram\.service/);
+  assert.doesNotMatch(bootstrap, /systemctl (start|restart|enable)[^\n]*djonik/, "the first start belongs to deploy.sh, after the laptop adapter is stopped");
+  assert.match(bootstrap, /ufw default deny incoming/);
+  assert.match(bootstrap, /ufw allow OpenSSH/);
+  assert.match(bootstrap, /useradd --system .*--shell \/usr\/sbin\/nologin djonik/);
+  assert.match(bootstrap, /install -d -m 0700 -o root -g root \/etc\/djonik/);
+  assert.match(bootstrap, /PasswordAuthentication no/);
+  assert.match(bootstrap, /-s \/root\/\.ssh\/authorized_keys/, "key-only SSH is applied only when a key exists (no lock-out)");
+  assert.doesNotMatch(bootstrap, /(KEY|TOKEN)=/, "the bootstrap writes no secret");
+});
+
+test("secrets are entered hidden, validated as plain tokens and written root-only 0600 in one atomic move", () => {
+  assert.match(setSecrets, /read -rsp/);
+  assert.match(setSecrets, /umask 077/);
+  assert.match(setSecrets, /chmod 0600 "\$tmp"/);
+  assert.match(setSecrets, /mv -f "\$tmp" "\$FILE"/);
+  assert.match(setSecrets, /\^\[A-Za-z0-9:_\.\+-\]\+\$/, "only shell-inert characters, since deploy.sh sources the file");
+  for (const key of ["ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN", "TRELLO_API_KEY", "TRELLO_READ_TOKEN"]) {
+    assert.match(setSecrets, new RegExp(`SECRET=".* ${key} `), `${key} is never echoed`);
+  }
+  assert.doesNotMatch(setSecrets, /DJONIK_(AGENT|ENVIRONMENT|MEMORY_STORE|VAULT)_ID/, "resource ids come from the reviewed release, not the host");
+});

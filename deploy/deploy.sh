@@ -25,11 +25,23 @@ main() {
   set -a; . /etc/djonik/djonik.env; set +a
   sudo -u djonik --preserve-env=ANTHROPIC_API_KEY node dist/releaseCheck.js
 
+  # The host's DJONIK_EXPECTED_RELEASE must name the release this revision serves. Checked here, before the
+  # restart: the new process would refuse it with exit 78 only AFTER the old one had stopped (docs/54 §16).
+  local serves
+  serves="$(sudo -u djonik node --input-type=module -e 'const m = await import("./dist/release.js"); console.log(m.SERVING_RELEASE.id);')"
+  if [ -n "${DJONIK_EXPECTED_RELEASE:-}" ] && [ "$DJONIK_EXPECTED_RELEASE" != "$serves" ]; then
+    echo "Revision $REV serves $serves but /etc/djonik/djonik.env has DJONIK_EXPECTED_RELEASE=$DJONIK_EXPECTED_RELEASE." >&2
+    echo "Set DJONIK_EXPECTED_RELEASE=$serves there first (docs/52 §6). The running process was not touched." >&2
+    exit 1
+  fi
+
   echo "DJONIK_APP_REVISION=$REV" > /etc/djonik/revision.env
   chmod 0644 /etc/djonik/revision.env
 
   local since
   since="$(date +%s)"
+  # Enabling only survives reboots; it starts nothing. The one restart stops the old process (drain) first.
+  systemctl enable --quiet djonik-telegram
   systemctl restart djonik-telegram
 
   # Success = the NEW process logged its attested serving tuple for exactly this revision. A `[shutdown]`

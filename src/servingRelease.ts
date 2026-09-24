@@ -272,3 +272,47 @@ export async function connectServingSession(
   );
   return handle;
 }
+
+// --- Serving-Session read-back ----------------------------------------------------------------------
+
+export interface ServingSessionReadback {
+  sessionId: string;
+  status: string;
+  createdAt: string;
+  appRevision: string;
+  observed: ObservedConfig;
+}
+
+/**
+ * Read-only provider-side evidence of what the hosted adapter serves (#33 acceptance 2, docs/54 §12): the
+ * newest Session tagged `source=<source>, release=<id>`, re-read and attested against `release` exactly
+ * as at startup. Independent of host logs. Returns null when no such Session is among the newest `limit`;
+ * a mismatch throws `ReleaseAttestationError`. Creates, sends and writes nothing.
+ */
+export async function readBackServingSession(
+  client: Anthropic,
+  release: DjonikRelease,
+  preflight: ReleasePreflight,
+  options: { source?: DjonikTurnSource; limit?: number } = {},
+): Promise<ServingSessionReadback | null> {
+  const source = options.source ?? "telegram";
+  const page = (await client.beta.sessions.list({ limit: options.limit ?? 50 })) as unknown as { data?: unknown[] };
+  const candidate = (page.data ?? []).find((session) => {
+    const metadata = (session as { metadata?: Record<string, unknown> } | null)?.metadata;
+    return metadata?.source === source && metadata?.release === release.id;
+  }) as { id: string } | undefined;
+  if (!candidate) return null;
+  const persisted = (await client.beta.sessions.retrieve(candidate.id)) as unknown as {
+    status?: unknown;
+    created_at?: unknown;
+    metadata?: Record<string, unknown>;
+  };
+  const observed = attestServingSession(release, persisted, { resolvedLatest: preflight.resolvedLatest });
+  return {
+    sessionId: candidate.id,
+    status: String(persisted.status ?? "unknown"),
+    createdAt: String(persisted.created_at ?? "unknown"),
+    appRevision: String(persisted.metadata?.app_revision ?? "unknown"),
+    observed,
+  };
+}

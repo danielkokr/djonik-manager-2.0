@@ -9,6 +9,7 @@ import {
   describeTrelloHistoryHealth,
   loadServingConfig,
   preflightRelease,
+  readBackServingSession,
   resolveAppRevision,
   ServingConfigError,
   type GitProbe,
@@ -273,4 +274,51 @@ test("a bounded validation Session can carry a provider-enforced list-cost cap o
   assert.equal(params.resources[0].access, "read_write", "same production Memory mode");
   assert.deepEqual(provider.retrievedSessions, ["sesn_serving_1"], "attested the same way");
   handle.close();
+});
+
+// --- Serving-Session read-back (docs/54 §12) ------------------------------------------------------------
+
+function readBackProvider(sessions: Array<Record<string, unknown>>) {
+  const calls = { list: 0, retrieved: [] as string[] };
+  const client = {
+    beta: {
+      sessions: {
+        list: async () => {
+          calls.list += 1;
+          return { data: sessions };
+        },
+        retrieve: async (id: string) => {
+          calls.retrieved.push(id);
+          return sessions.find((session) => session.id === id);
+        },
+      },
+    },
+  } as unknown as Anthropic;
+  return { client, calls };
+}
+
+const tagged = (release: DjonikRelease, id: string, metadata: Record<string, string>): Record<string, unknown> => ({ ...servingSessionFixture(release, id), created_at: "2026-09-25T10:00:00Z", metadata });
+
+test("read-back picks the newest Telegram Session of the release and attests the provider's own snapshot", async () => {
+  const preflight = { observed: {} as never, resolvedLatest: resolvedLatestFor(RELEASE_R26) };
+  const { client, calls } = readBackProvider([
+    tagged(RELEASE_R26, "sesn_diag", { source: "diagnostic", release: "r26", app_revision: "abc1234" }),
+    tagged(RELEASE_R26, "sesn_host", { source: "telegram", release: "r26", app_revision: "feedbeef1234" }),
+    tagged(RELEASE_R26, "sesn_older_host", { source: "telegram", release: "r26", app_revision: "0000000" }),
+  ]);
+  const result = await readBackServingSession(client, RELEASE_R26, preflight);
+  assert.equal(result?.sessionId, "sesn_host");
+  assert.equal(result?.appRevision, "feedbeef1234");
+  assert.equal(result?.observed.agentVersion, 26);
+  assert.deepEqual(calls.retrieved, ["sesn_host"], "only the chosen Session is read; nothing is created or sent");
+});
+
+test("read-back: no Telegram Session of that release → null; a drifted Telegram Session fails attestation", async () => {
+  const preflight = { observed: {} as never, resolvedLatest: resolvedLatestFor(RELEASE_R26) };
+  const none = readBackProvider([tagged(RELEASE_R25, "sesn_r25", { source: "telegram", release: "r25", app_revision: "15ca0c7" })]);
+  assert.equal(await readBackServingSession(none.client, RELEASE_R26, preflight), null);
+
+  const drifted = tagged(RELEASE_R26, "sesn_drift", { source: "telegram", release: "r26", app_revision: "abc1234" });
+  (drifted.agent as Record<string, unknown>).version = 25;
+  await assert.rejects(readBackServingSession(readBackProvider([drifted]).client, RELEASE_R26, preflight), ReleaseAttestationError);
 });

@@ -2,8 +2,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import "dotenv/config";
 import { RELEASES, SERVING_RELEASE } from "./release.js";
 import { ReleaseAttestationError } from "./releaseAttestation.js";
+import { exitNaturally } from "./processExit.js";
 import { buildAgentUpdateBody } from "./releasePlan.js";
-import { EXIT_CONFIG, preflightRelease } from "./servingRelease.js";
+import { EXIT_CONFIG, preflightRelease, readBackServingSession } from "./servingRelease.js";
 
 /**
  * `npm run release:check [release-id]` — read-only cutover/rollback check (#33, docs/52).
@@ -14,6 +15,9 @@ import { EXIT_CONFIG, preflightRelease } from "./servingRelease.js";
  *
  * `npm run release:check -- <release-id> --plan --from <version>` instead prints, without any request, the
  * exact `agents.update` body that would create the release's Agent version from `<version>` (docs/52 §4).
+ *
+ * `npm run release:check -- <release-id> --serving` additionally re-reads the newest Telegram serving
+ * Session of that release and attests it (provider-side serving evidence, docs/54 §12). Still read-only.
  */
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
@@ -38,10 +42,21 @@ async function main(): Promise<number> {
     return EXIT_CONFIG;
   }
   try {
-    const { observed } = await preflightRelease(new Anthropic({ apiKey }), release);
+    const client = new Anthropic({ apiKey });
+    const preflight = await preflightRelease(client, release);
     console.log(
-      `[release-check] ${release.id} OK agent=${release.agent.id}@${observed.agentVersion} ` +
+      `[release-check] ${release.id} OK agent=${release.agent.id}@${preflight.observed.agentVersion} ` +
         `serving_in_this_revision=${release.id === SERVING_RELEASE.id}`,
+    );
+    if (!args.includes("--serving")) return 0;
+    const serving = await readBackServingSession(client, release, preflight);
+    if (!serving) {
+      console.error(`[release-check] ${release.id} no Telegram serving Session found among the newest Sessions`);
+      return EXIT_CONFIG;
+    }
+    console.log(
+      `[release-check] ${release.id} serving session=${serving.sessionId} OK status=${serving.status} ` +
+        `created=${serving.createdAt} app=${serving.appRevision} agent=${release.agent.id}@${serving.observed.agentVersion}`,
     );
     return 0;
   } catch (error) {
@@ -58,10 +73,5 @@ async function main(): Promise<number> {
   }
 }
 
-main().then(
-  (code) => process.exit(code),
-  (error: unknown) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exit(1);
-  },
-);
+// Never `process.exit()` here: right after the SDK's fetch it crashes Node on Windows (processExit.ts).
+void exitNaturally(main());

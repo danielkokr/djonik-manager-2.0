@@ -60,7 +60,7 @@ A mismatch refuses to start (exit 78). Only messages from `TELEGRAM_ALLOWED_USER
 
 Run only **one** adapter per bot token at a time. A console-only client remains available via `npm run dev`. `npm run release:check [release]` is a read-only check of a release against the live Agent version.
 
-**Production** (`npm run build`, then `npm start`, under systemd): see [docs/52](docs/52_PRODUCTION_SERVING_RUNBOOK.md).
+**Production** (`npm run build`, then `npm start`, under systemd on a small VPS): host setup `deploy/bootstrap-host.sh`, secrets `deploy/set-secrets.sh`, deploy `deploy/deploy.sh <sha>`; see [docs/52](docs/52_PRODUCTION_SERVING_RUNBOOK.md) and [docs/54](docs/54_ISSUE_33_ALWAYS_ON_HOST_AND_TELEGRAM_CUTOVER.md). Read-only serving evidence: `npm run release:check -- r26 --serving`.
 
 ## Trello work-history credentials
 
