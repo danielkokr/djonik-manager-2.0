@@ -60,7 +60,7 @@ test("#34: the #13 accepted-context invariants survive the commitment extension"
 });
 
 test("#34: an accepted plan or commitment about a Trello card keeps its project and a fresh-read card id (issue comment 2026-09-22)", () => {
-  assert.match(M, /An accepted plan or commitment about a Trello card keeps its project and, if known from a fresh read, its card id/);
+  assert.match(M, /An accepted plan or commitment about a Trello card keeps its project and, if freshly read, its card id/);
 });
 
 test("#34: commitments live under commitments/<project>/, one small human-readable file per accepted outcome", () => {
@@ -217,8 +217,30 @@ test("#34: a Trello due is not a client commitment — in the contract, the coor
   assert.match(readSkill("weekly-planning"), /hard external\/client deadline only when that commitment is separately confirmed/);
 });
 
-test("#34: a Memory write is read back before Djonik says it is recorded", () => {
-  assert.match(rule("After a write or edit"), /read the file back; say it is saved only if the read shows the change, otherwise say it is not/);
+// Product Lead decision after the first live validation (docs/57, docs/56 §19): for NATIVE Memory files the
+// successful built-in write/edit tool result is the persistence evidence. The claim may not precede it, a
+// failed or unclear result is never "saved", and a separate read-back is optional rather than mandatory.
+test("#34 native Memory: 'saved' only after a successful write/edit result, never before it", () => {
+  assert.match(rule("Say saved"), /Say saved only after a successful write\/edit result, never before/);
+});
+
+test("#34 native Memory: an errored or unclear write/edit result is not reported as saved", () => {
+  assert.match(rule("Say saved"), /error\/unclear: not saved/);
+});
+
+test("#34 native Memory: a read-back is optional, not a mandatory step after every write/edit", () => {
+  assert.match(rule("Say saved"), /Read-back optional/);
+  // The superseded dcb8d3e rule (docs/57 S1.1) must not come back in any form.
+  assert.doesNotMatch(M, /read the file back|saved only if the read|after (a|every) (write|edit)[^.\n]*read/i);
+  assert.doesNotMatch(M, /(must|always) read (it|the file)? ?back/i);
+});
+
+test("#34 Trello: a write result alone is still not verification — #31 direct read stays mandatory", () => {
+  // The native-Memory evidence standard is scoped to Memory files; card changes keep the verified path.
+  assert.match(rule("Commitments are Memory-only"), /A card change needs Daniel's explicit request via task-management's verified path/);
+  const task = readSkill("task-management");
+  assert.match(task, /never treat the write call's return value as the read-back/);
+  assert.match(task, /Never report a mutation as done without having made that separate verifying read call in this turn/);
 });
 
 test("#34: a next check is not a promise of proactive delivery (#39 owns the rhythm)", () => {
@@ -254,7 +276,7 @@ function fakeClient(events: unknown[]): { client: Anthropic; sendCalls: unknown[
 }
 
 const builtIn = (id: string, name: string, input: Record<string, unknown>) => ({ type: "agent.tool_use", id, name, input });
-const builtInResult = (id: string) => ({ type: "agent.tool_result", id: `${id}_result`, tool_use_id: id, is_error: false, content: [] });
+const builtInResult = (id: string, isError = false) => ({ type: "agent.tool_result", id: `${id}_result`, tool_use_id: id, is_error: isError, content: [] });
 const reply = (text: string) => ({ type: "agent.message", content: [{ type: "text", text }] });
 
 test("#34 M runtime: a Memory-only commitment turn needs no Trello verification and adds nothing to the reply", async () => {
@@ -269,6 +291,56 @@ test("#34 M runtime: a Memory-only commitment turn needs no Trello verification 
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
   assert.equal(await session.send("По Extract чекаємо фідбек від Анни."), "Записав: по Extract чекаємо фідбек від Анни.");
   assert.equal(sendCalls.length, 1, "no corrective Trello nudge for a Memory-only turn");
+  session.close();
+});
+
+test("#34 native Memory runtime: a successful write with no read-back (the docs/57 S1.1 shape) completes as is", async () => {
+  const { client, sendCalls } = fakeClient([
+    builtIn("g1", "grep", { path: "/mnt/memory/djonik-memory", pattern: "Extract" }),
+    builtInResult("g1"),
+    builtIn("w1", "write", { file_path: COMMITMENT_PATH, content: "# Фідбек від Анни\nstatus: waiting\n" }),
+    builtInResult("w1"),
+    reply("Записав: по Extract чекаємо фідбек від Анни."),
+    IDLE,
+  ]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+  assert.equal(await session.send("По Extract чекаємо фідбек від Анни."), "Записав: по Extract чекаємо фідбек від Анни.");
+  assert.equal(sendCalls.length, 1, "no nudge: a native Memory write needs no extra read");
+  session.close();
+});
+
+test("#34 scope runtime: no Memory ledger — the client neither nudges nor rewrites after a failed Memory write", async () => {
+  // Whether a Memory write succeeded is Claude's judgement from its own tool result (instruction above);
+  // the application deliberately adds no Memory-result inspection.
+  const { client, sendCalls } = fakeClient([
+    builtIn("w1", "write", { file_path: COMMITMENT_PATH, content: "# Фідбек від Анни\nstatus: waiting\n" }),
+    builtInResult("w1", true),
+    reply("Не вдалося зберегти домовленість — запис у Memory повернув помилку."),
+    IDLE,
+  ]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+  assert.equal(await session.send("По Extract чекаємо фідбек від Анни."), "Не вдалося зберегти домовленість — запис у Memory повернув помилку.");
+  assert.equal(sendCalls.length, 1);
+  session.close();
+});
+
+test("#34 Trello runtime: a successful Trello write result alone is still unverified, even beside a successful Memory write (#31)", async () => {
+  const { client, sendCalls } = fakeClient([
+    { type: "agent.mcp_tool_use", id: "t1", name: "trelloWriteCard", mcp_server_name: "trello", input: { action: "update", cardId: "card_A", due: "2026-10-05T09:00:00.000Z" } },
+    { type: "agent.mcp_tool_result", id: "t1_result", mcp_tool_use_id: "t1", is_error: false },
+    builtIn("w1", "write", { file_path: COMMITMENT_PATH, content: "# Фідбек від Анни\nstatus: waiting\n" }),
+    builtInResult("w1"),
+    reply("Готово, дедлайн перенесено і домовленість записано."),
+    IDLE,
+    // After the one corrective nudge the model again touches only Memory.
+    builtIn("w2", "edit", { file_path: COMMITMENT_PATH, old_string: "waiting", new_string: "waiting" }),
+    builtInResult("w2"),
+    reply("Готово."),
+    IDLE,
+  ]);
+  const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
+  await assert.rejects(() => session.send("Перенеси дедлайн картки на понеділок і запиши, що чекаємо Анну."), /did not verify the write/);
+  assert.equal(sendCalls.length, 2, "exactly one corrective nudge, then fail closed");
   session.close();
 });
 

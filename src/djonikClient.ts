@@ -382,6 +382,8 @@ export type DjonikTraceEvent =
  * agent reads and writes those files natively with its built-in file tools; no
  * runtime code parses, caches or verifies them. The provider caps this text at
  * 4096 characters; the tests also keep its UTF-8 size within that, in case bytes are counted.
+ * A successful native write/edit tool result is the persistence evidence; a separate read-back is
+ * optional (docs/56 §19). This applies to Memory files only — Trello writes keep #31 verification.
  */
 export const DJONIK_MEMORY_INSTRUCTIONS =
   "Persistent PM memory across sessions. Write only durable, useful context: " +
@@ -397,7 +399,7 @@ export const DJONIK_MEMORY_INSTRUCTIONS =
   "the user corrects or cancels an earlier accepted plan/commitment, update what is " +
   "remembered so the new version is current and the superseded one is no longer " +
   "presented as still active. An accepted plan or commitment about a Trello card keeps its " +
-  "project and, if known from a fresh read, its card id.\n" +
+  "project and, if freshly read, its card id.\n" +
   "\n" +
   "Commitments, waiting and follow-ups: one small file per accepted outcome at " +
   "commitments/<project-slug>/<outcome>.md (slug as in projects/), with only:\n" +
@@ -435,8 +437,8 @@ export const DJONIK_MEMORY_INSTRUCTIONS =
   "- Commitments are Memory-only: recording or changing one never creates, moves, completes or " +
   "re-dates a card. A card change needs Daniel's explicit request via task-management's " +
   "verified path. If he may mean the card's due, not the check, ask.\n" +
-  "- After a write or edit, read the file back; say it is saved only if the read shows the " +
-  "change, otherwise say it is not.\n" +
+  "- Say saved only after a successful write/edit result, never before; error/unclear: not saved. " +
+  "Read-back optional.\n" +
   "- In a new session, when Daniel refers to an earlier outcome, search commitments/ first; " +
   "read a linked card fresh if its current state matters. If nothing matches, say so; do not " +
   "reconstruct it.\n" +
