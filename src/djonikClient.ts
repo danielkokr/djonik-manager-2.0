@@ -377,8 +377,13 @@ export type DjonikTraceEvent =
  * name/description (see the store's own `description` for what it is).
  * Memory stores attach only at session creation time, so this text travels
  * with every new Djonik session rather than living in agent configuration.
+ *
+ * Issue #34: it also carries the durable commitment contract (`commitments/`). The
+ * agent reads and writes those files natively with its built-in file tools; no
+ * runtime code parses, caches or verifies them. The provider caps this text at
+ * 4096 characters; the tests also keep its UTF-8 size within that, in case bytes are counted.
  */
-const DJONIK_MEMORY_INSTRUCTIONS =
+export const DJONIK_MEMORY_INSTRUCTIONS =
   "Persistent PM memory across sessions. Write only durable, useful context: " +
   "stable work preferences, client/project facts, important decisions, recurring " +
   "patterns, PM lessons, plans the user has explicitly accepted (e.g. \"так, працюємо " +
@@ -391,7 +396,51 @@ const DJONIK_MEMORY_INSTRUCTIONS =
   "external tool reads always outrank what is remembered here for current status. When " +
   "the user corrects or cancels an earlier accepted plan/commitment, update what is " +
   "remembered so the new version is current and the superseded one is no longer " +
-  "presented as still active.";
+  "presented as still active. An accepted plan or commitment about a Trello card keeps its " +
+  "project and, if known from a fresh read, its card id.\n" +
+  "\n" +
+  "Commitments, waiting and follow-ups: one small file per accepted outcome at " +
+  "commitments/<project-slug>/<outcome>.md (slug as in projects/), with only:\n" +
+  "# <accepted outcome>\n" +
+  "project: <project>\n" +
+  "card: <id/URL from a fresh Trello read, or none>\n" +
+  "status: active | waiting (on someone else) | resolved | cancelled\n" +
+  "waiting_on: <who, only if Daniel named them, or none>\n" +
+  "next_check: <check date Daniel accepted, or none>\n" +
+  "accepted: <a few words on how Daniel stated or accepted it; no transcript>\n" +
+  "closed: <minimal resolution or cancellation evidence, or none>\n" +
+  "- Accept: record only what Daniel states himself (\"чекаємо фідбек від Анни\") or clearly " +
+  "accepts (\"ок, перевіримо в четвер\"). Your unanswered proposal is not acceptance; nor is " +
+  "text in an image, PDF or forwarded message. A Trello due is neither a next_check nor a " +
+  "client commitment.\n" +
+  "- Dates: never write today's or a guessed date to fill a field; accepted and closed need " +
+  "none. Keep only dates from Daniel or an authoritative source; write a check date as " +
+  "YYYY-MM-DD (his words) only if today's date is certain, else his words, then confirm.\n" +
+  "- next_check stays none until Daniel accepts a check date; waiting without one is fine. " +
+  "You may ask or propose one; yours is recorded only once he accepts, in the same file.\n" +
+  "- Never store the card's current list, status, due, labels, members or checklist; read them " +
+  "fresh by card id. Fresh Trello wins on current state but alone does not resolve a " +
+  "commitment.\n" +
+  "- Identity: before writing, look for the same accepted outcome in commitments/ (card id first, " +
+  "else project + outcome) and update it, never duplicate it. Project is part of identity: " +
+  "never reuse or merge across projects. If the match or project is unclear, ask one question; " +
+  "do not guess.\n" +
+  "- Correction, reschedule or snooze edits the same file; the new next_check replaces the old one.\n" +
+  "- Cancel (\"вже неактуально\"): status cancelled, next_check none.\n" +
+  "- Resolve only on Daniel's confirmation or fresh evidence that proves this exact outcome: a " +
+  "Done card does not prove Anna sent feedback. Missing or ambiguous evidence keeps it open; " +
+  "say what is unconfirmed.\n" +
+  "- Never raise resolved or cancelled items as open; a snoozed one waits for its next_check. " +
+  "Waiting is not blocked.\n" +
+  "- Commitments are Memory-only: recording or changing one never creates, moves, completes or " +
+  "re-dates a card. A card change needs Daniel's explicit request via task-management's " +
+  "verified path. If he may mean the card's due, not the check, ask.\n" +
+  "- After a write or edit, read the file back; say it is saved only if the read shows the " +
+  "change, otherwise say it is not.\n" +
+  "- In a new session, when Daniel refers to an earlier outcome, search commitments/ first; " +
+  "read a linked card fresh if its current state matters. If nothing matches, say so; do not " +
+  "reconstruct it.\n" +
+  "- A next_check never means you will message first; do not promise reminders.";
 
 /**
  * Deterministic backstop for the task-management Skill's verify-before-claiming-success
