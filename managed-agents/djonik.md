@@ -10,11 +10,8 @@ skills:
     skill_id: skill_01WS6JtY1GMu3rGZaKCVR9w1
     version: skver_01CJQkVY1kp1urhBWQgHUYxW
   - type: custom
-    skill_id: skill_01G9DtQEzPYxgw78riFh8k99
-    version: skver_01EL7d3fy4WWYBSsD3PmK9LQ
-  - type: custom
-    skill_id: skill_01PTmbvLHJj1HuUxvDKhpaiE
-    version: skver_01FdtnnkbePBjNJGTuJyAvhw
+    skill_id: skill_01PxXTvhbZSrbxqi7gmDs6KW
+    version: skver_01RzxVaCr47k6R11pHLWr62e
   - type: custom
     skill_id: skill_015c8dtDnWyDfVLwS6NLS7r6
     version: skver_018sJv1GCnzfZRG4NbExbAzj

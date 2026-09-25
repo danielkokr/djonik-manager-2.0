@@ -24,9 +24,9 @@ import {
   SYSTEM_PROMPT,
 } from "./releaseFixtures.test-helpers.js";
 
-// #41 + #42 — the one combined source-only r28 candidate (Product Owner: one cutover for both). r27 with exactly
-// two changes: the coordinator prompt, and daily-planning + weekly-planning → planning-and-focus. Offline; no Agent
-// v28 and no planning-and-focus Skill exist and none is invented. Ids and versions below are visibly TEST-ONLY.
+// #41 + #42 — the one combined r28 candidate (Product Owner: one cutover for both). r27 with exactly two changes: the
+// coordinator prompt, and daily-planning + weekly-planning → planning-and-focus. Offline. The candidate stays the
+// unresolved input; the real `RELEASE_R28` is covered by releaseR28.test.ts. Ids and versions below are visibly TEST-ONLY.
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TEST_ONLY_AGENT_VERSION = 9_999;
@@ -38,10 +38,12 @@ const ISSUE_41_CANDIDATE_SHA = "8469c4e0b463c92ca0a9c62495243629f591014b7674c84e
 
 const names = (skills: ReadonlyArray<{ name: string }>) => skills.map((skill) => skill.name);
 
-test("r27 is still served; the r28 candidate is not a release, has no Agent version and is not servable", () => {
-  assert.equal(SERVING_RELEASE, RELEASE_R27);
-  assert.deepEqual(Object.keys(RELEASES).sort(), ["r25", "r26", "r27"]);
-  assert.equal(RELEASE_R28_CANDIDATE.agent.version, null, "no Agent v28 exists");
+test("the resolved r28 is served, never the candidate: the candidate itself is not a release, has no Agent version and is not servable", () => {
+  assert.equal(SERVING_RELEASE.id, "r28");
+  assert.notEqual(SERVING_RELEASE as unknown, RELEASE_R28_CANDIDATE);
+  assert.deepEqual(Object.keys(RELEASES).sort(), ["r25", "r26", "r27", "r28"]);
+  assert.equal(Object.values(RELEASES).includes(RELEASE_R28_CANDIDATE as unknown as DjonikRelease), false);
+  assert.equal(RELEASE_R28_CANDIDATE.agent.version, null, "the candidate stays the unresolved input");
   assert.equal(RELEASE_R28_CANDIDATE.agent.fromVersion, RELEASE_R27.agent.version);
   assert.equal("id" in RELEASE_R28_CANDIDATE, false);
   assert.throws(() => resolveReleaseCandidate(RELEASE_R28_CANDIDATE, { skills: {}, agentVersion: TEST_ONLY_AGENT_VERSION }), UnresolvedReleaseCandidateError);

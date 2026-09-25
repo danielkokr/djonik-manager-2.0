@@ -30,15 +30,14 @@ test("source parses as frontmatter + system body and declares the Sonnet 5 mediu
   assert.match(frontmatter, /^name: Джонік$/m);
   assert.match(frontmatter, /^model:\n  id: claude-sonnet-5\n  effort: medium\n  speed: standard$/m);
   assert.ok(system.length > 0);
-  // The serving release (r27, #39): the four accepted coordinator Skills, the accepted #36 work-review Skill
-  // and the #39 pm-rhythm Skill.
+  // r28 (#41 + #42, Agent v28; docs/74): task-management, the #42 planning-and-focus Skill in place of daily-planning
+  // and weekly-planning, studio-intake, the accepted #36 work-review Skill and the #39 pm-rhythm Skill.
   const skills = [...frontmatter.matchAll(/- type: custom\n\s+skill_id: (\S+)\n\s+version: (\S+)/g)];
   assert.deepEqual(
     skills.map((entry) => entry[1]),
     [
       "skill_01WS6JtY1GMu3rGZaKCVR9w1",
-      "skill_01G9DtQEzPYxgw78riFh8k99",
-      "skill_01PTmbvLHJj1HuUxvDKhpaiE",
+      "skill_01PxXTvhbZSrbxqi7gmDs6KW",
       "skill_015c8dtDnWyDfVLwS6NLS7r6",
       "skill_0169h7GYNYUDDDZteDCUV2fE",
       "skill_01GzpQX3bVuWNk5bhbGcbzku",

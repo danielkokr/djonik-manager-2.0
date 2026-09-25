@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28_CANDIDATE, RELEASES, RETIRED_BY_R28, SERVING_RELEASE, type DjonikRelease } from "./release.js";
+import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28, RELEASE_R28_CANDIDATE, RELEASES, RETIRED_BY_R28, SERVING_RELEASE, type DjonikRelease } from "./release.js";
 import { SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
 import { buildAgentUpdateBody } from "./releasePlan.js";
 import { PROJECT_HEALTH_SPECIALIST_AGENT_ID } from "./djonikClient.js";
@@ -25,10 +25,12 @@ test("the serving release of this revision is one of the reviewed releases", () 
   assert.equal(RELEASES[SERVING_RELEASE.id], SERVING_RELEASE);
 });
 
-test("this revision serves r27: Agent v27, every Skill explicitly pinned, #36 exposed, writes gated (docs/66)", () => {
-  assert.equal(SERVING_RELEASE, RELEASE_R27);
-  assert.equal(SERVING_RELEASE.agent.version, 27);
+test("this revision serves r28 (source cutover, docs/75): Agent v28, every Skill pinned with its Session spelling, #36 exposed, writes gated", () => {
+  assert.equal(SERVING_RELEASE, RELEASE_R28);
+  assert.equal(SERVING_RELEASE.agent.version, 28);
   assert.ok(SERVING_RELEASE.skills.every((skill) => skill.pin.kind === "explicit"), "no `latest` is served");
+  // Without its measured Session spelling a pinned Skill fails the startup Session attestation closed.
+  assert.ok(SERVING_RELEASE.skills.every((skill) => skill.pin.kind === "explicit" && /^\d+$/.test(skill.pin.sessionVersion ?? "")), "every sessionVersion measured");
   assert.deepEqual(SERVING_RELEASE.customTools, ["trello_work_history"]);
   assert.deepEqual(SERVING_RELEASE.confirmationRequired, { builtIn: ["write", "edit"], mcp: { trello: ["trelloWriteCard"] } });
 });
@@ -84,23 +86,31 @@ const surfaceOf = (release: DjonikRelease) => {
   return { skills, tools: (tools as Array<Record<string, unknown>>).map(omitEmpty) };
 };
 
-test("the serving release equals the declarative coordinator source managed-agents/djonik.md", () => {
+test("the serving release (r28) equals the declarative coordinator source managed-agents/djonik.md", () => {
+  // #41 + #42 source cutover (docs/75): djonik.md — body AND frontmatter — is the serving release, in one equality.
   const release = SERVING_RELEASE;
-  // #41 + #42: djonik.md's body already carries the r28-candidate prompt; no Agent v28 exists, so r27 is still served
-  // with the pre-#41 prompt, which differs by exactly the #41 and #42 edits (releaseR28Candidate.test.ts). The
-  // frontmatter still declares r27's Skills: planning-and-focus has no remote id to declare yet. At the r28 cutover
-  // this returns to a single equality: serving prompt SHA = djonik.md body, declared Skills = served Skills.
-  assert.equal(RELEASE_R28_CANDIDATE.systemSha256, sha(SYSTEM_PROMPT), "prompt SHA of the pending r28 candidate = djonik.md body");
-  assert.equal(release.systemSha256, sha(PRE_41_SYSTEM_PROMPT), "served prompt SHA = djonik.md body before #41");
+  assert.equal(release.systemSha256, sha(SYSTEM_PROMPT), "serving prompt SHA = djonik.md body");
+  assert.equal(RELEASE_R28_CANDIDATE.systemSha256, sha(SYSTEM_PROMPT));
   assert.deepEqual(declared.model, { id: release.model.id, effort: release.model.effort, speed: release.model.speed });
   assert.deepEqual(declared.multiagent, { type: "coordinator", agents: [{ type: "agent", id: release.specialist.id, version: release.specialist.version }] });
   assert.deepEqual(declared.mcp_servers, release.mcpServers.map((server) => ({ type: "url", name: server.name, url: server.url })));
   // Skills (with explicit pins) and every tool — enabled flags AND permission policies — exactly as the
   // generated update body of the serving release states them.
   assert.deepEqual(declaredSurface, surfaceOf(release));
+  const declaredIds = (declared.skills as Array<Record<string, string>>).map((skill) => skill.skill_id);
+  for (const retired of RETIRED_BY_R28) {
+    assert.ok(!declaredIds.includes(RELEASE_R27.skills.find((skill) => skill.name === retired)!.skillId), `${retired} is not declared`);
+  }
 });
 
-test("the declaration cannot silently stay on r26 while r27 is served (#39 Stage 3B-3A)", () => {
+test("r27 (production until the r28 deploy, then the rollback) keeps the pre-#41 prompt and its six pins", () => {
+  assert.equal(RELEASES.r27, RELEASE_R27);
+  assert.equal(RELEASE_R27.agent.version, 27);
+  assert.equal(RELEASE_R27.systemSha256, sha(PRE_41_SYSTEM_PROMPT));
+  assert.deepEqual(surfaceOf(RELEASE_R27).tools, declaredSurface.tools, "rollback keeps the same tools and permission policies");
+});
+
+test("the declaration cannot silently fall back to r26 (#39 Stage 3B-3A)", () => {
   assert.notDeepEqual(declaredSurface, surfaceOf(RELEASE_R26), "djonik.md still declares r26");
   const trello = (declared.tools as Array<Record<string, any>>).find((tool) => tool.mcp_server_name === "trello")!;
   assert.equal(trello.default_config.permission_policy.type, "always_ask", "Trello fails closed for unreviewed tools");
