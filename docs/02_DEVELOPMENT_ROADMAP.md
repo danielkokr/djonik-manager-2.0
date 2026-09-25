@@ -33,6 +33,7 @@ Governance [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) rec
 |---|---|---|
 | 0 | **NOW — [#53 — Reconnect to the same Session when the stream drops; never lose an accepted message](https://github.com/danielkokr/djonik-manager-2.0/issues/53)** | Source only; replay idempotency first (docs/30 §164) |
 | 1 | [#45 — Factual grounding + approved message templates](https://github.com/danielkokr/djonik-manager-2.0/issues/45) | After #53; source + Skill text; no new tools |
+| 1a | [#54 — Reminders stored and delivered by code](https://github.com/danielkokr/djonik-manager-2.0/issues/54) | After #45 (uses its templates); Product Owner decision 2026-09-25 |
 | 2 | [#46 — PM quality benchmark + decision trace](https://github.com/danielkokr/djonik-manager-2.0/issues/46) | After #45 source; baseline run needs its own budget authorization |
 | 3 | [#47 — Read-only `trello_board_snapshot`](https://github.com/danielkokr/djonik-manager-2.0/issues/47) | Accepted through #46 |
 | 4 | [#48 — Forwarded client messages → one proposal with ✅](https://github.com/danielkokr/djonik-manager-2.0/issues/48) | After #45–#47; supersedes #43 |
