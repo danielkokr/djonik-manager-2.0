@@ -126,7 +126,7 @@ Daniel пересилає одне або кілька повідомлень. D
 
 ## 7. Фінальна черга issues (після обговорення)
 
-**Заведено в GitHub 2026-09-25 за рішенням PO:** №1 → [#45](https://github.com/danielkokr/djonik-manager-2.0/issues/45), №2 → [#46](https://github.com/danielkokr/djonik-manager-2.0/issues/46), №3 → [#47](https://github.com/danielkokr/djonik-manager-2.0/issues/47), №4 → [#48](https://github.com/danielkokr/djonik-manager-2.0/issues/48), №5 → [#49](https://github.com/danielkokr/djonik-manager-2.0/issues/49), №6 → [#50](https://github.com/danielkokr/djonik-manager-2.0/issues/50), №7 → [#51](https://github.com/danielkokr/djonik-manager-2.0/issues/51), №8 → [#52](https://github.com/danielkokr/djonik-manager-2.0/issues/52). №9 (roadmap) виконано одразу в docs/02. Canonical NOW — #45.
+**Заведено в GitHub 2026-09-25 за рішенням PO:** №1 → [#45](https://github.com/danielkokr/djonik-manager-2.0/issues/45), №2 → [#46](https://github.com/danielkokr/djonik-manager-2.0/issues/46), №3 → [#47](https://github.com/danielkokr/djonik-manager-2.0/issues/47), №4 → [#48](https://github.com/danielkokr/djonik-manager-2.0/issues/48), №5 → [#49](https://github.com/danielkokr/djonik-manager-2.0/issues/49), №6 → [#50](https://github.com/danielkokr/djonik-manager-2.0/issues/50), №7 → [#51](https://github.com/danielkokr/djonik-manager-2.0/issues/51), №8 → [#52](https://github.com/danielkokr/djonik-manager-2.0/issues/52). №9 (roadmap) виконано одразу в docs/02. Пізніше того ж дня за рішенням PO першим поставлено [#53](https://github.com/danielkokr/djonik-manager-2.0/issues/53) — перепідключення до тієї ж Session при обриві stream (продакшн-збій «event stream ended unexpectedly»). Canonical NOW — #53, далі #45.
 
 | # | Issue | Що входить |
 |---|---|---|

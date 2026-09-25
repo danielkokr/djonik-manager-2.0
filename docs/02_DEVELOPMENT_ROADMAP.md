@@ -27,9 +27,12 @@ Governance [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) rec
 - **#43 is superseded by #48** (status reports are folded into client-message intake). **#44 moves to the end** and is decided by #46 benchmark scenarios.
 - #35 pilot continues as real use in parallel.
 
+**Update 2026-09-25 (later) — reliability first (Product Owner decision).** A production turn failed with `Djonik session event stream ended unexpectedly`: the stream is opened once, a drop is detected only on the next message, and the Session is replaced, so the message and in-Session context are lost (known gap, docs/30 §118). [#53](https://github.com/danielkokr/djonik-manager-2.0/issues/53) becomes canonical NOW, ahead of #45.
+
 | Order | Issue | Condition |
 |---|---|---|
-| 1 | **NOW — [#45 — Factual grounding + approved message templates](https://github.com/danielkokr/djonik-manager-2.0/issues/45)** | Source + Skill text; no new tools |
+| 0 | **NOW — [#53 — Reconnect to the same Session when the stream drops; never lose an accepted message](https://github.com/danielkokr/djonik-manager-2.0/issues/53)** | Source only; replay idempotency first (docs/30 §164) |
+| 1 | [#45 — Factual grounding + approved message templates](https://github.com/danielkokr/djonik-manager-2.0/issues/45) | After #53; source + Skill text; no new tools |
 | 2 | [#46 — PM quality benchmark + decision trace](https://github.com/danielkokr/djonik-manager-2.0/issues/46) | After #45 source; baseline run needs its own budget authorization |
 | 3 | [#47 — Read-only `trello_board_snapshot`](https://github.com/danielkokr/djonik-manager-2.0/issues/47) | Accepted through #46 |
 | 4 | [#48 — Forwarded client messages → one proposal with ✅](https://github.com/danielkokr/djonik-manager-2.0/issues/48) | After #45–#47; supersedes #43 |
