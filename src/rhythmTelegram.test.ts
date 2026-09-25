@@ -85,6 +85,7 @@ test("proactive sender: final text plus the bounded keyboard; no actions → no 
   const send = createTelegramProactiveSender({ sendMessage: async (chatId, text, other) => (calls.push({ chatId, text, other }), { message_id: 55 }) }, CHAT);
   assert.deepEqual(await send({ text: "План тижня…", actions: ["accept_plan", "modify", "details"] }, REF), { status: "sent", messageId: 55 });
   assert.deepEqual(calls[0].other, {
+    parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: [[
         { text: "✅ Приймаю", callback_data: "rh1:acc:abcdef123456" },
@@ -94,7 +95,7 @@ test("proactive sender: final text plus the bounded keyboard; no actions → no 
     },
   });
   await send({ text: "Notice", actions: [] }, REF);
-  assert.equal(calls[1].other, undefined);
+  assert.deepEqual(calls[1].other, { parse_mode: "HTML" }, "no actions → no reply_markup");
 });
 
 test("send errors: Telegram API refusal is definite; network failure is unknown (never blindly resent)", () => {

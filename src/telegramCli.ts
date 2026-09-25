@@ -37,6 +37,7 @@ import {
 } from "./rhythmRuntime.js";
 import { createFileRhythmStateStore } from "./rhythmState.js";
 import { createTelegramProactiveSender, enqueueClickAfterPendingText } from "./rhythmTelegram.js";
+import { createFormattedTextSender } from "./telegramFormat.js";
 import { TrelloWorkHistoryClient } from "./trelloWorkHistory.js";
 
 /**
@@ -166,9 +167,11 @@ async function main(): Promise<number> {
    * `src/telegramDispatch.test.ts` for integration-level proof of exactly
    * one Managed Agent call per grouped intake.
    */
+  // Every user-visible reply and notice renders through the one shared Telegram HTML path (telegramFormat.ts).
+  const sendText = createFormattedTextSender(bot.api);
   const { onDispatch, onFailure } = createGroupDispatchHandlers({
     djonikSession,
-    sendMessage: (chatId, text) => bot.api.sendMessage(chatId, text),
+    sendMessage: sendText,
     onGroupTelemetry: turnTelemetry ? (telemetry) => console.error("[group]", JSON.stringify(telemetry)) : undefined,
   });
   const groupBuffer = new MessageGroupBuffer({ onDispatch, onFailure });
@@ -306,7 +309,7 @@ async function main(): Promise<number> {
     flushIntake: () => groupBuffer.flushAll(),
     intakeIdle: () => groupBuffer.whenIdle(),
     inFlightChatIds: () => groupBuffer.inFlightChatIds(),
-    notify: (chatId, text) => bot.api.sendMessage(chatId, text),
+    notify: sendText,
     closeSession: () => djonikSession.closeIfOpen(),
     log: (line) => console.log(line),
     drainMs: config.drainMs,

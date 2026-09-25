@@ -1,9 +1,10 @@
 import { GrammyError } from "grammy";
 import type { IncomingFragment, MessageGroupBuffer } from "./messageGrouping.js";
-import { decodeCallbackData, toTelegramReplyMarkup, utteranceFor, type OutboundMessage, type RhythmActionId } from "./rhythmActions.js";
+import { decodeCallbackData, toTelegramReplyMarkup, utteranceFor, type OutboundMessage, type RhythmActionId, type TelegramInlineKeyboard } from "./rhythmActions.js";
 import { kyivLabel, type ProactiveSender, type SendOutcome } from "./rhythmRunner.js";
 import { findDeliveryByRef, type RhythmStateStore } from "./rhythmState.js";
 import { isAllowedUser } from "./telegramAdapter.js";
+import { sendFormattedMessage, type TelegramTextApi } from "./telegramFormat.js";
 
 /**
  * Telegram transport for Working Rhythm (#39): sending a final proactive message with an optional
@@ -13,9 +14,7 @@ import { isAllowedUser } from "./telegramAdapter.js";
 // --- Outbound ----------------------------------------------------------------------------------------
 
 /** The subset of grammY's `bot.api` this transport needs (keeps it testable without a live bot). */
-export interface TelegramProactiveApi {
-  sendMessage(chatId: number, text: string, other?: { reply_markup?: ReturnType<typeof toTelegramReplyMarkup> }): Promise<{ message_id: number }>;
-}
+export type TelegramProactiveApi = TelegramTextApi<TelegramInlineKeyboard>;
 
 /** An API refusal (Telegram answered `ok: false`) is definite non-delivery; anything else is unknown. */
 export function classifySendError(error: unknown): SendOutcome {
@@ -25,13 +24,15 @@ export function classifySendError(error: unknown): SendOutcome {
 
 /**
  * Sends one final proactive message to Daniel's private chat. The keyboard comes only from the
- * delivery's bounded action list; the text is Claude's final reply (never interim text).
+ * delivery's bounded action list; the text is Claude's final reply (never interim text), rendered by the
+ * same shared Telegram HTML path as ordinary replies (`sendFormattedMessage`). A parse-error fallback's
+ * own failure is classified exactly like any other send failure.
  */
 export function createTelegramProactiveSender(api: TelegramProactiveApi, chatId: number): ProactiveSender {
   return async (message: OutboundMessage, ref: string) => {
     const replyMarkup = toTelegramReplyMarkup(message.actions, ref);
     try {
-      const sent = await api.sendMessage(chatId, message.text, replyMarkup ? { reply_markup: replyMarkup } : undefined);
+      const sent = await sendFormattedMessage(api, chatId, message.text, replyMarkup);
       return { status: "sent", messageId: sent.message_id };
     } catch (error) {
       return classifySendError(error);
