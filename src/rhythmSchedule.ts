@@ -27,6 +27,9 @@ const PARTS = new Intl.DateTimeFormat("en-US", {
 
 const WEEKDAYS: Record<string, IsoWeekday> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
 
+/** Short Ukrainian weekday label by `IsoWeekday` (index 0 unused): rhythm prompts and the #41 clock header. */
+export const WEEKDAY_UK = ["", "пн", "вт", "ср", "чт", "пт", "сб", "нд"] as const;
+
 export function kyivLocal(instant: Date): KyivLocal {
   if (Number.isNaN(instant.getTime())) throw new Error("Invalid instant.");
   const parts = Object.fromEntries(PARTS.formatToParts(instant).map((part) => [part.type, part.value]));

@@ -8,6 +8,7 @@ import {
   DjonikUnverifiedMutationError,
   type DjonikCustomToolExecutor,
 } from "./djonikClient.js";
+import { isClockHeader } from "./turnClock.js";
 
 // #39 Stage 2 — `sendTraced`: the same serving Session, FIFO queue and turn pipeline as `send`/`sendOrdered`,
 // returning the final reply, the Session that produced it and the turn's content-free tool uses.
@@ -150,7 +151,9 @@ test("#32 kept: an incomplete traced turn (non-custom requires_action) is never 
 
 test("one FIFO queue: send, sendTraced and sendOrdered run strictly in call order; send/sendOrdered still return plain strings", async () => {
   const { session, push, sendCalls } = await open();
-  const texts = () => sendCalls.map((call) => ((call as { events: Array<{ content: Array<{ text: string }> }> }).events[0].content[0].text));
+  const blocks = () => sendCalls.map((call) => (call as { events: Array<{ content: Array<{ text: string }> }> }).events[0].content);
+  // #41: Daniel's turns (A, C) open with the clock header; the autonomous turn B does not.
+  const texts = () => blocks().map((content) => content.filter((block) => !isClockHeader(block.text))[0].text);
   const a = session.send("A");
   const b = session.sendTraced([{ type: "text", text: "B" }], "rhythm_ritual");
   const c = session.sendOrdered([{ type: "text", text: "C" }]);
@@ -161,6 +164,7 @@ test("one FIFO queue: send, sendTraced and sendOrdered run strictly in call orde
   const traced = await b;
   assert.equal(await c, "reply C");
   assert.deepEqual(texts(), ["A", "B", "C"]);
+  assert.deepEqual(blocks().map((content) => isClockHeader(content[0].text)), [true, false, true]);
   assert.deepEqual(
     traced,
     { reply: "reply B", sessionId: "sesn_traced", toolUses: [], confirmations: [], autonomousMutationAttempt: false },

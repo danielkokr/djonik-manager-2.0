@@ -28,6 +28,7 @@ import { executeTrelloWorkHistoryFromEnvironment, type CustomToolExecutionResult
 import { CustomToolResolution } from "./customToolResolution.js";
 import { ToolConfirmationLifecycle, type ConfirmationRecord, type ConfirmationRequest } from "./toolConfirmation.js";
 import { mutationAuthorityFor, type MutationAuthority, type TurnOrigin } from "./turnAuthority.js";
+import { buildClockHeader } from "./turnClock.js";
 
 /** The only custom tool this client settles (#36): read-only, so no side-effect idempotency key is
  *  needed beyond the #40 per-id lifecycle (docs/01 §13 admission rule). */
@@ -100,6 +101,9 @@ export interface DjonikSessionHandle {
    * order, unchanged. For a turn that needs a different, source-faithful
    * interleaving of text/image/document (e.g. text → image → correcting
    * text), use `sendOrdered` instead.
+   *
+   * Every one of Daniel's turns (`send`, `sendOrdered`, a human-origin `sendTraced`) is preceded on the wire
+   * by one adapter clock-header text block (#41, `turnClock.ts`); his own blocks follow unchanged.
    */
   send(
     text: string,
@@ -892,6 +896,8 @@ export interface DjonikSessionOptions {
   /** Receives the created Session before its event stream opens; throwing aborts the connection
    *  without sending anything (startup/serving release attestation, #33). */
   attestSession?: (session: unknown) => void | Promise<void>;
+  /** Clock for the #41 clock header of Daniel's turns; tests fix it. Defaults to the system clock. */
+  now?: () => Date;
 }
 
 /** How one submitted `user.message` ended (#32). Only `end_turn` is a completed turn. */
@@ -950,6 +956,7 @@ export async function connectToDjonik(
   sessionOptions: DjonikSessionOptions = {},
 ): Promise<DjonikTracedSessionHandle> {
   const memoryAccess = sessionOptions.memoryAccess ?? "read_write";
+  const now = sessionOptions.now ?? (() => new Date());
   const session = await client.beta.sessions.create({
     agent: sessionOptions.agentVersion === undefined ? agentId : { type: "agent", id: agentId, version: sessionOptions.agentVersion },
     environment_id: environmentId,
@@ -1380,9 +1387,14 @@ export async function connectToDjonik(
     if (content.length === 0) {
       throw new Error("Djonik turn requires non-empty text and/or an attachment.");
     }
+    // #41: Daniel's turn (typed, grouped, image/document, rhythm button) opens with the deterministic clock
+    // header as its OWN text block, so his blocks stay byte-for-byte as sent. Autonomous rhythm turns carry
+    // their own time line; the verification nudge below is not Daniel's turn. Counts above stay his content.
+    const turnContent: SendableContentBlock[] =
+      turnAuthority === "human" ? [{ type: "text", text: buildClockHeader(now()) }, ...content] : content;
 
     try {
-      let end = await runTurn([{ type: "user.message", content }]);
+      let end = await runTurn([{ type: "user.message", content: turnContent }]);
 
       let outcomes = ledger.outcomes();
       // A nudge is a corrective read request for a turn that COMPLETED with an unverified write. A turn

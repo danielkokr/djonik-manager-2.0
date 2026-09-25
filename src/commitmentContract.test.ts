@@ -245,7 +245,14 @@ test("#34 Trello: a write result alone is still not verification — #31 direct 
 
 test("#34: a next check is not a promise of proactive delivery (#39 owns the rhythm)", () => {
   assert.match(rule("A next_check never"), /A next_check never means you will message first; do not promise reminders/);
-  assert.match(coordinatorPrompt(), /You do not message him first, run a schedule or track his commitments automatically — never promise that/);
+  // #41 replaced the pre-#39 coordinator line ("You do not message him first…") with the active rhythm's truth.
+  // The #34 intent still holds there: remembering a commitment is not a reminder promise, and a rhythm turn only
+  // reads and proposes.
+  const coordinator = coordinatorPrompt();
+  assert.doesNotMatch(coordinator, /You do not message him first/);
+  assert.doesNotMatch(coordinator, /remind/i);
+  assert.match(coordinator, /remember commitments he explicitly accepts/);
+  assert.match(coordinator, /Autonomous rhythm turns only read and propose/);
 });
 
 // --- Runtime boundaries (deterministic, offline) --------------------------------------------------

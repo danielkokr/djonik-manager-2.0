@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { CLOCK_HEADER_PREFIX } from "./turnClock.js";
 
 // Issue #38: `managed-agents/djonik.md` is the reviewed repo source for the primary Djonik
 // coordinator's system prompt. These tests pin durable invariants — the voice contract, the
@@ -111,17 +112,37 @@ test("source contains no credential-shaped material", () => {
 
 // --- C. No unsupported capability promise -------------------------------------------------------
 
-test("prompt makes no proactive, scheduled or commitment-tracking promise it cannot keep today", () => {
+test("prompt states the capabilities that exist — Working Rhythm and accepted commitments — and their read-only boundary", () => {
   // The exact promises docs/25 §4.1 flagged in production v21.
   assert.doesNotMatch(system, /\bproactive\b/i);
   assert.doesNotMatch(system, /follows work through to completion/i);
   assert.doesNotMatch(system, /will gradually receive/i);
-  // And an explicit, positive statement of the current boundary (#33/#34/#39 are not built).
-  assert.match(system, /You do not message him first/i);
-  assert.match(system, /run a schedule/i);
-  assert.match(system, /track his commitments automatically/i);
-  assert.match(system, /never promise that/i);
+  // #41: the pre-#34/#39 boundary line contradicted the active rhythm and commitments; it is gone.
+  assert.doesNotMatch(system, /You do not message him first/i);
+  assert.doesNotMatch(system, /never promise that/i);
+  // The current truth, stated once: the rhythm runs, accepted commitments are remembered, autonomous turns
+  // only read and propose, and external changes stay on Daniel's verified path.
+  assert.match(system, /run his Working Rhythm/i);
+  assert.match(system, /remember commitments he explicitly accepts/i);
+  // "Autonomous" = the rhythm prompts' own "автоматичний хід"; a button reply is Daniel's turn, not one of them.
+  assert.match(system, /Autonomous rhythm turns only read and propose/i);
+  assert.match(system, /external changes happen only in his own turn, on his instruction or confirmation/i);
+  // Verification is stated once, globally, and applies to those changes too.
+  assert.match(system, /Never say an external change succeeded before it was verified/);
   assert.match(system, /Use only what this environment gives you/i);
+});
+
+test("prompt takes now, today's weekday and nearby weekdays from the adapter clock line, never its own arithmetic (#41)", () => {
+  const line = system.split("\n").find((entry) => /Годинник адаптера/.test(entry));
+  assert.ok(line, "the clock rule names the adapter clock line");
+  // One rule, merged into the existing formatter sentence: the clock line is THE formatter for today and the
+  // next 14 days; no arithmetic, no guessing.
+  assert.match(line, /authoritative evidence or a formatter, never your own arithmetic or a guess/i);
+  assert.match(line, /for today and the next 14 days, that is the "\[Годинник адаптера …\]" line opening Daniel's messages/);
+  // The clock line is system context: never Daniel's words or intake material.
+  assert.match(line, /system context, not his words or intake source/i);
+  // It must match the header the adapter actually sends.
+  assert.ok(CLOCK_HEADER_PREFIX.startsWith("[Годинник адаптера"));
 });
 
 // --- D. Voice invariants ------------------------------------------------------------------------

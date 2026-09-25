@@ -18,6 +18,21 @@ import {
   type DjonikTraceEvent,
   type DjonikTurnTelemetry,
 } from "./djonikClient.js";
+import { isClockHeader } from "./turnClock.js";
+
+/**
+ * Daniel's own part of a sent `user.message` batch (#41): asserts the batch opens with exactly one adapter
+ * clock header block and returns the batch with that block removed, i.e. exactly the blocks built from
+ * Daniel's parts. Content assertions below compare his blocks byte for byte, as before the header existed.
+ */
+function danielTurn(sendCall: unknown): unknown {
+  const call = sendCall as { events: Array<{ type: string; content: Array<{ type: string; text?: string }> }> };
+  assert.equal(call.events.length, 1);
+  const [clock, ...rest] = call.events[0].content;
+  assert.ok(clock.type === "text" && isClockHeader(clock.text ?? ""), "Daniel's turn opens with the clock header block");
+  assert.ok(!rest.some((block) => block.type === "text" && isClockHeader(block.text ?? "")), "exactly one clock header");
+  return { events: [{ ...call.events[0], content: rest }] };
+}
 
 /**
  * Minimal fake of the Anthropic client surface `connectToDjonik` touches.
@@ -586,7 +601,7 @@ test("send with an image constructs a user.message with an image block before th
     byteSize: 12345,
   });
 
-  assert.deepEqual(sendCalls[0], {
+  assert.deepEqual(danielTurn(sendCalls[0]), {
     events: [
       {
         type: "user.message",
@@ -623,7 +638,7 @@ test("send with a real tiny PNG fixture produces the exact schema-conformant out
     byteSize: decoded.length,
   });
 
-  const sent = sendCalls[0] as { events: Array<{ type: string; content: unknown[] }> };
+  const sent = danielTurn(sendCalls[0]) as { events: Array<{ type: string; content: unknown[] }> };
   assert.equal(sent.events.length, 1);
   assert.equal(sent.events[0].type, "user.message");
   const imageBlock = sent.events[0].content[0] as {
@@ -655,7 +670,7 @@ test("send with an image and no caption omits the text block entirely", async ()
 
   await session.send("", { data: "aW1hZ2UtZGF0YQ==", mediaType: "image/png", byteSize: 99 });
 
-  assert.deepEqual(sendCalls[0], {
+  assert.deepEqual(danielTurn(sendCalls[0]), {
     events: [
       {
         type: "user.message",
@@ -709,7 +724,7 @@ test("send with a document constructs a user.message with a document block befor
     { data: "ZmFrZS1wZGYtYnl0ZXM=", mediaType: "application/pdf", byteSize: 54321, filename: "brief.pdf" },
   );
 
-  assert.deepEqual(sendCalls[0], {
+  assert.deepEqual(danielTurn(sendCalls[0]), {
     events: [
       {
         type: "user.message",
@@ -733,7 +748,7 @@ test("send with a document and no filename omits the title field", async () => {
 
   await session.send("", undefined, { data: "cGRm", mediaType: "application/pdf", byteSize: 10 });
 
-  assert.deepEqual(sendCalls[0], {
+  assert.deepEqual(danielTurn(sendCalls[0]), {
     events: [
       {
         type: "user.message",
@@ -750,7 +765,7 @@ test("send with a document and no caption omits the text block entirely", async 
 
   await session.send("", undefined, { data: "cGRmMg==", mediaType: "application/pdf", byteSize: 20, filename: "notes.pdf" });
 
-  const sent = sendCalls[0] as { events: Array<{ content: unknown[] }> };
+  const sent = danielTurn(sendCalls[0]) as { events: Array<{ content: unknown[] }> };
   assert.equal(sent.events[0].content.length, 1, "no text block when caption is empty");
   session.close();
 });
@@ -808,7 +823,7 @@ test("send accepts an array of images and constructs one content block per image
     { data: "Qg==", mediaType: "image/jpeg", byteSize: 2 },
   ]);
 
-  assert.deepEqual(sendCalls[0], {
+  assert.deepEqual(danielTurn(sendCalls[0]), {
     events: [
       {
         type: "user.message",
@@ -833,7 +848,7 @@ test("send accepts a mixed grouped intake: multiple images and a document togeth
     [{ data: "cGRm", mediaType: "application/pdf", byteSize: 3, filename: "brief.pdf" }],
   );
 
-  const sent = sendCalls[0] as { events: Array<{ content: Array<{ type: string }> }> };
+  const sent = danielTurn(sendCalls[0]) as { events: Array<{ content: Array<{ type: string }> }> };
   assert.deepEqual(
     sent.events[0].content.map((block) => block.type),
     ["image", "document", "text"],
@@ -847,7 +862,7 @@ test("a single image/document object still works exactly as before the array gen
 
   await session.send("одне фото", { data: "QQ==", mediaType: "image/jpeg", byteSize: 1 });
 
-  assert.deepEqual(sendCalls[0], {
+  assert.deepEqual(danielTurn(sendCalls[0]), {
     events: [
       {
         type: "user.message",
@@ -873,7 +888,7 @@ test("sendOrdered builds content blocks in exactly the given part order (text ->
     { type: "text", text: "Корекція: залиш тільки один варіант" },
   ]);
 
-  assert.deepEqual(sendCalls[0], {
+  assert.deepEqual(danielTurn(sendCalls[0]), {
     events: [
       {
         type: "user.message",
@@ -898,7 +913,7 @@ test("sendOrdered builds content blocks in exactly the given part order (image -
   ]);
 
   assert.deepEqual(
-    (sendCalls[0] as { events: Array<{ content: Array<{ type: string }> }> }).events[0].content.map((b) => b.type),
+    (danielTurn(sendCalls[0]) as { events: Array<{ content: Array<{ type: string }> }> }).events[0].content.map((b) => b.type),
     ["image", "text"],
   );
   session.close();
@@ -922,7 +937,7 @@ test("sendOrdered skips an empty text part (e.g. a medialess fragment with no ca
     { type: "text", text: "" },
   ]);
 
-  const sent = sendCalls[0] as { events: Array<{ content: unknown[] }> };
+  const sent = danielTurn(sendCalls[0]) as { events: Array<{ content: unknown[] }> };
   assert.equal(sent.events[0].content.length, 1, "empty text part must not produce a text block");
   session.close();
 });
@@ -985,7 +1000,7 @@ test("send()'s legacy fixed order (images, documents, text) is unchanged after t
   );
 
   assert.deepEqual(
-    (sendCalls[0] as { events: Array<{ content: Array<{ type: string }> }> }).events[0].content.map((b) => b.type),
+    (danielTurn(sendCalls[0]) as { events: Array<{ content: Array<{ type: string }> }> }).events[0].content.map((b) => b.type),
     ["image", "document", "text"],
   );
   session.close();

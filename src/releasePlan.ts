@@ -1,5 +1,5 @@
 import { confirmationPolicyProblems, resolveCandidateSkills, type CandidateResolution, type DjonikRelease, type DjonikReleaseCandidate } from "./release.js";
-import { SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
+import { sha256, SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
 
 /** What an `agents.update` body is derived from: a release's Skills and tool surface (never its Agent version). */
 type ReleaseUpdateSource = Pick<DjonikRelease, "skills" | "builtInTools" | "customTools" | "mcpToolsets" | "confirmationRequired">;
@@ -70,4 +70,19 @@ export function buildCandidateUpdateBody(
   resolution: Pick<CandidateResolution, "skills">,
 ): Record<string, unknown> {
   return buildAgentUpdateBody({ ...candidate, skills: resolveCandidateSkills(candidate, resolution) }, candidate.agent.fromVersion);
+}
+
+/**
+ * The `agents.update` body for a candidate whose only change is the coordinator prompt (#41 → r28): the
+ * optimistic-concurrency `version` precondition and `system`, nothing else — Skills, tools, model, MCP servers
+ * and roster are preserved by omission (the docs/42 v24 → v25 precedent). `system` is the reviewed
+ * `managed-agents/djonik.md` body; it is refused unless it hashes to the candidate's `systemSha256`, so a
+ * wrong or edited prompt can never be sent. Performs no request; sending it needs Product Owner authorization.
+ */
+export function buildSystemUpdateBody(
+  candidate: Pick<DjonikReleaseCandidate, "systemSha256" | "agent">,
+  system: string,
+): { version: number; system: string } {
+  if (sha256(system) !== candidate.systemSha256) throw new Error("System prompt does not match the candidate's reviewed SHA-256.");
+  return { version: candidate.agent.fromVersion, system };
 }

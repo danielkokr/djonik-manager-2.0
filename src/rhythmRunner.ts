@@ -8,7 +8,7 @@ import {
   type RhythmConfigSource,
 } from "./rhythmConfig.js";
 import { boundTelegramText, buttonsFor, RHYTHM_ACTIONS, type OutboundMessage, type ProactiveKind } from "./rhythmActions.js";
-import { evaluateRituals, isQuietTime, kyivLocal, type RitualKind, type RitualOccurrence } from "./rhythmSchedule.js";
+import { evaluateRituals, isQuietTime, kyivLocal, WEEKDAY_UK, type RitualKind, type RitualOccurrence } from "./rhythmSchedule.js";
 import {
   advanceSignalLedger,
   detectSignals,
@@ -144,8 +144,6 @@ export function isSilentReply(reply: string): boolean {
 }
 
 // --- Prompts (turn instructions only; voice and content rules live in the pm-rhythm Skill) ----------
-
-const WEEKDAY_UK = ["", "пн", "вт", "ср", "чт", "пт", "сб", "нд"];
 
 export function kyivLabel(instant: Date, withTime = false): string {
   const local = kyivLocal(instant);

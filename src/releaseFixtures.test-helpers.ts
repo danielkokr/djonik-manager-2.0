@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,39 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const djonikSource = readFileSync(join(repoRoot, "managed-agents", "djonik.md"), "utf8").replace(/\r\n/g, "\n");
 /** The coordinator prompt exactly as the Agent stores it (docs/42: byte-identical to the file body). */
 export const SYSTEM_PROMPT = /^---\n[\s\S]*?\n---\n\n([\s\S]*)$/.exec(djonikSource)![1].replace(/\n$/, "");
+
+/** The two #41 coordinator-prompt edits (r27 → r28 candidate), exact text before → after. */
+export const ISSUE_41_PROMPT_EDITS: ReadonlyArray<{ before: string; after: string }> = [
+  {
+    before:
+      "You answer when Daniel writes to you. You do not message him first, run a schedule or track his commitments automatically — never promise that.",
+    after:
+      "You answer when Daniel writes, run his Working Rhythm and remember commitments he explicitly accepts. Autonomous rhythm turns only " +
+      "read and propose; external changes happen only in his own turn, on his instruction or confirmation.",
+  },
+  {
+    before: "never your own arithmetic.",
+    after:
+      "never your own arithmetic or a guess; for today and the next 14 days, that is the \"[Годинник адаптера …]\" line opening " +
+      "Daniel's messages — system context, not his words or intake source.",
+  },
+];
+
+/** `SYSTEM_PROMPT` with each #41 edit reverted; every `after` must occur exactly once in the source. */
+export const PRE_41_SYSTEM_PROMPT = ISSUE_41_PROMPT_EDITS.reduce((prompt, edit) => {
+  const count = prompt.split(edit.after).length - 1;
+  if (count !== 1) throw new Error(`#41 prompt edit found ${count} times in managed-agents/djonik.md`);
+  return prompt.replace(edit.after, () => edit.before);
+}, SYSTEM_PROMPT);
+
+/** The prompt text whose SHA-256 a release pins: the current source (r28 candidate) or the pre-#41 prompt
+ *  every existing Agent version (v25–v27) carries. */
+export function systemPromptFor(release: Pick<DjonikRelease, "systemSha256">): string {
+  const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+  const match = [SYSTEM_PROMPT, PRE_41_SYSTEM_PROMPT].find((prompt) => sha(prompt) === release.systemSha256);
+  if (match === undefined) throw new Error(`no fixture prompt for system ${release.systemSha256.slice(0, 12)}`);
+  return match;
+}
 
 const allow = { type: "always_allow" };
 const ask = { type: "always_ask" };
@@ -62,7 +96,7 @@ export function agentVersionFixture(release: DjonikRelease): Record<string, unkn
     archived_at: null,
     name: "Джонік",
     model: { id: release.model.id, effort: { type: release.model.effort }, speed: release.model.speed },
-    system: SYSTEM_PROMPT,
+    system: systemPromptFor(release),
     skills: skills(release),
     tools: tools(release),
     mcp_servers: release.mcpServers.map((server) => ({ type: "url", ...server })),

@@ -405,6 +405,35 @@ export const RELEASE_R27: DjonikRelease = {
   session: SESSION,
 };
 
+// --- r28 candidate (#41, source only) -------------------------------------------------------------------------
+
+/**
+ * r28 candidate — what #41 needs from the Agent: r27 with exactly one change, the coordinator prompt
+ * (`managed-agents/djonik.md` after the two #41 edits: the stale "you do not message him first…" line replaced by
+ * the active Working Rhythm/commitments truth, plus the clock-line rule). Same Agent identity, model, Skills and
+ * pins, specialist v4, tools and permission policies, MCP servers and Session resources as r27.
+ *
+ * No Agent v28 exists: `version` stays null, the candidate is not in `RELEASES` and cannot be served or attested.
+ * Its Agent version is created only by a separately authorized prompt-only update from v27
+ * (`buildSystemUpdateBody`, the docs/42 precedent); `resolveReleaseCandidate` then turns it into `r28` with the
+ * provider's real version number. `releaseR28Candidate.test.ts` proves the prompt diff is exactly the two edits.
+ */
+export const RELEASE_R28_CANDIDATE: DjonikReleaseCandidate = {
+  candidateId: "r28-candidate",
+  becomes: "r28",
+  agent: { id: COORDINATOR_ID, fromVersion: 27, version: null },
+  model: RELEASE_R27.model,
+  systemSha256: "8469c4e0b463c92ca0a9c62495243629f591014b7674c84e28347860ef13813c",
+  skills: RELEASE_R27.skills,
+  specialist: RELEASE_R27.specialist,
+  builtInTools: RELEASE_R27.builtInTools,
+  customTools: RELEASE_R27.customTools,
+  mcpServers: RELEASE_R27.mcpServers,
+  mcpToolsets: RELEASE_R27.mcpToolsets,
+  confirmationRequired: RELEASE_R27.confirmationRequired!,
+  session: RELEASE_R27.session,
+};
+
 export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_R25, r26: RELEASE_R26, r27: RELEASE_R27 };
 
 /**

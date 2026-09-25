@@ -4,11 +4,11 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASES, SERVING_RELEASE, type DjonikRelease } from "./release.js";
+import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28_CANDIDATE, RELEASES, SERVING_RELEASE, type DjonikRelease } from "./release.js";
 import { SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
 import { buildAgentUpdateBody } from "./releasePlan.js";
 import { PROJECT_HEALTH_SPECIALIST_AGENT_ID } from "./djonikClient.js";
-import { SYSTEM_PROMPT } from "./releaseFixtures.test-helpers.js";
+import { PRE_41_SYSTEM_PROMPT, SYSTEM_PROMPT } from "./releaseFixtures.test-helpers.js";
 
 // #33 release definitions: one reviewed expectation per release, kept in lockstep with the declarative
 // Agent source (`managed-agents/*.md`) and the repo Skills, so a release can never silently diverge from
@@ -86,7 +86,11 @@ const surfaceOf = (release: DjonikRelease) => {
 
 test("the serving release equals the declarative coordinator source managed-agents/djonik.md", () => {
   const release = SERVING_RELEASE;
-  assert.equal(release.systemSha256, sha(SYSTEM_PROMPT), "prompt SHA = djonik.md body");
+  // #41: djonik.md already carries the r28-candidate prompt; no Agent v28 exists, so r27 is still served with the
+  // pre-#41 prompt, which differs by exactly the two #41 edits (releaseR28Candidate.test.ts). At the r28 cutover
+  // this returns to a single equality: serving prompt SHA = djonik.md body.
+  assert.equal(RELEASE_R28_CANDIDATE.systemSha256, sha(SYSTEM_PROMPT), "prompt SHA of the pending r28 candidate = djonik.md body");
+  assert.equal(release.systemSha256, sha(PRE_41_SYSTEM_PROMPT), "served prompt SHA = djonik.md body before #41");
   assert.deepEqual(declared.model, { id: release.model.id, effort: release.model.effort, speed: release.model.speed });
   assert.deepEqual(declared.multiagent, { type: "coordinator", agents: [{ type: "agent", id: release.specialist.id, version: release.specialist.version }] });
   assert.deepEqual(declared.mcp_servers, release.mcpServers.map((server) => ({ type: "url", name: server.name, url: server.url })));
