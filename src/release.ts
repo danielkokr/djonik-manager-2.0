@@ -203,8 +203,6 @@ export function confirmationPolicyProblems(release: Pick<DjonikRelease, "builtIn
   return problems;
 }
 
-export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_R25, r26: RELEASE_R26 };
-
 // --- r27 candidate (#39 Stage 3A, source only) -----------------------------------------------------------
 
 /** The Skill of a release candidate that has no remote Skill/version yet. Deliberately not a `ReleaseSkill`:
@@ -249,7 +247,8 @@ export const REVIEWED_TRELLO_READ_TOOLS = [
 ] as const;
 
 /**
- * r27 candidate — r26 plus exactly three changes:
+ * r27 candidate — the reviewed Stage 3A *intent*, kept as the input that `RELEASE_R27` was resolved from
+ * (Stage 3B-1, docs/64); it stays unresolved by design and is never served. r26 plus exactly three changes:
  *  1. the `pm-rhythm` Skill (repo `.claude/skills/pm-rhythm/SKILL.md`, #39 Stage 1), not yet synced — its
  *     remote Skill id and `skver_` pin are UNRESOLVED;
  *  2. every reachable mutating tool is `always_ask`: built-in `write`/`edit` (incl. native Memory writes)
@@ -339,10 +338,78 @@ export function resolveReleaseCandidate(candidate: DjonikReleaseCandidate, resol
   return { ...rest, id: becomes, agent: { id: agent.id, version }, skills };
 }
 
+// --- r27 (#39 Stage 3B-1) -----------------------------------------------------------------------------------
+
+/** `pm-rhythm` as synced 2026-09-25 (docs/64 §3): the only version of its Skill, byte-identical to the
+ *  committed `.claude/skills/pm-rhythm/SKILL.md` (SHA-256 `8617fd5c…84f9`). `sessionVersion` was read from
+ *  the zero-event inspection Session pinned to v27 (`sesn_01MN2WHdhwexuwxhu8sLB91G`): 0.38 s before the
+ *  `skver_`'s `created_at`, the same spelling rule as docs/53 §4. */
+const PM_RHYTHM_SKILL = { skillId: "skill_01GzpQX3bVuWNk5bhbGcbzku", version: "skver_01Y77TKeXY9suV99XZU3cv5a", sessionVersion: "1790320523604075" };
+
+/**
+ * r27 — the #39 release (Agent v27, created 2026-09-25 from v26 with the generated candidate body under a
+ * `version: 26` precondition and read back exactly; docs/64). It is `RELEASE_R27_CANDIDATE` with its real
+ * identifiers: r26 + the `pm-rhythm` Skill (explicit pin) + the pre-execution permission policies (built-in
+ * `write`/`edit` and Trello `trelloWriteCard` `always_ask`; Trello default `always_ask`; the nine reviewed
+ * reads explicitly `always_allow`). Model, prompt, specialist v4, accepted Skill pins, custom tool, MCP
+ * servers, disabled writes/Calendar and Session resources are r26's. Written out, not derived at import, so
+ * the release cannot change if the candidate is edited; `releaseR27.test.ts` proves the two are equal.
+ *
+ * Defined but NOT served: production still serves r26 until the Stage 3B-2 cutover.
+ */
+export const RELEASE_R27: DjonikRelease = {
+  id: "r27",
+  agent: { id: COORDINATOR_ID, version: 27 },
+  model: MODEL,
+  systemSha256: SYSTEM_SHA256,
+  skills: [
+    ...RELEASE_R26.skills,
+    {
+      name: "pm-rhythm",
+      skillId: PM_RHYTHM_SKILL.skillId,
+      pin: { kind: "explicit", version: PM_RHYTHM_SKILL.version, sessionVersion: PM_RHYTHM_SKILL.sessionVersion },
+    },
+  ],
+  specialist: SPECIALIST,
+  builtInTools: ["read", "write", "edit", "glob", "grep"],
+  customTools: ["trello_work_history"],
+  mcpServers: MCP_SERVERS,
+  mcpToolsets: [
+    {
+      server: "trello",
+      defaultEnabled: true,
+      defaultPolicy: "always_ask",
+      overrides: {
+        trelloReadBoard: true,
+        trelloReadCard: true,
+        trelloReadChecklist: true,
+        trelloReadInbox: true,
+        trelloReadList: true,
+        trelloReadMember: true,
+        trelloReadPlanner: true,
+        trelloReadWorkspace: true,
+        trelloSearch: true,
+        trelloWriteBoard: false,
+        trelloWriteCard: true,
+        trelloWriteChecklist: false,
+        trelloWriteInbox: false,
+        trelloWriteList: false,
+        trelloWritePlanner: false,
+      },
+    },
+    { server: "google-calendar-calendarmcp", defaultEnabled: false, overrides: {} },
+  ],
+  confirmationRequired: { builtIn: ["write", "edit"], mcp: { trello: ["trelloWriteCard"] } },
+  session: SESSION,
+};
+
+export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_R25, r26: RELEASE_R26, r27: RELEASE_R27 };
+
 /**
  * The one release this application revision serves. Changing it is the application half of a cutover
  * (docs/52): it was flipped to `r26` after Agent v26 existed and its read-back attested (docs/53); flip it
- * back (or redeploy the last r25 revision) for rollback. It is deliberately not an environment variable:
+ * back (or redeploy the last r25 revision) for rollback. r27 exists (Agent v27, docs/64) but is not served
+ * until the separately authorized Stage 3B-2 cutover. It is deliberately not an environment variable:
  * the reviewed revision, not host configuration, decides what is served.
  */
 export const SERVING_RELEASE: DjonikRelease = RELEASE_R26;

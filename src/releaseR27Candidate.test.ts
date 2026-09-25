@@ -49,9 +49,9 @@ function mismatchesOf(fn: () => unknown): string[] {
 
 // --- Serving stays r26 ----------------------------------------------------------------------------------------
 
-test("SERVING_RELEASE is still r26; no r27 release exists; the candidate is not servable", () => {
+test("SERVING_RELEASE is still r26; r27 exists only as the resolved release (Stage 3B-1); the candidate is not servable", () => {
   assert.equal(SERVING_RELEASE, RELEASE_R26);
-  assert.deepEqual(Object.keys(RELEASES).sort(), ["r25", "r26"]);
+  assert.deepEqual(Object.keys(RELEASES).sort(), ["r25", "r26", "r27"]);
   assert.equal(Object.values(RELEASES).includes(RELEASE_R27_CANDIDATE as unknown as DjonikRelease), false);
   assert.equal(RELEASE_R27_CANDIDATE.agent.version, null, "no Agent v27 exists");
   assert.equal("id" in RELEASE_R27_CANDIDATE, false, "a candidate has no release id");
