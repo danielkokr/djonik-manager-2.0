@@ -3,7 +3,7 @@ import "dotenv/config";
 import { RELEASES, SERVING_RELEASE } from "./release.js";
 import { ReleaseAttestationError } from "./releaseAttestation.js";
 import { exitNaturally } from "./processExit.js";
-import { buildAgentUpdateBody } from "./releasePlan.js";
+import { buildReleaseUpdateBody } from "./releasePlan.js";
 import { EXIT_CONFIG, preflightRelease, readBackServingSession } from "./servingRelease.js";
 
 /**
@@ -33,7 +33,12 @@ async function main(): Promise<number> {
       console.error("--plan needs --from <current Agent version>");
       return 2;
     }
-    console.log(JSON.stringify(buildAgentUpdateBody(release, from), null, 2));
+    try {
+      console.log(JSON.stringify(buildReleaseUpdateBody(release, from), null, 2));
+    } catch (error) {
+      console.error(`[release-check] --plan refused: ${(error as Error).message}`);
+      return 2;
+    }
     return 0;
   }
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();

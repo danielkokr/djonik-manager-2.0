@@ -405,26 +405,40 @@ export const RELEASE_R27: DjonikRelease = {
   session: SESSION,
 };
 
-// --- r28 candidate (#41, source only) -------------------------------------------------------------------------
+// --- r28 candidate (#41 + #42, source only) -------------------------------------------------------------------
+
+/** The r27 Skills that #42 folds into `planning-and-focus`: the day and the week are one decision (docs/70 §3). */
+export const RETIRED_BY_R28 = ["daily-planning", "weekly-planning"] as const;
 
 /**
- * r28 candidate — what #41 needs from the Agent: r27 with exactly one change, the coordinator prompt
- * (`managed-agents/djonik.md` after the two #41 edits: the stale "you do not message him first…" line replaced by
- * the active Working Rhythm/commitments truth, plus the clock-line rule). Same Agent identity, model, Skills and
- * pins, specialist v4, tools and permission policies, MCP servers and Session resources as r27.
+ * r28 candidate — the one combined cutover the Product Owner chose for #41 and #42: r27 with exactly two changes.
+ *  1. The coordinator prompt `managed-agents/djonik.md`: the two #41 edits (active Working Rhythm/commitments line,
+ *     clock-line rule) and the #42 PM core (who Daniel is, "Deciding what matters", Backlog semantics, and the
+ *     health-review vs project-view boundary of the Project Health line).
+ *  2. Skills: `daily-planning` and `weekly-planning` are removed and replaced, in the same position, by
+ *     `planning-and-focus` (repo `.claude/skills/planning-and-focus/SKILL.md`), not yet synced — its remote Skill id
+ *     and `skver_` pin are UNRESOLVED. The other four pins are r27's.
+ * Same Agent identity, model, specialist v4, tools and permission policies, MCP servers and Session resources as
+ * r27. The Memory instructions (#42 fixed places) live in application source and ship with the app deploy.
  *
  * No Agent v28 exists: `version` stays null, the candidate is not in `RELEASES` and cannot be served or attested.
- * Its Agent version is created only by a separately authorized prompt-only update from v27
- * (`buildSystemUpdateBody`, the docs/42 precedent); `resolveReleaseCandidate` then turns it into `r28` with the
- * provider's real version number. `releaseR28Candidate.test.ts` proves the prompt diff is exactly the two edits.
+ * Its Agent version is created only by a separately authorized update from v27 whose body `buildCandidateUpdateBody`
+ * derives from the real `planning-and-focus` pin and the reviewed prompt (Skills, tools and `system` together — never
+ * the prompt alone, which would reference a Skill the Agent lacks); `resolveReleaseCandidate` then turns it into
+ * `r28` with the provider's real version number. `releaseR28Candidate.test.ts` proves both diffs are exactly these.
  */
 export const RELEASE_R28_CANDIDATE: DjonikReleaseCandidate = {
   candidateId: "r28-candidate",
   becomes: "r28",
   agent: { id: COORDINATOR_ID, fromVersion: 27, version: null },
   model: RELEASE_R27.model,
-  systemSha256: "8469c4e0b463c92ca0a9c62495243629f591014b7674c84e28347860ef13813c",
-  skills: RELEASE_R27.skills,
+  systemSha256: "c85e7e621af71f78890ddfe7c270ce737ce83d58e58d5543d1ea7be17964e7da",
+  skills: RELEASE_R27.skills.flatMap((skill): Array<ReleaseSkill | UnresolvedCandidateSkill> => {
+    if (skill.name === "daily-planning") {
+      return [{ name: "planning-and-focus", skillId: null, pin: { kind: "unresolved", reason: "planning-and-focus not yet synced to Managed Agents (#42)" } }];
+    }
+    return (RETIRED_BY_R28 as readonly string[]).includes(skill.name) ? [] : [skill];
+  }),
   specialist: RELEASE_R27.specialist,
   builtInTools: RELEASE_R27.builtInTools,
   customTools: RELEASE_R27.customTools,

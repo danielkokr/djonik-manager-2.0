@@ -204,17 +204,20 @@ test("#34 N real task mutation: an explicit card change still goes through task-
 
 // --- Cross-cutting semantics #34 relies on ------------------------------------------------------
 
-test("#34: waiting is not blocked — in the commitment contract, the coordinator and both planning Skills", () => {
+test("#34: waiting is not blocked — in the commitment contract, the coordinator and the planning Skill", () => {
   assert.match(rule("Never raise"), /Waiting is not blocked/);
   assert.match(coordinatorPrompt(), /Waiting alone does not prove that/);
-  assert.match(readSkill("weekly-planning"), /waiting work.*not automatically blocked/is);
-  assert.match(readSkill("daily-planning"), /Waiting card is not automatically Blocked/);
+  // #42: planning-and-focus uses the coordinator's global Waiting/Blocked meaning instead of restating it, and
+  // treats Waiting as out of today's work unless its check is due — never as a blocker.
+  const planning = readSkill("planning-and-focus");
+  assert.match(planning, /Waiting is today's work only when its check is due/);
+  assert.doesNotMatch(planning, /waiting[^.\n]*\b(?:is|means|counts as)\s+blocked/i);
 });
 
-test("#34: a Trello due is not a client commitment — in the contract, the coordinator and weekly planning", () => {
+test("#34: a Trello due is not a client commitment — in the contract, the coordinator and the planning Skill", () => {
   assert.match(rule("Accept:"), /A Trello due is neither a next_check nor a client commitment/);
   assert.match(coordinatorPrompt(), /A Trello `due` is a recorded date, not by itself a client commitment/);
-  assert.match(readSkill("weekly-planning"), /hard external\/client deadline only when that commitment is separately confirmed/);
+  assert.match(readSkill("planning-and-focus"), /Work someone is waiting for by a time outranks work that only has a date/);
 });
 
 // Product Lead decision after the first live validation (docs/57, docs/56 §19): for NATIVE Memory files the

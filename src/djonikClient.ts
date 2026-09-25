@@ -441,26 +441,32 @@ export type DjonikTraceEvent =
  *
  * Issue #34: it also carries the durable commitment contract (`commitments/`). The
  * agent reads and writes those files natively with its built-in file tools; no
- * runtime code parses, caches or verifies them. The provider caps this text at
+ * runtime code parses, caches or verifies them.
+ *
+ * Issue #42: it names the two fixed places planning reads — `working-style.md` (only what Daniel
+ * states or accepts) and `plans/current-week.md` (the one accepted week plan, replaced on the next
+ * acceptance). Both are accepted context, never live Trello state. The provider caps this text at
  * 4096 characters; the tests also keep its UTF-8 size within that, in case bytes are counted.
  * A successful native write/edit tool result is the persistence evidence; a separate read-back is
  * optional (docs/56 §19). This applies to Memory files only — Trello writes keep #31 verification.
  */
 export const DJONIK_MEMORY_INSTRUCTIONS =
-  "Persistent PM memory across sessions. Write only durable, useful context: " +
-  "stable work preferences, client/project facts, important decisions, recurring " +
-  "patterns, PM lessons, plans the user has explicitly accepted (e.g. \"так, працюємо " +
-  "за цим планом\"), and explicit personal/client commitments the user states (e.g. " +
-  "\"я точно зроблю X до пʼятниці\"). Do not write every suggestion or provisional plan " +
-  "as if it were accepted — only write an accepted plan or commitment when the user's " +
+  "Write only durable, useful context: stable preferences, client/project facts, " +
+  "important decisions, recurring patterns, PM lessons, accepted plans and " +
+  "commitments. A suggestion is " +
+  "not a plan: only write an accepted plan or commitment when the user's " +
   "acceptance/commitment is actually explicit, not merely discussed. Do not store live " +
-  "Trello/task state, transient chat, or anything trivial. An accepted plan or " +
-  "commitment recorded here is historical/decision context, not live task state: fresh " +
-  "external tool reads always outrank what is remembered here for current status. When " +
-  "the user corrects or cancels an earlier accepted plan/commitment, update what is " +
-  "remembered so the new version is current and the superseded one is no longer " +
-  "presented as still active. An accepted plan or commitment about a Trello card keeps its " +
-  "project and, if freshly read, its card id.\n" +
+  "Trello/task state, transient chat, or anything trivial. Memory is decision " +
+  "context: fresh external tool reads always outrank what is " +
+  "remembered here for current status. A correction or cancel updates the record so " +
+  "the superseded one is no longer presented as still active. An accepted plan or " +
+  "commitment about a Trello card keeps its project and, if freshly read, its card id.\n" +
+  "\n" +
+  "Fixed places: working-style.md is how Daniel works, only as he states or accepts " +
+  "it, never inferred. plans/current-week.md is the one accepted week plan: week: <its " +
+  "Monday, from the clock line>, up to 3 outcomes with project and why, what he chose " +
+  "to drop. A newly accepted week plan replaces it; an accepted change edits it. No day " +
+  "plans, no card state. Another week's plan is not this week's frame.\n" +
   "\n" +
   "Commitments, waiting and follow-ups: one small file per accepted outcome at " +
   "commitments/<project-slug>/<outcome>.md (slug as in projects/), with only:\n" +

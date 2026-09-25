@@ -33,12 +33,48 @@ export const ISSUE_41_PROMPT_EDITS: ReadonlyArray<{ before: string; after: strin
   },
 ];
 
-/** `SYSTEM_PROMPT` with each #41 edit reverted; every `after` must occur exactly once in the source. */
-export const PRE_41_SYSTEM_PROMPT = ISSUE_41_PROMPT_EDITS.reduce((prompt, edit) => {
-  const count = prompt.split(edit.after).length - 1;
-  if (count !== 1) throw new Error(`#41 prompt edit found ${count} times in managed-agents/djonik.md`);
-  return prompt.replace(edit.after, () => edit.before);
-}, SYSTEM_PROMPT);
+/** The four #42 coordinator-prompt edits (PM core), exact text before → after, applied on top of #41. */
+export const ISSUE_42_PROMPT_EDITS: ReadonlyArray<{ before: string; after: string }> = [
+  {
+    // Who Daniel is and what he delegates.
+    before: "You are Djonik, Daniel's project manager and chief of staff — a colleague, not a command bot.",
+    after:
+      "You are Djonik, Daniel's project manager and chief of staff — a colleague, not a command bot. Daniel is a designer " +
+      "running several client projects; he delegates the PM work to you so his attention stays on design.",
+  },
+  {
+    // The PM core: a new section right before Factual semantics.
+    before: "\n# Factual semantics\n",
+    after: `\n${/\n# Deciding what matters\n[\s\S]*?\n(?=\n# Factual semantics\n)/.exec(SYSTEM_PROMPT)?.[0].slice(1) ?? "<missing PM core>"}\n# Factual semantics\n`,
+  },
+  {
+    // Backlog semantics moved up next to Waiting/Blocked.
+    before: "Waiting alone does not prove that.",
+    after: "Waiting alone does not prove that. `Backlog` is a queue: not started is not Waiting, Blocked or at risk.",
+  },
+  {
+    // Project Health keeps health reviews; "по X що в мене?" is focus planning.
+    before: "A question about a project's current condition, risk or blockers goes to the Djonik Project Health Specialist, not to you.",
+    after:
+      "A health review of a project — its current condition, risks, blockers, what is stuck — goes to the Djonik Project Health " +
+      "Specialist, not to you; what Daniel has to do on a project (\"по X що в мене?\") is focus planning, yours.",
+  },
+];
+
+/** `prompt` with each edit reverted; every `after` must occur exactly once. */
+function revertEdits(prompt: string, edits: ReadonlyArray<{ before: string; after: string }>, issue: string): string {
+  return edits.reduce((text, edit) => {
+    const count = text.split(edit.after).length - 1;
+    if (count !== 1) throw new Error(`${issue} prompt edit found ${count} times in managed-agents/djonik.md`);
+    return text.replace(edit.after, () => edit.before);
+  }, prompt);
+}
+
+/** The #41-only prompt (the superseded prompt-only r28 candidate, SHA `8469c4e0…`): `SYSTEM_PROMPT` minus #42. */
+export const PRE_42_SYSTEM_PROMPT = revertEdits(SYSTEM_PROMPT, ISSUE_42_PROMPT_EDITS, "#42");
+
+/** The prompt every existing Agent version (v25–v27) carries: `SYSTEM_PROMPT` minus #42, then minus #41. */
+export const PRE_41_SYSTEM_PROMPT = revertEdits(PRE_42_SYSTEM_PROMPT, ISSUE_41_PROMPT_EDITS, "#41");
 
 /** The prompt text whose SHA-256 a release pins: the current source (r28 candidate) or the pre-#41 prompt
  *  every existing Agent version (v25–v27) carries. */

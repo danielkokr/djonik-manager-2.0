@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28_CANDIDATE, RELEASES, SERVING_RELEASE, type DjonikRelease } from "./release.js";
+import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28_CANDIDATE, RELEASES, RETIRED_BY_R28, SERVING_RELEASE, type DjonikRelease } from "./release.js";
 import { SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
 import { buildAgentUpdateBody } from "./releasePlan.js";
 import { PROJECT_HEALTH_SPECIALIST_AGENT_ID } from "./djonikClient.js";
@@ -86,9 +86,10 @@ const surfaceOf = (release: DjonikRelease) => {
 
 test("the serving release equals the declarative coordinator source managed-agents/djonik.md", () => {
   const release = SERVING_RELEASE;
-  // #41: djonik.md already carries the r28-candidate prompt; no Agent v28 exists, so r27 is still served with the
-  // pre-#41 prompt, which differs by exactly the two #41 edits (releaseR28Candidate.test.ts). At the r28 cutover
-  // this returns to a single equality: serving prompt SHA = djonik.md body.
+  // #41 + #42: djonik.md's body already carries the r28-candidate prompt; no Agent v28 exists, so r27 is still served
+  // with the pre-#41 prompt, which differs by exactly the #41 and #42 edits (releaseR28Candidate.test.ts). The
+  // frontmatter still declares r27's Skills: planning-and-focus has no remote id to declare yet. At the r28 cutover
+  // this returns to a single equality: serving prompt SHA = djonik.md body, declared Skills = served Skills.
   assert.equal(RELEASE_R28_CANDIDATE.systemSha256, sha(SYSTEM_PROMPT), "prompt SHA of the pending r28 candidate = djonik.md body");
   assert.equal(release.systemSha256, sha(PRE_41_SYSTEM_PROMPT), "served prompt SHA = djonik.md body before #41");
   assert.deepEqual(declared.model, { id: release.model.id, effort: release.model.effort, speed: release.model.speed });
@@ -163,13 +164,18 @@ test("the specialist pin matches the reviewed specialist source and the client's
 test("pinned Skill versions are the accepted repo Skills (recorded hashes in docs/42 and docs/32)", () => {
   const recorded: Record<string, string> = {
     "task-management": "e994d31a",
-    "daily-planning": "7fc9ff92",
-    "weekly-planning": "0d6cca38",
     "work-review": "c079d285",
   };
   for (const [name, prefix] of Object.entries(recorded)) {
     assert.ok(RELEASE_R26.skills.some((skill) => skill.name === name));
     assert.equal(sha(read(".claude", "skills", name, "SKILL.md")).slice(0, 8), prefix, `${name} repo source drifted from its pinned version`);
+  }
+  // #42 retires daily-planning (`7fc9ff92…`) and weekly-planning (`0d6cca38…`) from the next release. Their pinned
+  // versions stay immutable on the provider for the served r27 and its rollback; their source leaves the repo
+  // (git history keeps it), so no repo file can silently drift from — or be re-synced as — a retired Skill.
+  for (const retired of RETIRED_BY_R28) {
+    assert.ok(RELEASE_R27.skills.some((skill) => skill.name === retired && skill.pin.kind === "explicit"), `${retired} stays pinned in r27`);
+    assert.throws(() => read(".claude", "skills", retired, "SKILL.md"), /ENOENT/, `${retired} source is retired`);
   }
 });
 

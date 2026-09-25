@@ -33,6 +33,9 @@ test("project-health frontmatter covers natural health questions without claimin
 });
 
 test("project-health explicitly hands daily, weekly, and mutation follow-ups to their owning Skills", () => {
+  // The specialist's pinned Skill (v4) is deliberately unchanged by #42: it still names the old planning Skills.
+  // The specialist cannot load coordinator Skills, so this is dead text, not a live route; the coordinator decides
+  // follow-ups (planning-and-focus). Rewording it needs a new specialist version — #44 owns that decision.
   const section = projectHealthSection(readSkill("project-health"), "Scope and handoffs");
   assert.match(section, /daily-planning/i);
   assert.match(section, /weekly-planning/i);
@@ -261,34 +264,17 @@ test("planning and task Skills share global semantics without adopting Project H
   const health = readSkill("project-health");
   assert.match(health, /hand off to the daily-planning or weekly-planning Skill/i);
   assert.match(health, /task-management owns that mutation request/i);
-  for (const name of ["daily-planning", "weekly-planning", "task-management", "studio-intake"]) {
+  for (const name of ["planning-and-focus", "task-management", "studio-intake"]) {
     const other = readSkill(name);
     assert.doesNotMatch(other, /project-health/, `${name} must not depend on project-health`);
   }
   assert.doesNotMatch(readSkill("studio-intake"), /lastActivityAt/, "intake does not interpret Trello activity");
 });
 
-test("daily planning distinguishes Waiting and Blocked without using activity or due as capacity evidence", () => {
-  const daily = readSkill("daily-planning");
-  assert.match(daily, /waiting work.*separately.*blocked/is);
-  assert.match(daily, /concrete dependency that prevents progress/i);
-  assert.match(daily, /Waiting card is not automatically Blocked/i);
-  assert.match(daily, /lastActivityAt.*not show Daniel worked or made progress/i);
-  assert.match(daily, /due date alone.*spare capacity.*enough time/i);
-  assert.doesNotMatch(daily, /explicit blockers \(waiting on/i);
-});
-
-test("weekly planning separates recorded due, confirmed commitment, Waiting and Blocked", () => {
-  const weekly = readSkill("weekly-planning");
-  assert.match(weekly, /recorded Trello due dates/i);
-  assert.match(weekly, /hard external\/client deadline only when that commitment is separately confirmed/i);
-  assert.match(weekly, /waiting work.*not automatically blocked/is);
-  assert.match(weekly, /blocked work.*concrete dependency or problem prevents progress/is);
-  assert.match(weekly, /lastActivityAt.*not proof of Daniel's work or progress/i);
-  assert.match(weekly, /does not know the user's actual hours\/availability unless the user has stated them/i);
-  assert.doesNotMatch(weekly, /hard deadlines.*tasks with a due date landing this week/i);
-  assert.doesNotMatch(weekly, /waiting\/blocked work/i);
-});
+// The daily-planning / weekly-planning source tests retired with those Skills (#42). Their surviving guarantees —
+// Waiting ≠ Blocked, activity ≠ work, due ≠ commitment or capacity, no invented hours — are pinned for
+// planning-and-focus and the coordinator in planningAndFocus.test.ts, commitmentContract.test.ts and
+// djonikAgentSource.test.ts.
 
 test("read-only task lookup does not invent completion time or work from current card metadata", () => {
   const task = readSkill("task-management");

@@ -19,7 +19,8 @@ const frontmatter = match[1];
 /** The system prompt as it would be sent: the file's body without the file's own trailing newline. */
 const system = match[2].replace(/\n$/, "");
 
-const skillSources = ["task-management", "daily-planning", "weekly-planning", "studio-intake"].map((name) =>
+// #42: planning-and-focus replaces daily-planning + weekly-planning in the next release.
+const skillSources = ["task-management", "planning-and-focus", "studio-intake", "pm-rhythm"].map((name) =>
   readFileSync(join(repoRoot, ".claude", "skills", name, "SKILL.md"), "utf8").replace(/\r\n/g, "\n"),
 );
 
@@ -322,8 +323,9 @@ test("prompt delegates domain detail to the Skills instead of restating their pr
   assert.doesNotMatch(system, /attach_label|list_labels/i);
   assert.doesNotMatch(system, /Inbox/);
   assert.doesNotMatch(system, /checklist/i);
-  // Cross-domain field meanings belong here; domain procedures still belong in Skills.
-  assert.doesNotMatch(system, /Backlog/);
+  // Cross-domain field meanings belong here; domain procedures still belong in Skills. #42 moved the one-line
+  // Backlog meaning up with Waiting/Blocked; how to plan around a backlog stays in planning-and-focus.
+  assert.match(system, /`Backlog` is a queue/);
   assert.match(system, /lastActivityAt/);
   assert.match(system, /dueComplete/);
   assert.match(system, /Waiting/);
@@ -381,6 +383,85 @@ test("prompt stays a role/voice/boundaries document rather than growing into a p
   // old 2600-byte source ceiling was superseded when #38 added always-visible factual semantics.
   // Review this upper bound whenever an intentional architecture change needs more core text;
   // there is no minimum prompt size.
+  // #42 (docs/70 §7.1) intentionally moved the PM judgement core here, because a priority model inside a Skill the
+  // model may not load cannot shape ordinary turns or rhythm turns: 3794 → ~5.4 KB. The bound was reviewed for it.
   const bytes = Buffer.byteLength(system, "utf8");
-  assert.ok(bytes <= 3800, `review coordinator prompt growth (${bytes} bytes); 3800 is an editorial heuristic`);
+  assert.ok(bytes <= 5500, `review coordinator prompt growth (${bytes} bytes); 5500 is an editorial heuristic`);
+});
+
+// --- H. PM judgement core (#42) ------------------------------------------------------------------
+// The coordinator carries a compact decision model that is present in every turn — ordinary and rhythm — without a
+// Skill being loaded first. Like the rest of this file, these tests pin concepts and boundaries, not sentences.
+
+const pmCore = () => {
+  const section = system.split("# Deciding what matters\n")[1]?.split("\n# ")[0];
+  assert.ok(section, "the PM core is its own coordinator section");
+  return section;
+};
+const pmSignals = () => pmCore().split("\n").filter((line) => line.startsWith("- "));
+const signalAbout = (concept: RegExp) => {
+  const line = pmSignals().find((candidate) => concept.test(candidate));
+  assert.ok(line, `expected a PM signal about ${concept}`);
+  return line;
+};
+
+test("#42 PM core: Daniel delegates the choice; Trello supplies facts, the priority is Djonik's judgement", () => {
+  assert.match(system, /designer/i);
+  assert.match(system, /delegates the PM work to you/i);
+  const core = pmCore();
+  assert.match(core, /\bchoose\b/i);
+  assert.match(core, /Trello[^.]*facts[^.]*judgement/i);
+  assert.match(core, /board leave his attention|most of the board/i, "the why: less to hold, not more");
+  assert.match(core, /rhythm turn/i, "the same judgement serves rhythm turns without touching pm-rhythm");
+});
+
+test("#42 PM core: a handful of signals — commitments, finishing, context switching, passing the ball, week frame, fit", () => {
+  assert.ok(pmSignals().length >= 4 && pmSignals().length <= 6, "a handful of signals, not a policy manual");
+  assert.match(signalAbout(/commitment/i), /external|someone waits/i);
+  assert.match(signalAbout(/finish/i), /start/i);
+  assert.match(signalAbout(/finish/i), /context switch/i, "WIP / switching has a cost");
+  assert.match(signalAbout(/ball/i), /feedback|client/i);
+  assert.match(signalAbout(/week plan/i), /priorit/i);
+  assert.match(signalAbout(/week plan/i), /fits/i);
+});
+
+test("#42 explicit-instruction precedence: Daniel's words lead; Djonik warns strongly but never overrules them", () => {
+  const words = pmSignals()[0];
+  assert.match(words, /His words/i, "his explicit words are the first signal");
+  assert.match(words, /outrank[^.]*inferred plan[^.]*your own preference/i);
+  // A real obligation at stake is surfaced as a consequence of HIS choice — it does not reverse the instruction.
+  assert.match(words, /still follow them/i);
+  assert.match(words, /concrete consequence/i);
+  assert.match(words, /his conscious choice/i);
+  // Nothing in the prompt lets an obligation, a plan or Djonik's view override what Daniel said.
+  assert.doesNotMatch(system, /override[sn]? (?:them|his (?:words|instruction))|(?:ignore|disregard|set aside) (?:his|Daniel's) (?:words|instruction)/i);
+});
+
+test("#42 PM core: a due is evidence, not urgency — and no signal list starts from due", () => {
+  assert.match(signalAbout(/`due`/), /evidence[^.]*not urgency/i);
+  assert.doesNotMatch(pmSignals()[0], /\bdue\b/i, "the first signal is Daniel's own words, never the due date");
+  // No due-first ordering anywhere in the coordinator: "due dates → …", "due first", "ranked by how soon".
+  assert.doesNotMatch(system, /due(?: dates?)?\s*(?:→|->|first\b)|by how soon|soonest due/i);
+});
+
+test("#42 PM core: judgement, not a formula — no score, weights, points or fixed order", () => {
+  assert.match(pmCore(), /no score or fixed order/i);
+  assert.doesNotMatch(system, /\d+\s*(?:points?|pts)\b|\bweights?\s*[:=]|\bscore\s*[:=(]|×\s*\d|\d\s*×|\d+\s*%/i);
+  assert.doesNotMatch(system, /\b(?:first|then|finally)\s*[:,]?\s*(?:rank|sort)\b/i);
+});
+
+test("#42 PM core: short decisions — one main thing, ≤ two secondary, the rest can wait, ≤ one risk; ask only if it changes the main thing", () => {
+  const core = pmCore();
+  assert.match(core, /one main thing/i);
+  assert.match(core, /up to two secondary/i);
+  assert.match(core, /rest can wait/i);
+  assert.match(core, /at most one risk/i);
+  assert.match(core, /Ask only if the answer could change the main thing/i);
+  assert.doesNotMatch(core, /name (?:everything|all|each)[^.]*defer|never (?:silently )?drop/i, "no requirement to enumerate deferred work");
+});
+
+test("#42: Project Health keeps health reviews; 'по X що в мене?' is focus planning", () => {
+  const projectHealthSection = system.slice(system.indexOf("# Project Health"));
+  assert.match(projectHealthSection, /health review[^.;]*risks, blockers[^.;]*Project Health Specialist/i);
+  assert.match(projectHealthSection, /"по X що в мене\?"[^.]*focus planning/i);
 });
