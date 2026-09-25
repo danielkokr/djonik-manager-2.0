@@ -195,15 +195,36 @@ function tracedSession(sendTraced: DjonikTracedSessionHandle["sendTraced"]): Djo
   return { sessionId: "sesn_serving", send: async () => "", sendOrdered: async () => "", sendTraced, close: () => {} };
 }
 
-test("Session turn runner: the scheduled prompt goes through sendTraced as one text part; result passes through", async () => {
+test("Session turn runner: the scheduled prompt goes through sendTraced as one text part with the scheduler's own origin; result passes through", async () => {
   const parts: DjonikTurnPart[][] = [];
-  const manager = createSessionManager(async () =>
-    tracedSession(async (p) => (parts.push(p), { reply: "Бриф.", sessionId: "sesn_serving", toolUses: [{ kind: "mcp", name: "trelloReadCard" }] })),
-  );
+  const origins: string[] = [];
+  const traced = { reply: "Бриф.", sessionId: "sesn_serving", toolUses: [{ kind: "mcp" as const, name: "trelloReadCard" }], confirmations: [], autonomousMutationAttempt: false };
+  const manager = createSessionManager(async () => tracedSession(async (p, origin) => (parts.push(p), origins.push(origin), traced)));
   const run = createSessionTurnRunner(manager);
   const result = await run({ origin: "rhythm_ritual", occurrenceKey: "morning:2026-09-29", kind: "morning", prompt: "[Робочий ритм · …]" });
-  assert.deepEqual(parts, [[{ type: "text", text: "[Робочий ритм · …]" }]]);
-  assert.deepEqual(result, { reply: "Бриф.", sessionId: "sesn_serving", toolUses: [{ kind: "mcp", name: "trelloReadCard" }] });
+  await run({ origin: "rhythm_exception", occurrenceKey: "exception:2026-09-29:x", kind: "exception", prompt: "[Робочий ритм · …]" });
+  assert.deepEqual(parts, [[{ type: "text", text: "[Робочий ритм · …]" }], [{ type: "text", text: "[Робочий ритм · …]" }]]);
+  // Authority comes from the trusted caller path, never from the prompt text (#39 Stage 3A).
+  assert.deepEqual(origins, ["rhythm_ritual", "rhythm_exception"]);
+  assert.deepEqual(result, traced);
+});
+
+test("Session turn runner: a denied autonomous mutation in a failed turn reaches the runner as an attempt", async () => {
+  const manager = createSessionManager(async () =>
+    tracedSession(async () => {
+      throw new DjonikTracedTurnError(new Error("x"), "sesn_serving", [{ kind: "mcp", name: "trelloWriteCard" }], [
+        { kind: "mcp", name: "trelloWriteCard", decision: "deny", reason: "autonomous_read_only" },
+      ], true);
+    }),
+  );
+  const run = createSessionTurnRunner(manager);
+  const error = await run({ origin: "rhythm_ritual", occurrenceKey: "k", kind: "morning", prompt: "p" }).then(
+    () => assert.fail("expected failure"),
+    (e: unknown) => e,
+  );
+  assert.ok(error instanceof AutonomousTurnFailure);
+  assert.equal(error.autonomousMutationAttempt, true);
+  assert.equal(error.sessionId, "sesn_serving");
 });
 
 test("Session turn runner: a failed turn surfaces its tools; a dead Session is invalidated exactly like a typed turn", async () => {

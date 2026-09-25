@@ -81,11 +81,14 @@ for (const release of [RELEASE_R25, RELEASE_R26] as DjonikRelease[]) {
     assert.ok(mismatches.includes("unexpected skill skill_unreviewed"));
   });
 
-  test(`${release.id}: an enabled tool needing confirmation is rejected (the client cannot answer one)`, () => {
+  test(`${release.id}: an enabled tool needing a confirmation the release does not declare is rejected`, () => {
     const agent = agentVersionFixture(release) as Rec;
     const trello = agent.tools.find((tool: Rec) => tool.mcp_server_name === "trello");
     trello.configs.find((config: Rec) => config.name === "trelloWriteCard").permission_policy = { type: "always_ask" };
-    assert.deepEqual(mismatchesOf(() => attestAgentVersion(release, agent, options)), ["mcp toolset trello needs confirmation: trelloWriteCard"]);
+    assert.deepEqual(mismatchesOf(() => attestAgentVersion(release, agent, options)), [
+      "mcp toolset trello needs confirmation: [trelloWriteCard] != []",
+      "mcp toolset trello always_ask tools [trelloWriteCard] != []",
+    ]);
   });
 
   test(`${release.id}: a widened Trello write surface or enabled Calendar is rejected`, () => {

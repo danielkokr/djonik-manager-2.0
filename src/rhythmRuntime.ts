@@ -19,6 +19,8 @@ import {
   type RhythmCallbackQuery,
 } from "./rhythmTelegram.js";
 import { handleSessionError, isAllowedUser, type DjonikSessionManager } from "./telegramAdapter.js";
+import { confirmationPolicyProblems, REVIEWED_TRELLO_READ_TOOLS, SERVING_RELEASE, type DjonikRelease } from "./release.js";
+import { REVIEWED_CONFIRMATION_TOOLS } from "./toolConfirmation.js";
 
 /**
  * Working Rhythm runtime wiring (#39 Stage 2): the glue between the Stage 1 pieces and the one hosted
@@ -27,20 +29,70 @@ import { handleSessionError, isAllowedUser, type DjonikSessionManager } from "./
  * Two independent locks, both closed in this revision:
  *  1. `DJONIK_WORKING_RHYTHM` must be exactly `on` (unset in production; the unit does not set it);
  *  2. the serving turn runner must provide a genuine pre-execution read-only boundary. It does not
- *     (`SERVING_READ_ONLY_BOUNDARY`), so even with the switch on nothing is read, written, asked or sent.
+ *     (`SERVING_READ_ONLY_BOUNDARY`, derived from serving r26), so even with the switch on nothing is read,
+ *     written, asked or sent.
  */
 
 /**
- * The read-only boundary the serving turn runner actually provides for scheduled turns.
+ * The read-only boundary a release gives scheduled turns (#39 Stage 3A, docs/63).
  *
- * `post_hoc_detection_only`, measured against the installed SDK (0.125.0) and the current Managed Agents
- * docs (docs/62 §4): write prevention exists only as a tool `permission_policy` (`always_ask`, answered by
- * `user.tool_confirmation` deny). It lives in the Agent's tool configuration (or a Session-level tool
- * override/update), not per turn; serving r26 pins Agent v26 whose Trello write and Memory write/edit tools
- * are `always_allow`, and changing that is an Agent/release change (Stage 3). Until then scheduled turns
- * could only be checked after the fact, so Working Rhythm stays non-activatable.
+ * The client side exists in source: `sendTraced(…, "rhythm_ritual" | "rhythm_exception")` denies every
+ * `always_ask` tool confirmation before the provider executes it (`toolConfirmation.ts`). That is only a
+ * pre-execution boundary when the provider actually gates every reviewed mutating tool, i.e. when the
+ * served release declares exactly `REVIEWED_CONFIRMATION_TOOLS` as `always_ask` — which startup attestation
+ * then proves against the Agent version and the Session snapshot, failing closed on drift. A release that
+ * lets any reviewed mutating tool run as `always_allow` (r25, r26) gives `post_hoc_detection_only`.
  */
-export const SERVING_READ_ONLY_BOUNDARY: AutonomousReadOnlyBoundary = "post_hoc_detection_only";
+/** Reviewed read inventory per reviewed MCP server (explicitly `always_allow` in a pre-execution release). */
+const REVIEWED_MCP_READ_TOOLS: Readonly<Record<string, readonly string[]>> = { trello: REVIEWED_TRELLO_READ_TOOLS };
+
+/** Built-ins that cannot change anything (r26 allowlist minus the gated `write`/`edit`). */
+const READ_ONLY_BUILT_INS: ReadonlySet<string> = new Set(["read", "glob", "grep"]);
+
+export function readOnlyBoundaryFor(release: Pick<DjonikRelease, "builtInTools" | "mcpToolsets" | "confirmationRequired">): AutonomousReadOnlyBoundary {
+  const policy = release.confirmationRequired;
+  if (!policy || confirmationPolicyProblems(release).length > 0) return "post_hoc_detection_only";
+  const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && [...a].sort().join(",") === [...b].sort().join(",");
+  // Every enabled reviewed mutating built-in is gated (a disabled one cannot run at all)…
+  const builtInsGated = sameSet(
+    policy.builtIn,
+    REVIEWED_CONFIRMATION_TOOLS.builtIn.filter((name) => (release.builtInTools as readonly string[]).includes(name)),
+  );
+  // …and every reviewed mutating MCP tool that the release enables, on every server, and nothing else.
+  const servers = new Set([...Object.keys(policy.mcp), ...Object.keys(REVIEWED_CONFIRMATION_TOOLS.mcp)]);
+  const mcpGated = [...servers].every((server) => {
+    const toolset = release.mcpToolsets.find((entry) => entry.server === server);
+    const enabledReviewed = (REVIEWED_CONFIRMATION_TOOLS.mcp[server] ?? []).filter((name) => toolset?.overrides[name] ?? toolset?.defaultEnabled ?? false);
+    return sameSet(policy.mcp[server] ?? [], enabledReviewed);
+  });
+  // An MCP server outside the reviewed surface (Calendar) must be fully disabled, and a reviewed server may
+  // enable no other explicitly named write tool: either would be an ungated mutation path.
+  const noOtherMutators = release.mcpToolsets.every((toolset) => {
+    const reviewed = REVIEWED_CONFIRMATION_TOOLS.mcp[toolset.server];
+    const enabledNamed = Object.entries(toolset.overrides).filter(([, enabled]) => enabled).map(([name]) => name);
+    if (!reviewed) return !toolset.defaultEnabled && enabledNamed.length === 0;
+    // A reviewed server fails closed for tools this release has not reviewed: an enabled default must be
+    // `always_ask` (an unknown future tool then waits for a confirmation the client never allows), and every
+    // explicitly enabled tool is either a reviewed read (left `always_allow`) or a reviewed, gated mutation.
+    if (toolset.defaultEnabled && toolset.defaultPolicy !== "always_ask") return false;
+    const reads: readonly string[] = REVIEWED_MCP_READ_TOOLS[toolset.server] ?? [];
+    const gated = policy.mcp[toolset.server] ?? [];
+    const readsExplicit = reads.every((name) => toolset.overrides[name] === true && !gated.includes(name));
+    const onlyReviewed = enabledNamed.every((name) => reads.includes(name) || (reviewed.includes(name) && gated.includes(name)));
+    return readsExplicit && onlyReviewed;
+  });
+  // Every other enabled built-in must be a pure read: `bash` (and the network tools) could write Memory files
+  // or have side effects without passing a gate.
+  const builtInsReadOnly = release.builtInTools.every((name) => READ_ONLY_BUILT_INS.has(name) || policy.builtIn.includes(name));
+  return builtInsGated && builtInsReadOnly && mcpGated && noOtherMutators ? "pre_execution" : "post_hoc_detection_only";
+}
+
+/**
+ * The read-only boundary the serving turn runner actually provides for scheduled turns: derived from the
+ * one release this revision serves. Serving r26 (Agent v26) has every mutating tool `always_allow`, so this
+ * is `post_hoc_detection_only` and Working Rhythm stays non-activatable until an attested r27 is served.
+ */
+export const SERVING_READ_ONLY_BOUNDARY: AutonomousReadOnlyBoundary = readOnlyBoundaryFor(SERVING_RELEASE);
 
 /** One minute: rituals are minute-level. */
 export const RHYTHM_TICK_INTERVAL_MS = 60_000;
@@ -142,11 +194,13 @@ export function createSessionTurnRunner(sessions: DjonikSessionManager<DjonikTra
       throw new AutonomousTurnFailure([], null);
     }
     try {
-      return await session.sendTraced([{ type: "text", text: request.prompt }]);
+      // The origin is the scheduler's own (`rhythm_ritual` / `rhythm_exception`): autonomous authority, so
+      // the client denies every gated tool before it executes (#39 Stage 3A).
+      return await session.sendTraced([{ type: "text", text: request.prompt }], request.origin);
     } catch (error) {
       if (error instanceof DjonikTracedTurnError) {
         handleSessionError(sessions, error.error);
-        throw new AutonomousTurnFailure(error.toolUses, error.sessionId);
+        throw new AutonomousTurnFailure(error.toolUses, error.sessionId, error.autonomousMutationAttempt);
       }
       throw new AutonomousTurnFailure([], session.sessionId);
     }

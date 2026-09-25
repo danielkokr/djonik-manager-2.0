@@ -340,6 +340,37 @@ test("a scheduled turn that wrote to Trello is not delivered as a brief; Daniel 
   assert.equal(h.store.snapshot().deliveries["morning:2026-09-29"].status, "blocked");
 });
 
+test("Stage 3A: a mutation DENIED before execution is still an autonomous attempt → blocked notice, never the model's text", async () => {
+  // The client denied the gated call; the turn completed with the model's (possibly false-success) text and even
+  // an empty tool list must not hide the attempt — `autonomousMutationAttempt` alone blocks the delivery.
+  const h = harness({
+    now: TUESDAY_0935,
+    reply: () => ({
+      reply: "Переніс картку на завтра ✅",
+      toolUses: [],
+      confirmations: [{ kind: "mcp", name: "trelloWriteCard", decision: "deny", reason: "autonomous_read_only" }],
+      autonomousMutationAttempt: true,
+    }),
+  });
+  await createRhythmScheduler(h.deps).tick();
+  assert.equal(h.sends.length, 1);
+  assert.equal(h.sends[0].message.text, AUTONOMOUS_WRITE_NOTICE);
+  assert.deepEqual(h.sends[0].message.actions, []);
+  assert.equal(h.store.snapshot().deliveries["morning:2026-09-29"].status, "blocked");
+});
+
+test("Stage 3A: a failed turn whose only trace is a denied attempt is blocked (not a silent turn_failed)", async () => {
+  const h = harness({ now: TUESDAY_0935, reply: () => Promise.reject(new AutonomousTurnFailure([], "sesn_serving", true)) });
+  await createRhythmScheduler(h.deps).tick();
+  assert.equal(h.sends[0]?.message.text, AUTONOMOUS_WRITE_NOTICE);
+  assert.equal(h.store.snapshot().deliveries["morning:2026-09-29"].status, "blocked");
+  // Blocked rituals are never re-run the same day (no alert loop).
+  h.setNow("2026-09-29T06:50:00Z");
+  await createRhythmScheduler(h.deps).tick();
+  assert.equal(h.turns.length, 1);
+  assert.equal(h.sends.length, 1);
+});
+
 test("a scheduled turn that edited Memory (e.g. 'accepted' the plan itself) is blocked the same way", async () => {
   const h = harness({ now: MONDAY_0930, reply: () => ({ reply: "План прийнято.", toolUses: [{ kind: "builtin", name: "edit" }] }) });
   await createRhythmScheduler(h.deps).tick();
@@ -353,7 +384,8 @@ test("a scheduled turn that edited Memory (e.g. 'accepted' the plan itself) is b
 const REVIEWED_RHYTHM_IMPORTS: Record<string, RegExp> = {
   "rhythmFacts.ts": /^\.\/(rhythmConfig|rhythmSignals|trelloWorkHistory)\.js$/, // type-only use of the GET-only client
   "rhythmMemoryConfig.ts": /^\.\/rhythmConfig\.js$/,
-  "rhythmRuntime.ts": /^\.\/(djonikClient|rhythmConfig|rhythmRunner|rhythmState|rhythmTelegram|telegramAdapter)\.js$/,
+  // #39 Stage 3A: the reviewed release (to derive the serving boundary) and the reviewed confirmation surface.
+  "rhythmRuntime.ts": /^\.\/(djonikClient|release|rhythmConfig|rhythmRunner|rhythmState|rhythmTelegram|telegramAdapter|toolConfirmation)\.js$/,
 };
 
 test("the rhythm runtime has no deterministic path to Trello writes, the Session client or Memory (reviewed exceptions only)", () => {
@@ -389,7 +421,8 @@ test("feature-off / non-activatable boundary: the serving entry point wires the 
   const polling = cli.indexOf("bot.start(");
   assert.ok(attested > 0 && started > attested && polling > started, "attestation → rhythm wiring → polling");
   const runtime = readFileSync(join(repoRoot, "src", "rhythmRuntime.ts"), "utf8");
-  assert.match(runtime, /export const SERVING_READ_ONLY_BOUNDARY: AutonomousReadOnlyBoundary = "post_hoc_detection_only";/);
+  // Stage 3A: the boundary is derived from the one release this revision serves — never declared by hand.
+  assert.match(runtime, /export const SERVING_READ_ONLY_BOUNDARY: AutonomousReadOnlyBoundary = readOnlyBoundaryFor\(SERVING_RELEASE\);/);
   const unit = readFileSync(join(repoRoot, "deploy", "djonik-telegram.service"), "utf8");
   assert.doesNotMatch(unit, /^\s*Environment=.*DJONIK_WORKING_RHYTHM/m, "production activation env is absent");
   assert.match(unit, /^StateDirectory=djonik$/m);

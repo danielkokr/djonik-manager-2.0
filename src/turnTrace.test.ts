@@ -80,7 +80,7 @@ test("traced turn: final reply, the producing Session id, and every MCP / built-
     msg("Бриф: фокус — Seqthera."),
     IDLE_OK,
   );
-  const traced = await session.sendTraced([{ type: "text", text: "[Робочий ритм · автоматичний хід …]" }]);
+  const traced = await session.sendTraced([{ type: "text", text: "[Робочий ритм · автоматичний хід …]" }], "rhythm_ritual");
   assert.equal(traced.sessionId, "sesn_traced");
   assert.equal(traced.sessionId, session.sessionId);
   assert.deepEqual(traced.toolUses, [
@@ -97,7 +97,7 @@ test("traced turn: final reply, the producing Session id, and every MCP / built-
 test("traced turn: a Memory write/edit is listed as a built-in tool (the guard sees it)", async () => {
   const { session, push } = await open();
   push(builtIn("w", "write", { file_path: "/mnt/memory/djonik/x.md", content: "secret" }), builtIn("e", "edit", {}), msg("Ок."), IDLE_OK);
-  const traced = await session.sendTraced([{ type: "text", text: "x" }]);
+  const traced = await session.sendTraced([{ type: "text", text: "x" }], "rhythm_ritual");
   assert.deepEqual(traced.toolUses, [
     { kind: "builtin", name: "write" },
     { kind: "builtin", name: "edit" },
@@ -109,7 +109,7 @@ test("#31 kept: the verification-nudge rerun belongs to the same turn and its to
   const card = { id: "card_A", name: "A", due: null };
   const { session, push, sendCalls } = await open();
   push(mcpUse("w", "trelloWriteCard", { action: "update", cardId: "card_A", name: "A" }), mcpResult("w", card), msg("Готово."), IDLE_OK);
-  const pending = session.sendTraced([{ type: "text", text: "x" }]);
+  const pending = session.sendTraced([{ type: "text", text: "x" }], "rhythm_ritual");
   await new Promise((resolve) => setImmediate(resolve));
   push(mcpUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "card_A" }), mcpResult("r", card), msg("Підтверджено."), IDLE_OK);
   const traced = await pending;
@@ -121,7 +121,7 @@ test("#31 kept: the verification-nudge rerun belongs to the same turn and its to
 test("a failed traced turn carries the Session id and the tools it used (unverified write, #31)", async () => {
   const { session, push } = await open();
   push(mcpUse("w", "trelloWriteCard", { action: "update", cardId: "card_A", name: "A" }), mcpResult("w", { id: "card_A", name: "A" }), msg("Готово."), IDLE_OK);
-  const pending = session.sendTraced([{ type: "text", text: "x" }]);
+  const pending = session.sendTraced([{ type: "text", text: "x" }], "rhythm_ritual");
   await new Promise((resolve) => setImmediate(resolve));
   push(msg("Готово."), IDLE_OK); // the nudge is answered without a read
   const error = await pending.then(
@@ -138,7 +138,7 @@ test("a failed traced turn carries the Session id and the tools it used (unverif
 test("#32 kept: an incomplete traced turn (non-custom requires_action) is never a reply", async () => {
   const { session, push } = await open();
   push(mcpUse("x", "trelloWriteCard", {}), msg("Чекаю підтвердження…"), requiresAction(["x"]));
-  const error = await session.sendTraced([{ type: "text", text: "x" }]).then(
+  const error = await session.sendTraced([{ type: "text", text: "x" }], "rhythm_ritual").then(
     () => assert.fail("must reject"),
     (reason: unknown) => reason,
   );
@@ -152,7 +152,7 @@ test("one FIFO queue: send, sendTraced and sendOrdered run strictly in call orde
   const { session, push, sendCalls } = await open();
   const texts = () => sendCalls.map((call) => ((call as { events: Array<{ content: Array<{ text: string }> }> }).events[0].content[0].text));
   const a = session.send("A");
-  const b = session.sendTraced([{ type: "text", text: "B" }]);
+  const b = session.sendTraced([{ type: "text", text: "B" }], "rhythm_ritual");
   const c = session.sendOrdered([{ type: "text", text: "C" }]);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(texts(), ["A"], "single-flight: B waits for A");
@@ -161,7 +161,11 @@ test("one FIFO queue: send, sendTraced and sendOrdered run strictly in call orde
   const traced = await b;
   assert.equal(await c, "reply C");
   assert.deepEqual(texts(), ["A", "B", "C"]);
-  assert.deepEqual(traced, { reply: "reply B", sessionId: "sesn_traced", toolUses: [] }, "A's tool use never leaks into B");
+  assert.deepEqual(
+    traced,
+    { reply: "reply B", sessionId: "sesn_traced", toolUses: [], confirmations: [], autonomousMutationAttempt: false },
+    "A's tool use never leaks into B",
+  );
   session.close();
 });
 
@@ -170,7 +174,7 @@ test("an earlier turn's late tail (quarantined before this turn's own echo, #32)
   push({ type: "user.message", id: "evt_user_1", content: [] }, msg("one"), IDLE_OK);
   assert.equal(await session.send("first"), "one");
   push(mcpUse("late", "trelloWriteCard", {}), { type: "user.message", id: "evt_user_2", content: [] }, msg("two"), IDLE_OK);
-  const traced = await session.sendTraced([{ type: "text", text: "second" }]);
+  const traced = await session.sendTraced([{ type: "text", text: "second" }], "rhythm_ritual");
   assert.equal(traced.reply, "two");
   assert.deepEqual(traced.toolUses, []);
   session.close();

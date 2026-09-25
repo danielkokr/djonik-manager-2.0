@@ -26,6 +26,8 @@ import {
 } from "./turnCorrelation.js";
 import { executeTrelloWorkHistoryFromEnvironment, type CustomToolExecutionResult } from "./trelloWorkHistory.js";
 import { CustomToolResolution } from "./customToolResolution.js";
+import { ToolConfirmationLifecycle, type ConfirmationRecord, type ConfirmationRequest } from "./toolConfirmation.js";
+import { mutationAuthorityFor, type MutationAuthority, type TurnOrigin } from "./turnAuthority.js";
 
 /** The only custom tool this client settles (#36): read-only, so no side-effect idempotency key is
  *  needed beyond the #40 per-id lifecycle (docs/01 §13 admission rule). */
@@ -125,11 +127,13 @@ export interface DjonikTracedSessionHandle extends DjonikSessionHandle {
   /**
    * `sendOrdered` for a turn whose caller must inspect what the turn did (#39 scheduled Working Rhythm
    * turns). Same FIFO queue and the same `sendPartsSerial` pipeline (#31/#32/#36/#40, final-only); the only
-   * difference is the return shape: the final reply, the id of the Session that produced it, and the
-   * content-free list of every tool the turn invoked. A failed turn rejects with `DjonikTracedTurnError`,
-   * which carries the same Session id and tool list around the original error.
+   * differences are the return shape — the final reply, the id of the Session that produced it, the
+   * content-free list of every tool the turn invoked and its tool confirmations — and that the caller
+   * states the turn's `origin` explicitly (#39 Stage 3A): an autonomous origin denies every gated
+   * (`always_ask`) tool before it executes. A failed turn rejects with `DjonikTracedTurnError`, which
+   * carries the same Session id, tool list and confirmations around the original error.
    */
-  sendTraced(parts: DjonikTurnPart[]): Promise<DjonikTracedTurn>;
+  sendTraced(parts: DjonikTurnPart[], origin: TurnOrigin): Promise<DjonikTracedTurn>;
 }
 
 /**
@@ -148,6 +152,12 @@ export interface DjonikTracedTurn {
   /** The Session that actually produced `reply` (not whatever Session is current afterwards). */
   sessionId: string;
   toolUses: DjonikToolUse[];
+  /** Every tool confirmation the provider requested this turn, with this client's decision (#39 Stage 3A).
+   *  Content-free: kind, name, allow/deny and a fixed reason code — never the tool input. */
+  confirmations: ConfirmationRecord[];
+  /** An autonomous turn requested a gated (mutating) tool. The request was denied before execution, but
+   *  the attempt itself is a Working Rhythm safety violation (the runner blocks the delivery). */
+  autonomousMutationAttempt: boolean;
 }
 
 /** A traced turn that failed: the original error plus what the turn did before failing. */
@@ -156,6 +166,8 @@ export class DjonikTracedTurnError extends Error {
     readonly error: unknown,
     readonly sessionId: string,
     readonly toolUses: DjonikToolUse[],
+    readonly confirmations: ConfirmationRecord[] = [],
+    readonly autonomousMutationAttempt = false,
   ) {
     super(error instanceof Error ? error.message : String(error));
     this.name = "DjonikTracedTurnError";
@@ -391,6 +403,9 @@ export type DjonikTraceEvent =
   | { type: "mcp_tool_result"; serverName: string; toolName: string; isError: boolean }
   /** Content-free #36 audit marker: the only supported client-side custom tool was requested/resolved. */
   | { type: "custom_tool_result_sent"; toolName: "trello_work_history"; isError: boolean }
+  /** Content-free (#39 Stage 3A): a tool confirmation was submitted and accepted by the API. Permission to
+   *  attempt, never verification — an allowed Trello write is still verified by #31. */
+  | { type: "tool_confirmation_sent"; toolName: string; decision: ConfirmationRecord["decision"]; reason: ConfirmationRecord["reason"] }
   | { type: "verification_nudge_sent"; attempt: number }
   | { type: "write_unverified_failure" }
   | { type: "due_date_reply_finalized"; verifiedDue: string; kyivDate: string; weekdayEn: string; mismatch: boolean }
@@ -992,6 +1007,34 @@ export async function connectToDjonik(
   /** Content-free tool uses of the CURRENT visible turn (#39), including a verification-nudge rerun.
    *  Reset once per visible turn in `sendPartsSerial`, like `turnCustomToolUseIds`. */
   let turnToolUses: DjonikToolUse[] = [];
+  /** Session-scoped tool-confirmation lifecycle keyed by the gated tool-use event id (#39 Stage 3A). Like
+   *  `customTools`, never reset per turn: a decision is immutable for the Session. */
+  const confirmations = new ToolConfirmationLifecycle();
+  /** Mutation authority of the CURRENT visible turn, from its trusted caller path (never from its text). */
+  let turnAuthority: MutationAuthority = "human";
+  /** Confirmations requested during the CURRENT visible turn (content-free), in first-seen order. */
+  let turnConfirmations: Array<{ id: string; record: ConfirmationRecord }> = [];
+
+  /** A gated (`evaluated_permission: "ask"`) server-executed tool call: decided once, now, from this turn's
+   *  authority. Returns the decision, or null for an ungated call. */
+  function observeGatedToolUse(
+    event: { id: string; name: string; evaluated_permission?: string | null; evaluation?: { type?: string } | null; session_thread_id?: string | null },
+    kind: ConfirmationRequest["kind"],
+    serverName?: string,
+  ): ConfirmationRecord["decision"] | null {
+    if (event.evaluated_permission !== "ask") return null;
+    const record = confirmations.observeRequest(
+      { id: event.id, kind, name: event.name, serverName, threadId: event.session_thread_id ?? null, evaluationType: event.evaluation?.type ?? null },
+      turnAuthority,
+    );
+    if (!turnConfirmations.some((entry) => entry.id === event.id)) turnConfirmations.push({ id: event.id, record });
+    return record.decision;
+  }
+
+  /** Any gated request in an autonomous turn is, by construction, a mutating (or unreviewed) tool. */
+  function autonomousMutationAttempted(): boolean {
+    return turnAuthority === "autonomous_read_only" && turnConfirmations.length > 0;
+  }
 
   type WorkHistoryVerdict = { status: "none" } | { status: "verified"; answerText: string } | { status: "unverified" };
 
@@ -1058,6 +1101,12 @@ export async function connectToDjonik(
         customTools.observeResultEcho(event.custom_tool_use_id);
         continue;
       }
+      if (event.type === "user.tool_confirmation") {
+        // The provider's own record of a confirmation: the authoritative acknowledgement (#39 Stage 3A). A
+        // Session-level fact like the custom-tool echo; a contradicting result fails the turn visibly.
+        confirmations.observeEcho(event.tool_use_id, event.result);
+        continue;
+      }
       if (!anchored && !PRE_ANCHOR_PASSTHROUGH.has(event.type)) {
         if (event.type === "session.thread_created") specialist.onThreadCreated(event, false);
         preAnchorEventsQuarantined += 1;
@@ -1089,12 +1138,16 @@ export async function connectToDjonik(
             toolName: event.name,
             input: event.input as Record<string, unknown>,
           });
-          ledger.recordToolUse({
-            id: event.id,
-            serverName: event.mcp_server_name,
-            toolName: event.name,
-            input: event.input as Record<string, unknown>,
-          });
+          // A gated call this client denies never executes, so it is not a mutation attempt for #31 and must
+          // not become an "unverified write". An allowed (or ungated) one is recorded exactly as before.
+          if (observeGatedToolUse(event, "mcp", event.mcp_server_name) !== "deny") {
+            ledger.recordToolUse({
+              id: event.id,
+              serverName: event.mcp_server_name,
+              toolName: event.name,
+              input: event.input as Record<string, unknown>,
+            });
+          }
           onTrace?.({
             type: "mcp_tool_use",
             serverName: event.mcp_server_name,
@@ -1133,6 +1186,7 @@ export async function connectToDjonik(
           turnToolUses.push({ kind: "custom", name: event.name });
           break;
         case "agent.tool_use":
+          observeGatedToolUse(event, "builtin");
           turnToolUses.push({ kind: "builtin", name: event.name });
           if (event.name === "read") {
             turnTelemetry?.recordBuiltInRead(event.input as Record<string, unknown>);
@@ -1162,8 +1216,41 @@ export async function connectToDjonik(
           const stopKind = classifyStopReason(event.stop_reason);
           if (stopKind === "requires_action") {
             const blockingIds = event.stop_reason && "event_ids" in event.stop_reason ? event.stop_reason.event_ids : undefined;
-            // Existing non-custom action pauses (for example a server-side confirmation) remain
-            // incomplete exactly as #32 requires; this client must not guess how to settle them.
+            // #39 Stage 3A admission: an idle naming at least one known tool confirmation. Every other id must
+            // then be a custom-tool call this Session observed; a malformed or unknown id makes the whole
+            // status unsupported, and nothing is confirmed or executed (fail closed, #32 incomplete).
+            const confirmationIds = Array.isArray(blockingIds)
+              ? blockingIds.filter((id): id is string => typeof id === "string" && confirmations.has(id))
+              : [];
+            if (confirmationIds.length > 0) {
+              const ids = blockingIds as unknown[];
+              const rest = ids.filter((id): id is string => typeof id === "string" && !confirmations.has(id));
+              const wellFormed = ids.every((id) => typeof id === "string" && id.length > 0) && new Set(ids).size === ids.length;
+              if (!wellFormed || rest.some((id) => !customTools.has(id))) {
+                return { completed: false, stopKind, partialReply: reply };
+              }
+              const confirmed = await confirmations.resolveBlocking(confirmationIds, (events) =>
+                client.beta.sessions.events.send(session.id, { events }),
+              );
+              for (const sent of confirmed.submitted) {
+                onTrace?.({ type: "tool_confirmation_sent", toolName: sent.record.name, decision: sent.record.decision, reason: sent.record.reason });
+              }
+              let executed = 0;
+              if (rest.length > 0) {
+                const resolution = await customTools.resolveBlocking(rest, customToolExecutor, (results) =>
+                  client.beta.sessions.events.send(session.id, { events: results }),
+                );
+                executed = resolution.executed.length;
+                for (const sent of resolution.submitted) {
+                  onTrace?.({ type: "custom_tool_result_sent", toolName: WORK_HISTORY_TOOL, isError: sent.isError });
+                }
+              }
+              // Text before a tool pause is provisional (as for #40): only a fresh final message counts.
+              if (confirmed.submitted.length > 0 || executed > 0) reply = "";
+              continue;
+            }
+            // Any other action pause (no known confirmation, no known custom tool) remains incomplete
+            // exactly as #32 requires; this client must not guess how to settle it.
             const namesKnownCustomTool =
               Array.isArray(blockingIds) && blockingIds.some((id) => typeof id === "string" && customTools.has(id));
             if (turnCustomToolUseIds.length === 0 && !namesKnownCustomTool) {
@@ -1253,7 +1340,9 @@ export async function connectToDjonik(
    * see the FIFO `send`/`sendOrdered` wrappers below for why every call must
    * still go through one queue.
    */
-  async function sendPartsSerial(parts: DjonikTurnPart[]): Promise<string> {
+  async function sendPartsSerial(parts: DjonikTurnPart[], origin: TurnOrigin): Promise<string> {
+    turnAuthority = mutationAuthorityFor(origin);
+    turnConfirmations = [];
     ledger = new TrelloMutationLedger();
     specialist.beginTurn();
     turnCustomToolUseIds = [];
@@ -1452,23 +1541,32 @@ export async function connectToDjonik(
       ...documents.map((doc): DjonikTurnPart => ({ type: "document", document: doc })),
       ...(text ? [{ type: "text", text } as const] : []),
     ];
-    return enqueue(() => sendPartsSerial(parts));
+    return enqueue(() => sendPartsSerial(parts, "user_message"));
   }
 
+  /** `send` and `sendOrdered` are Daniel's path — a typed Telegram message, or a rhythm button converted
+   *  into his ordinary message (#39): human mutation authority. */
   function sendOrdered(parts: DjonikTurnPart[]): Promise<string> {
-    return enqueue(() => sendPartsSerial(parts));
+    return enqueue(() => sendPartsSerial(parts, "user_message"));
   }
 
-  function sendTraced(parts: DjonikTurnPart[]): Promise<DjonikTracedTurn> {
+  function sendTraced(parts: DjonikTurnPart[], origin: TurnOrigin): Promise<DjonikTracedTurn> {
     let traced: DjonikTracedTurn | null = null;
+    const confirmationsOfTurn = () => turnConfirmations.map((entry) => ({ ...entry.record }));
     // Same queue and pipeline; the trace is read inside the queued run, before the next turn resets it.
     return enqueue(async () => {
       try {
-        const reply = await sendPartsSerial(parts);
-        traced = { reply, sessionId: session.id, toolUses: [...turnToolUses] };
+        const reply = await sendPartsSerial(parts, origin);
+        traced = {
+          reply,
+          sessionId: session.id,
+          toolUses: [...turnToolUses],
+          confirmations: confirmationsOfTurn(),
+          autonomousMutationAttempt: autonomousMutationAttempted(),
+        };
         return reply;
       } catch (error) {
-        throw new DjonikTracedTurnError(error, session.id, [...turnToolUses]);
+        throw new DjonikTracedTurnError(error, session.id, [...turnToolUses], confirmationsOfTurn(), autonomousMutationAttempted());
       }
     }).then(() => traced!);
   }

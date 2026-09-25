@@ -58,14 +58,20 @@ export function canonicalJsonSha256(value: unknown): string {
 
 export interface ObservedToolset {
   enabled: string[];
-  /** Enabled tools whose effective permission policy is not `always_allow` (the client cannot answer a
-   *  tool confirmation, so any such tool would stall a turn). */
+  /** Enabled tools whose effective permission policy is not `always_allow`. Before #39 Stage 3A the client
+   *  could not answer a confirmation, so any such tool had to be absent; now only the release's reviewed
+   *  `confirmationRequired` set may appear here, and only as `always_ask`. */
   needsConfirmation: string[];
+  /** Enabled tools whose effective policy is exactly `always_ask` (a subset of `needsConfirmation`;
+   *  anything else there — `auto`, an unknown or missing policy — is drift). */
+  alwaysAsk: string[];
 }
 
 export interface ObservedMcpToolset extends ObservedToolset {
   server: string;
   defaultEnabled: boolean;
+  /** `default_config.permission_policy.type` — what every tool not named in `configs` inherits. */
+  defaultPolicy: string | null;
   overrides: Record<string, boolean>;
 }
 
@@ -99,7 +105,10 @@ function normalizeSkills(value: unknown): Array<{ skillId: string; version: stri
 }
 
 /** Effective per-tool state of a toolset: `configs` override `default_config` for the named tool. */
-function effectiveToolset(toolset: Rec, knownNames: readonly string[]): ObservedToolset & { overrides: Record<string, boolean>; defaultEnabled: boolean } {
+function effectiveToolset(
+  toolset: Rec,
+  knownNames: readonly string[],
+): ObservedToolset & { overrides: Record<string, boolean>; defaultEnabled: boolean; defaultPolicy: string | null } {
   const defaults = isRec(toolset.default_config) ? toolset.default_config : {};
   const defaultEnabled = defaults.enabled !== false;
   const defaultPolicy = policyType(defaults.permission_policy);
@@ -113,10 +122,12 @@ function effectiveToolset(toolset: Rec, knownNames: readonly string[]): Observed
   }
   const names = [...new Set([...knownNames, ...Object.keys(overrides)])];
   const enabled = names.filter((name) => overrides[name] ?? defaultEnabled).sort();
-  const needsConfirmation = enabled.filter((name) => (overridePolicy[name] ?? defaultPolicy) !== "always_allow").sort();
+  const effectivePolicy = (name: string) => overridePolicy[name] ?? defaultPolicy;
+  const needsConfirmation = enabled.filter((name) => effectivePolicy(name) !== "always_allow").sort();
+  const alwaysAsk = enabled.filter((name) => effectivePolicy(name) === "always_ask").sort();
   // A default-enabled toolset (MCP) can expose tools not named here; their policy is the default one.
   if (defaultEnabled && defaultPolicy !== "always_allow" && !needsConfirmation.includes("*")) needsConfirmation.push("*");
-  return { enabled, needsConfirmation, overrides, defaultEnabled };
+  return { enabled, needsConfirmation, alwaysAsk, overrides, defaultEnabled, defaultPolicy };
 }
 
 /**
@@ -133,8 +144,8 @@ export function normalizeAgentConfig(agent: unknown): ObservedConfig {
   const builtInRaw = tools.find((tool) => tool.type === "agent_toolset_20260401");
   let builtIn: ObservedToolset | null = null;
   if (builtInRaw) {
-    const { enabled, needsConfirmation } = effectiveToolset(builtInRaw, BUILT_IN_TOOL_NAMES);
-    builtIn = { enabled, needsConfirmation: needsConfirmation.filter((name) => name !== "*") };
+    const { enabled, needsConfirmation, alwaysAsk } = effectiveToolset(builtInRaw, BUILT_IN_TOOL_NAMES);
+    builtIn = { enabled, needsConfirmation: needsConfirmation.filter((name) => name !== "*"), alwaysAsk };
   }
 
   const multiagent = isRec(a.multiagent) ? a.multiagent : null;
@@ -168,8 +179,8 @@ export function normalizeAgentConfig(agent: unknown): ObservedConfig {
     mcpToolsets: tools
       .filter((tool) => tool.type === "mcp_toolset")
       .map((tool) => {
-        const { enabled, needsConfirmation, overrides, defaultEnabled } = effectiveToolset(tool, []);
-        return { server: str(tool.mcp_server_name) ?? "?", defaultEnabled, overrides, enabled, needsConfirmation };
+        const { enabled, needsConfirmation, alwaysAsk, overrides, defaultEnabled, defaultPolicy } = effectiveToolset(tool, []);
+        return { server: str(tool.mcp_server_name) ?? "?", defaultEnabled, defaultPolicy, overrides, enabled, needsConfirmation, alwaysAsk };
       }),
   };
 }
@@ -227,7 +238,7 @@ export function compareWithRelease(release: DjonikRelease, observed: ObservedCon
       );
     }
   }
-  const expectedSkillIds = new Set(release.skills.map((skill) => skill.skillId));
+  const expectedSkillIds = new Set<string>(release.skills.map((skill) => skill.skillId));
   for (const skillId of observedSkills.keys()) expect(expectedSkillIds.has(skillId), `unexpected skill ${skillId}`);
 
   // Specialist roster: exactly one member, the canonical specialist at its pinned version.
@@ -244,7 +255,8 @@ export function compareWithRelease(release: DjonikRelease, observed: ObservedCon
     }
   }
 
-  // Built-in toolset: effective enabled set, and nothing that would wait for a confirmation.
+  // Built-in toolset: effective enabled set; exactly the reviewed tools wait for a confirmation, and only as
+  // `always_ask` (#39 Stage 3A). A release without `confirmationRequired` expects none (r25/r26, unchanged).
   if (!observed.builtIn) {
     mismatches.push("agent_toolset_20260401 missing");
   } else {
@@ -252,7 +264,15 @@ export function compareWithRelease(release: DjonikRelease, observed: ObservedCon
       sortedJoin(observed.builtIn.enabled) === sortedJoin(release.builtInTools),
       `built-in tools [${sortedJoin(observed.builtIn.enabled)}] != [${sortedJoin(release.builtInTools)}]`,
     );
-    expect(observed.builtIn.needsConfirmation.length === 0, `built-in tools need confirmation: ${observed.builtIn.needsConfirmation.join(",")}`);
+    const expectedAsk = release.confirmationRequired?.builtIn ?? [];
+    expect(
+      sortedJoin(observed.builtIn.needsConfirmation) === sortedJoin(expectedAsk),
+      `built-in tools need confirmation: [${sortedJoin(observed.builtIn.needsConfirmation)}] != [${sortedJoin(expectedAsk)}]`,
+    );
+    expect(
+      sortedJoin(observed.builtIn.alwaysAsk) === sortedJoin(expectedAsk),
+      `built-in always_ask tools [${sortedJoin(observed.builtIn.alwaysAsk)}] != [${sortedJoin(expectedAsk)}]`,
+    );
   }
 
   // Custom tools: exact name set, each byte-identical (canonically) to the tool this revision executes.
@@ -270,7 +290,8 @@ export function compareWithRelease(release: DjonikRelease, observed: ObservedCon
     expect(tool.descriptionSha256 === description, `custom tool ${tool.name} description ${short(tool.descriptionSha256)} != ${short(description)}`);
   }
 
-  // MCP servers and toolsets: same servers/URLs, same default and per-tool overrides, no confirmations.
+  // MCP servers and toolsets: same servers/URLs, same default and per-tool overrides; confirmations exactly
+  // as reviewed (none unless `confirmationRequired` names them, always as `always_ask`).
   const servers = (list: Array<{ name: string; url: string }>) => sortedJoin(list.map((server) => `${server.name}=${server.url}`));
   expect(servers(observed.mcpServers) === servers(release.mcpServers), `mcp servers [${servers(observed.mcpServers)}] != [${servers(release.mcpServers)}]`);
   expect(observed.mcpToolsets.length === release.mcpToolsets.length, `mcp toolsets ${observed.mcpToolsets.length} != ${release.mcpToolsets.length}`);
@@ -282,7 +303,23 @@ export function compareWithRelease(release: DjonikRelease, observed: ObservedCon
     }
     expect(toolset.defaultEnabled === expected.defaultEnabled, `mcp toolset ${expected.server} default enabled ${toolset.defaultEnabled} != ${expected.defaultEnabled}`);
     expect(sameRecord(toolset.overrides, expected.overrides), `mcp toolset ${expected.server} overrides differ`);
-    expect(toolset.needsConfirmation.length === 0, `mcp toolset ${expected.server} needs confirmation: ${toolset.needsConfirmation.join(",")}`);
+    const expectedAsk = release.confirmationRequired?.mcp[expected.server] ?? [];
+    // The default policy is what an unnamed (unknown, future) server tool inherits (#39 Stage 3A).
+    const expectedDefaultPolicy = expected.defaultPolicy ?? "always_allow";
+    expect(
+      toolset.defaultPolicy === expectedDefaultPolicy,
+      `mcp toolset ${expected.server} default policy ${toolset.defaultPolicy} != ${expectedDefaultPolicy}`,
+    );
+    // An enabled `always_ask` default gates every unnamed tool, reported as `*`.
+    const expectedNeeds = expected.defaultEnabled && expectedDefaultPolicy === "always_ask" ? [...expectedAsk, "*"] : expectedAsk;
+    expect(
+      sortedJoin(toolset.needsConfirmation) === sortedJoin(expectedNeeds),
+      `mcp toolset ${expected.server} needs confirmation: [${sortedJoin(toolset.needsConfirmation)}] != [${sortedJoin(expectedNeeds)}]`,
+    );
+    expect(
+      sortedJoin(toolset.alwaysAsk) === sortedJoin(expectedAsk),
+      `mcp toolset ${expected.server} always_ask tools [${sortedJoin(toolset.alwaysAsk)}] != [${sortedJoin(expectedAsk)}]`,
+    );
   }
 
   return mismatches;
@@ -360,6 +397,14 @@ export function formatServingTuple(input: ServingTupleInput): string {
     `memory=${release.session.memoryAccess}`,
     `session=${input.sessionId}`,
   ];
+  // #39 Stage 3A: the attested `always_ask` set, only for a release that declares one (r26's line is unchanged).
+  if (release.confirmationRequired) {
+    const gated = [
+      ...(observed.builtIn?.alwaysAsk ?? []),
+      ...observed.mcpToolsets.flatMap((toolset) => toolset.alwaysAsk.map((name) => `${toolset.server}/${name}`)),
+    ];
+    fields.splice(fields.length - 2, 0, `always_ask=${sortedJoin(gated) || "none"}`);
+  }
   if (input.trelloHistory) fields.push(`trello_history=${input.trelloHistory}`);
   return `[release] serving ${fields.join(" ")}`;
 }

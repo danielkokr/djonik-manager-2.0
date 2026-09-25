@@ -28,6 +28,8 @@ import {
   type RhythmState,
   type RhythmStateStore,
 } from "./rhythmState.js";
+import type { ConfirmationRecord } from "./toolConfirmation.js";
+import type { TurnOrigin } from "./turnAuthority.js";
 
 /**
  * Working Rhythm scheduler tick (#39). Orchestrates the pure pieces — config, schedule, signals,
@@ -36,20 +38,25 @@ import {
  * serving Session, following the `pm-rhythm` Skill.
  *
  * Wired into `telegramCli.ts` through `rhythmRuntime.ts` (docs/62), behind two locks that are both closed
- * in production: the `DJONIK_WORKING_RHYTHM` switch and a genuine pre-execution read-only boundary, which
- * the serving runner does not have yet. Activation is a separate, authorized stage.
+ * in production: the `DJONIK_WORKING_RHYTHM` switch and a genuine pre-execution read-only boundary. Since
+ * #39 Stage 3A the client can deny gated tools before execution, but the serving release (r26) gates none,
+ * so the boundary is still post-hoc (docs/63). Activation is a separate, authorized stage.
  */
 
 /**
- * The four ways a turn can start. Only the first and last are Daniel's; both reach Djonik through the
+ * The four ways a turn can start (defined once in `turnAuthority.ts`, which also maps each origin to its
+ * mutation authority). Only `user_message` and `button_callback` are Daniel's; both reach Djonik through the
  * same grouping buffer and FIFO Session queue. The two rhythm origins are autonomous and read-only.
  */
-export type TurnOrigin = "user_message" | "button_callback" | "rhythm_ritual" | "rhythm_exception";
+export type { TurnOrigin };
 
 export interface ToolUseRecord {
   kind: "mcp" | "builtin" | "custom";
   name: string;
 }
+
+/** A tool confirmation the turn runner answered (#39 Stage 3A) — content-free. */
+export type { ConfirmationRecord };
 
 export interface AutonomousTurnRequest {
   origin: Extract<TurnOrigin, "rhythm_ritual" | "rhythm_exception">;
@@ -66,6 +73,10 @@ export interface AutonomousTurnResult {
   sessionId: string;
   /** Every tool the turn invoked, for the read-only guard. */
   toolUses: ToolUseRecord[];
+  /** Tool confirmations the runner answered (a pre-execution boundary denies every one in these turns). */
+  confirmations?: ConfirmationRecord[];
+  /** The turn requested a gated (mutating) tool. It was denied before execution; the attempt still blocks. */
+  autonomousMutationAttempt?: boolean;
 }
 
 /**
@@ -76,6 +87,7 @@ export class AutonomousTurnFailure extends Error {
   constructor(
     readonly toolUses: ToolUseRecord[],
     readonly sessionId: string | null,
+    readonly autonomousMutationAttempt = false,
   ) {
     super("autonomous turn failed");
     this.name = "AutonomousTurnFailure";
@@ -105,8 +117,9 @@ const READ_ONLY_CUSTOM_TOOLS = new Set(["trello_work_history"]);
 /**
  * Tools an autonomous turn must never use: any Trello write, any MCP tool with a mutating verb
  * (Calendar included), Memory `write`/`edit`, and any custom tool other than the read-only
- * `trello_work_history`. Provider-side MCP calls cannot be intercepted before they run, so this is a
- * detector: a violating turn's text is never delivered; a fixed notice tells Daniel instead.
+ * `trello_work_history`. This is the post-hoc detector: a violating turn's text is never delivered; a fixed
+ * notice tells Daniel instead. Under a pre-execution release the same rule applies to a gated call the client
+ * denied (`AutonomousTurnResult.autonomousMutationAttempt`): prevented, but still a violation.
  */
 export function autonomousWriteViolations(toolUses: readonly ToolUseRecord[]): ToolUseRecord[] {
   return toolUses.filter((use) => {
@@ -213,8 +226,9 @@ export function buildExceptionPrompt(signals: readonly Signal[], now: Date): str
 /**
  * How the autonomous turn runner keeps rhythm turns read-only.
  *
- * - `pre_execution`: writes are impossible before they run (e.g. the Agent's write tools require a
- *   confirmation that autonomous turns deny). No such runner exists yet.
+ * - `pre_execution`: writes are impossible before they run: the Agent's mutating tools are `always_ask` and
+ *   the client denies every confirmation in an autonomous turn (#39 Stage 3A). Derived from the served
+ *   release (`readOnlyBoundaryFor` in `rhythmRuntime.ts`); serving r26 does not qualify.
  * - `post_hoc_detection_only`: `autonomousWriteViolations` can only notice a provider-side write after
  *   it happened and withhold the message. That is not prevention.
  *
@@ -347,23 +361,27 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
     } catch (error) {
       // Never re-run a turn blindly: it may have done something before failing. A failed turn that tried to
       // write still gets the fixed notice (below); any other failure is silent here and logged.
-      const attempted = error instanceof AutonomousTurnFailure ? autonomousWriteViolations(error.toolUses) : [];
-      if (attempted.length === 0) {
+      const failure = error instanceof AutonomousTurnFailure ? error : null;
+      const attempted = failure !== null && (failure.autonomousMutationAttempt || autonomousWriteViolations(failure.toolUses).length > 0);
+      if (!attempted) {
         record = { ...record, status: "failed", failure: "turn_failed", retryable: false, updatedAt: stamp() };
         await persist();
         log(`[rhythm] ${key} turn_failed`);
         return { state, outcome: record.status };
       }
-      result = { reply: "", sessionId: (error as AutonomousTurnFailure).sessionId ?? "", toolUses: (error as AutonomousTurnFailure).toolUses };
+      result = { reply: "", sessionId: failure.sessionId ?? "", toolUses: failure.toolUses, autonomousMutationAttempt: failure.autonomousMutationAttempt };
     }
 
     const violations = autonomousWriteViolations(result.toolUses);
     let message: OutboundMessage;
     let sentStatus: DeliveryRecord["status"] = "sent";
-    if (violations.length > 0) {
+    if (violations.length > 0 || result.autonomousMutationAttempt === true) {
+      // Denied before execution (pre-execution boundary) or detected after the fact: either way the attempt is
+      // a safety violation, the model's text is never delivered and Daniel gets the fixed notice.
       message = { text: AUTONOMOUS_WRITE_NOTICE, actions: [] };
       sentStatus = "blocked";
-      log(`[rhythm] ${key} autonomous_write_detected tools=${violations.map((v) => v.name).join(",")}`);
+      const names = [...new Set([...violations.map((v) => v.name), ...(result.confirmations ?? []).map((c) => c.name)])];
+      log(`[rhythm] ${key} autonomous_write_${result.autonomousMutationAttempt === true ? "denied" : "detected"} tools=${names.join(",")}`);
     } else if (origin === "rhythm_exception" && isSilentReply(result.reply)) {
       record = { ...record, status: "silent", updatedAt: stamp() };
       await persist();

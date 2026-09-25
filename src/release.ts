@@ -38,6 +38,22 @@ export interface ReleaseMcpToolset {
   defaultEnabled: boolean;
   /** Explicit per-tool overrides exactly as the Agent declares them (tool name → enabled). */
   overrides: Record<string, boolean>;
+  /** `default_config.permission_policy` — the policy every tool NOT named in `overrides` inherits (#39
+   *  Stage 3A). Absent = `always_allow` (the r25/r26 semantics, unchanged). `always_ask` makes an unknown
+   *  future server tool wait for a confirmation that the client never allows (fail closed). */
+  defaultPolicy?: "always_allow" | "always_ask";
+}
+
+/**
+ * Enabled tools whose effective provider `permission_policy` is `always_ask` (#39 Stage 3A): the Session
+ * pauses on `requires_action` and the client answers `user.tool_confirmation` (allow for Daniel's turns,
+ * deny for autonomous ones). Every other enabled tool is `always_allow`; `auto` is never part of a release.
+ * Absent means none — the r25/r26 semantics, unchanged.
+ */
+export interface ReleaseConfirmationPolicy {
+  builtIn: BuiltInToolName[];
+  /** MCP server name → tool names (each must be an enabled tool of that toolset). */
+  mcp: Record<string, string[]>;
 }
 
 export interface DjonikRelease {
@@ -55,6 +71,8 @@ export interface DjonikRelease {
   customTools: string[];
   mcpServers: Array<{ name: string; url: string }>;
   mcpToolsets: ReleaseMcpToolset[];
+  /** Tools gated by `always_ask`; absent = none (every enabled tool `always_allow`). */
+  confirmationRequired?: ReleaseConfirmationPolicy;
   session: {
     environmentId: string;
     vaultId: string;
@@ -166,7 +184,160 @@ export const RELEASE_R26: DjonikRelease = {
   session: SESSION,
 };
 
+/** A gated tool must be an enabled tool that the body names explicitly: an enabled built-in, or an MCP tool
+ *  with an explicit `enabled: true` override (a default-enabled but unnamed tool would silently stay
+ *  `always_allow`). */
+export function confirmationPolicyProblems(release: Pick<DjonikRelease, "builtInTools" | "mcpToolsets" | "confirmationRequired">): string[] {
+  const policy = release.confirmationRequired;
+  if (!policy) return [];
+  const problems: string[] = [];
+  for (const name of policy.builtIn) if (!release.builtInTools.includes(name)) problems.push(`built-in ${name} is not enabled`);
+  for (const [server, names] of Object.entries(policy.mcp)) {
+    const toolset = release.mcpToolsets.find((entry) => entry.server === server);
+    if (!toolset) {
+      problems.push(`mcp toolset ${server} missing`);
+      continue;
+    }
+    for (const name of names) if (toolset.overrides[name] !== true) problems.push(`mcp ${server}/${name} is not an explicitly enabled tool`);
+  }
+  return problems;
+}
+
 export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_R25, r26: RELEASE_R26 };
+
+// --- r27 candidate (#39 Stage 3A, source only) -----------------------------------------------------------
+
+/** The Skill of a release candidate that has no remote Skill/version yet. Deliberately not a `ReleaseSkill`:
+ *  it has no `skill_…` id and no `skver_…` pin, so it cannot be served, attested or sent to the provider. */
+export interface UnresolvedCandidateSkill {
+  name: string;
+  skillId: null;
+  pin: { kind: "unresolved"; reason: string };
+}
+
+/**
+ * A release that is not yet a release: what r27 must contain, with the remote identifiers that do not exist
+ * yet left visibly unresolved. It is not a `DjonikRelease` (no Agent version, unresolved Skill), is not in
+ * `RELEASES`, and can be neither served nor attested. `resolveReleaseCandidate` turns it into a release only
+ * when every real remote identifier is supplied (Stage 3B).
+ */
+export interface DjonikReleaseCandidate extends Omit<DjonikRelease, "id" | "agent" | "skills"> {
+  candidateId: string;
+  /** The release id it becomes once resolved. */
+  becomes: string;
+  agent: { id: string; fromVersion: number; version: null };
+  skills: Array<ReleaseSkill | UnresolvedCandidateSkill>;
+  confirmationRequired: ReleaseConfirmationPolicy;
+}
+
+/**
+ * The current Trello MCP read inventory — every non-write tool of the official server as measured in the
+ * docs/04 §17 inventory (15 tools: these 9 reads + 6 `trelloWrite*`) and enabled in production since #19
+ * (docs/16 §2). r26 enables them implicitly through its `always_allow` default; the r27 candidate names each
+ * one explicitly because its default is `always_ask`.
+ */
+export const REVIEWED_TRELLO_READ_TOOLS = [
+  "trelloReadBoard",
+  "trelloReadCard",
+  "trelloReadChecklist",
+  "trelloReadInbox",
+  "trelloReadList",
+  "trelloReadMember",
+  "trelloReadPlanner",
+  "trelloReadWorkspace",
+  "trelloSearch",
+] as const;
+
+/**
+ * r27 candidate — r26 plus exactly three changes:
+ *  1. the `pm-rhythm` Skill (repo `.claude/skills/pm-rhythm/SKILL.md`, #39 Stage 1), not yet synced — its
+ *     remote Skill id and `skver_` pin are UNRESOLVED;
+ *  2. every reachable mutating tool is `always_ask`: built-in `write`/`edit` (incl. native Memory writes)
+ *     and Trello `trelloWriteCard` (the one enabled Trello write). The five disabled Trello writes stay
+ *     disabled; Calendar stays disabled; `trello_work_history` is a read-only custom tool (not governed by
+ *     permission policies) and stays client-executed under #40;
+ *  3. the Trello toolset fails closed for unreviewed tools: default `always_ask`, every reviewed read
+ *     (`REVIEWED_TRELLO_READ_TOOLS`) explicitly enabled `always_allow`. Same effective read/write surface.
+ * Same Agent identity, model, prompt, specialist v4, accepted Skills, custom tool, MCP servers and Session
+ * resources as r26.
+ */
+export const RELEASE_R27_CANDIDATE: DjonikReleaseCandidate = {
+  candidateId: "r27-candidate",
+  becomes: "r27",
+  agent: { id: COORDINATOR_ID, fromVersion: 26, version: null },
+  model: RELEASE_R26.model,
+  systemSha256: RELEASE_R26.systemSha256,
+  skills: [
+    ...RELEASE_R26.skills,
+    { name: "pm-rhythm", skillId: null, pin: { kind: "unresolved", reason: "pm-rhythm not yet synced to Managed Agents (Stage 3B)" } },
+  ],
+  specialist: RELEASE_R26.specialist,
+  builtInTools: RELEASE_R26.builtInTools,
+  customTools: RELEASE_R26.customTools,
+  mcpServers: RELEASE_R26.mcpServers,
+  mcpToolsets: MCP_TOOLSETS.map((toolset) =>
+    toolset.server === "trello"
+      ? {
+          server: "trello",
+          defaultEnabled: true,
+          // Fail closed for tools this release has not reviewed: an unknown future Trello tool inherits
+          // `always_ask`, and the client allows only `REVIEWED_CONFIRMATION_TOOLS` — so it is denied.
+          defaultPolicy: "always_ask",
+          // Every reviewed read, explicitly enabled (and `always_allow`: not in `confirmationRequired`), plus
+          // r26's exact write overrides (trelloWriteCard enabled and gated, the other five disabled).
+          overrides: { ...Object.fromEntries(REVIEWED_TRELLO_READ_TOOLS.map((name) => [name, true])), ...toolset.overrides },
+        }
+      : toolset,
+  ),
+  confirmationRequired: { builtIn: ["write", "edit"], mcp: { trello: ["trelloWriteCard"] } },
+  session: RELEASE_R26.session,
+};
+
+/** The real remote identifiers Stage 3B obtains. Nothing here may be invented. */
+export interface CandidateResolution {
+  /** Remote Skill id and immutable `skver_` pin for each unresolved candidate Skill, by name. */
+  skills: Record<string, { skillId: string; version: string; sessionVersion?: string }>;
+  /** The Agent version the provider created from `agent.fromVersion` with the candidate's update body. */
+  agentVersion?: number;
+}
+
+export class UnresolvedReleaseCandidateError extends Error {
+  constructor(readonly unresolved: string[]) {
+    super(`Release candidate is not fully resolved: ${unresolved.join("; ")}`);
+    this.name = "UnresolvedReleaseCandidateError";
+  }
+}
+
+/** The candidate's Skills with every unresolved one pinned from `resolution`; throws if any stays open. */
+export function resolveCandidateSkills(candidate: DjonikReleaseCandidate, resolution: Pick<CandidateResolution, "skills">): ReleaseSkill[] {
+  const missing: string[] = [];
+  const skills = candidate.skills.map((skill): ReleaseSkill => {
+    if (skill.pin.kind !== "unresolved") return skill as ReleaseSkill;
+    const pin = resolution.skills[skill.name];
+    if (!pin || !/^skill_\w+$/.test(pin.skillId) || !/^skver_\w+$/.test(pin.version)) {
+      missing.push(`skill ${skill.name}`);
+      return skill as unknown as ReleaseSkill;
+    }
+    return {
+      name: skill.name,
+      skillId: pin.skillId,
+      pin: { kind: "explicit", version: pin.version, ...(pin.sessionVersion === undefined ? {} : { sessionVersion: pin.sessionVersion }) },
+    };
+  });
+  if (missing.length > 0) throw new UnresolvedReleaseCandidateError(missing);
+  return skills;
+}
+
+/** The candidate as a real release, once every remote identifier exists (Stage 3B). */
+export function resolveReleaseCandidate(candidate: DjonikReleaseCandidate, resolution: CandidateResolution): DjonikRelease {
+  const skills = resolveCandidateSkills(candidate, resolution);
+  const version = resolution.agentVersion;
+  if (version === undefined || !Number.isInteger(version) || version <= candidate.agent.fromVersion) {
+    throw new UnresolvedReleaseCandidateError([`agent version (created from v${candidate.agent.fromVersion})`]);
+  }
+  const { candidateId: _candidateId, becomes, agent, skills: _skills, ...rest } = candidate;
+  return { ...rest, id: becomes, agent: { id: agent.id, version }, skills };
+}
 
 /**
  * The one release this application revision serves. Changing it is the application half of a cutover

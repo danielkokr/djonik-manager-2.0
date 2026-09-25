@@ -16,15 +16,20 @@ const djonikSource = readFileSync(join(repoRoot, "managed-agents", "djonik.md"),
 export const SYSTEM_PROMPT = /^---\n[\s\S]*?\n---\n\n([\s\S]*)$/.exec(djonikSource)![1].replace(/\n$/, "");
 
 const allow = { type: "always_allow" };
+const ask = { type: "always_ask" };
+
+/** Policy of one named tool, from the release's `confirmationRequired` (#39 Stage 3A). */
+const builtInPolicy = (release: DjonikRelease, name: string) => (release.confirmationRequired?.builtIn.includes(name as never) ? ask : allow);
+const mcpPolicy = (release: DjonikRelease, server: string, name: string) => (release.confirmationRequired?.mcp[server]?.includes(name) ? ask : allow);
 
 function builtInToolset(release: DjonikRelease): Record<string, unknown> {
-  if (release.builtInTools.length === 8) {
+  if (release.builtInTools.length === 8 && !release.confirmationRequired?.builtIn.length) {
     return { type: "agent_toolset_20260401", default_config: { enabled: true, permission_policy: allow }, configs: [] };
   }
   return {
     type: "agent_toolset_20260401",
     default_config: { enabled: false, permission_policy: allow },
-    configs: release.builtInTools.map((name) => ({ name, enabled: true, permission_policy: allow })),
+    configs: release.builtInTools.map((name) => ({ name, enabled: true, permission_policy: builtInPolicy(release, name) })),
   };
 }
 
@@ -35,8 +40,8 @@ function tools(release: DjonikRelease): unknown[] {
     ...release.mcpToolsets.map((toolset) => ({
       type: "mcp_toolset",
       mcp_server_name: toolset.server,
-      default_config: { enabled: toolset.defaultEnabled, permission_policy: allow },
-      configs: Object.entries(toolset.overrides).map(([name, enabled]) => ({ name, enabled, permission_policy: allow })),
+      default_config: { enabled: toolset.defaultEnabled, permission_policy: toolset.defaultPolicy === "always_ask" ? ask : allow },
+      configs: Object.entries(toolset.overrides).map(([name, enabled]) => ({ name, enabled, permission_policy: mcpPolicy(release, toolset.server, name) })),
     })),
   ];
 }
