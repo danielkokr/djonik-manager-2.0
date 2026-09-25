@@ -355,7 +355,9 @@ const PM_RHYTHM_SKILL = { skillId: "skill_01GzpQX3bVuWNk5bhbGcbzku", version: "s
  * servers, disabled writes/Calendar and Session resources are r26's. Written out, not derived at import, so
  * the release cannot change if the candidate is edited; `releaseR27.test.ts` proves the two are equal.
  *
- * Defined but NOT served: production still serves r26 until the Stage 3B-2 cutover.
+ * The serving release of this revision since the #39 Stage 3B-3A source cutover (docs/66). Its source is
+ * `managed-agents/djonik.md`; `src/release.test.ts` keeps the two in lockstep. Serving r27 does not activate
+ * Working Rhythm: that stays behind `DJONIK_WORKING_RHYTHM`, which the host does not set.
  */
 export const RELEASE_R27: DjonikRelease = {
   id: "r27",
@@ -407,9 +409,9 @@ export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_
 
 /**
  * The one release this application revision serves. Changing it is the application half of a cutover
- * (docs/52): it was flipped to `r26` after Agent v26 existed and its read-back attested (docs/53); flip it
- * back (or redeploy the last r25 revision) for rollback. r27 exists (Agent v27, docs/64) but is not served
- * until the separately authorized Stage 3B-2 cutover. It is deliberately not an environment variable:
- * the reviewed revision, not host configuration, decides what is served.
+ * (docs/52): it was flipped to `r26` after Agent v26 existed and its read-back attested (docs/53), and to
+ * `r27` after Agent v27 attested and its permission policies passed live validation (docs/64, docs/65,
+ * docs/66). Rollback redeploys the last r26 revision (docs/66 §10). It is deliberately not an environment
+ * variable: the reviewed revision, not host configuration, decides what is served.
  */
-export const SERVING_RELEASE: DjonikRelease = RELEASE_R26;
+export const SERVING_RELEASE: DjonikRelease = RELEASE_R27;

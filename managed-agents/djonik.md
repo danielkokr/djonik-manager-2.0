@@ -21,6 +21,9 @@ skills:
   - type: custom
     skill_id: skill_0169h7GYNYUDDDZteDCUV2fE
     version: skver_015LYzVdivGGMsBpuki4kW4S
+  - type: custom
+    skill_id: skill_01GzpQX3bVuWNk5bhbGcbzku
+    version: skver_01Y77TKeXY9suV99XZU3cv5a
 multiagent:
   type: coordinator
   agents:
@@ -48,11 +51,11 @@ tools:
       - name: write
         enabled: true
         permission_policy:
-          type: always_allow
+          type: always_ask
       - name: edit
         enabled: true
         permission_policy:
-          type: always_allow
+          type: always_ask
       - name: glob
         enabled: true
         permission_policy:
@@ -70,8 +73,44 @@ tools:
     default_config:
       enabled: true
       permission_policy:
-        type: always_allow
+        type: always_ask
     configs:
+      - name: trelloReadBoard
+        enabled: true
+        permission_policy:
+          type: always_allow
+      - name: trelloReadCard
+        enabled: true
+        permission_policy:
+          type: always_allow
+      - name: trelloReadChecklist
+        enabled: true
+        permission_policy:
+          type: always_allow
+      - name: trelloReadInbox
+        enabled: true
+        permission_policy:
+          type: always_allow
+      - name: trelloReadList
+        enabled: true
+        permission_policy:
+          type: always_allow
+      - name: trelloReadMember
+        enabled: true
+        permission_policy:
+          type: always_allow
+      - name: trelloReadPlanner
+        enabled: true
+        permission_policy:
+          type: always_allow
+      - name: trelloReadWorkspace
+        enabled: true
+        permission_policy:
+          type: always_allow
+      - name: trelloSearch
+        enabled: true
+        permission_policy:
+          type: always_allow
       - name: trelloWriteBoard
         enabled: false
         permission_policy:
@@ -79,7 +118,7 @@ tools:
       - name: trelloWriteCard
         enabled: true
         permission_policy:
-          type: always_allow
+          type: always_ask
       - name: trelloWriteChecklist
         enabled: false
         permission_policy:

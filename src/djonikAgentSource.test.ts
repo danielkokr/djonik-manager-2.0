@@ -28,7 +28,8 @@ test("source parses as frontmatter + system body and declares the Sonnet 5 mediu
   assert.match(frontmatter, /^name: Джонік$/m);
   assert.match(frontmatter, /^model:\n  id: claude-sonnet-5\n  effort: medium\n  speed: standard$/m);
   assert.ok(system.length > 0);
-  // The #33 target (r26): the four accepted coordinator Skills plus the accepted #36 work-review Skill.
+  // The serving release (r27, #39): the four accepted coordinator Skills, the accepted #36 work-review Skill
+  // and the #39 pm-rhythm Skill.
   const skills = [...frontmatter.matchAll(/- type: custom\n\s+skill_id: (\S+)\n\s+version: (\S+)/g)];
   assert.deepEqual(
     skills.map((entry) => entry[1]),
@@ -38,6 +39,7 @@ test("source parses as frontmatter + system body and declares the Sonnet 5 mediu
       "skill_01PTmbvLHJj1HuUxvDKhpaiE",
       "skill_015c8dtDnWyDfVLwS6NLS7r6",
       "skill_0169h7GYNYUDDDZteDCUV2fE",
+      "skill_01GzpQX3bVuWNk5bhbGcbzku",
     ],
   );
   // #33 invariant: no accidental `latest` — every Skill reference is an explicit, immutable version.
@@ -67,8 +69,9 @@ test("built-in toolset is an allowlist: file tools for Skills and Memory only �
   const end = frontmatter.indexOf("\n  - type:", start + 1);
   const block = frontmatter.slice(start, end);
   assert.match(block, /default_config:\n\s+enabled: false/, "built-in toolset must be default-disabled");
-  const enabled = [...block.matchAll(/- name: (\w+)\n\s+enabled: true\n\s+permission_policy:\n\s+type: always_allow/g)].map((m) => m[1]);
-  assert.deepEqual(enabled, ["read", "write", "edit", "glob", "grep"]);
+  const enabled = [...block.matchAll(/- name: (\w+)\n\s+enabled: true\n\s+permission_policy:\n\s+type: (always_\w+)/g)].map((m) => `${m[1]}=${m[2]}`);
+  // #39 r27: the mutating file tools (incl. native Memory writes) are gated before execution.
+  assert.deepEqual(enabled, ["read=always_allow", "write=always_ask", "edit=always_ask", "glob=always_allow", "grep=always_allow"]);
   assert.doesNotMatch(block, /\b(bash|web_fetch|web_search)\b/);
 });
 

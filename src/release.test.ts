@@ -4,8 +4,9 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASES, SERVING_RELEASE } from "./release.js";
+import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASES, SERVING_RELEASE, type DjonikRelease } from "./release.js";
 import { SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
+import { buildAgentUpdateBody } from "./releasePlan.js";
 import { PROJECT_HEALTH_SPECIALIST_AGENT_ID } from "./djonikClient.js";
 import { SYSTEM_PROMPT } from "./releaseFixtures.test-helpers.js";
 
@@ -24,29 +25,85 @@ test("the serving release of this revision is one of the reviewed releases", () 
   assert.equal(RELEASES[SERVING_RELEASE.id], SERVING_RELEASE);
 });
 
-test("this revision serves r26: Agent v26, every Skill explicitly pinned, #36 exposed (docs/53)", () => {
-  assert.equal(SERVING_RELEASE, RELEASE_R26);
-  assert.equal(SERVING_RELEASE.agent.version, 26);
+test("this revision serves r27: Agent v27, every Skill explicitly pinned, #36 exposed, writes gated (docs/66)", () => {
+  assert.equal(SERVING_RELEASE, RELEASE_R27);
+  assert.equal(SERVING_RELEASE.agent.version, 27);
   assert.ok(SERVING_RELEASE.skills.every((skill) => skill.pin.kind === "explicit"), "no `latest` is served");
   assert.deepEqual(SERVING_RELEASE.customTools, ["trello_work_history"]);
+  assert.deepEqual(SERVING_RELEASE.confirmationRequired, { builtIn: ["write", "edit"], mcp: { trello: ["trelloWriteCard"] } });
 });
 
-test("r26 equals the declarative coordinator source managed-agents/djonik.md", () => {
-  assert.equal(RELEASE_R26.systemSha256, sha(SYSTEM_PROMPT), "prompt SHA = djonik.md body");
-  assert.match(frontmatter, new RegExp(`^model:\\n  id: ${RELEASE_R26.model.id}\\n  effort: ${RELEASE_R26.model.effort}\\n  speed: ${RELEASE_R26.model.speed}$`, "m"));
-  const skills = [...frontmatter.matchAll(/- type: custom\n\s+skill_id: (\S+)\n\s+version: (\S+)/g)].map((m) => `${m[1]}@${m[2]}`);
-  assert.deepEqual(
-    skills,
-    RELEASE_R26.skills.map((skill) => `${skill.skillId}@${skill.pin.kind === "explicit" ? skill.pin.version : "latest"}`),
-  );
-  const roster = [...frontmatter.matchAll(/- type: agent\n\s+id: (\S+)\n\s+version: (\d+)/g)].map((m) => `${m[1]}@${m[2]}`);
-  assert.deepEqual(roster, [`${RELEASE_R26.specialist.id}@${RELEASE_R26.specialist.version}`]);
-  const servers = [...frontmatter.matchAll(/- type: url\n\s+name: (\S+)\n\s+url: (\S+)/g)].map((m) => `${m[1]}=${m[2]}`);
-  assert.deepEqual(servers, RELEASE_R26.mcpServers.map((server) => `${server.name}=${server.url}`));
-  const writes = Object.fromEntries([...frontmatter.matchAll(/- name: (trelloWrite\w+)\n\s+enabled: (true|false)/g)].map((m) => [m[1], m[2] === "true"]));
-  assert.deepEqual(writes, RELEASE_R26.mcpToolsets.find((toolset) => toolset.server === "trello")!.overrides);
-  const custom = [...frontmatter.matchAll(/^  - type: custom\n    name: (\S+)/gm)].map((m) => m[1]);
-  assert.deepEqual(custom, RELEASE_R26.customTools);
+/** The subset of YAML the declarative frontmatter uses: block maps and lists, plain scalars, and JSON-compatible
+ *  quoted strings / flow objects. Test-only; enough to read `skills` and `tools` structurally. */
+function parseFrontmatter(text: string): Record<string, unknown> {
+  const lines = text.split("\n").filter((line) => line.trim() !== "");
+  let i = 0;
+  const indentOf = (line: string) => line.length - line.trimStart().length;
+  const scalar = (raw: string): unknown => {
+    if (raw === "true" || raw === "false") return raw === "true";
+    if (/^\d+$/.test(raw)) return Number(raw);
+    if (raw.startsWith('"') || raw.startsWith("{") || raw.startsWith("[")) return JSON.parse(raw);
+    return raw;
+  };
+  // Parses `key: value` / `key:` entries at `indent`; `first` is an entry already cut from a `- ` list line.
+  const block = (indent: number, first?: string): unknown => {
+    if (first === undefined && lines[i].trimStart().startsWith("- ")) {
+      const list: unknown[] = [];
+      while (i < lines.length && indentOf(lines[i]) === indent && lines[i].trimStart().startsWith("- ")) {
+        const entry = lines[i].trimStart().slice(2);
+        i++;
+        list.push(block(indent + 2, entry));
+      }
+      return list;
+    }
+    const map: Record<string, unknown> = {};
+    const take = (entry: string) => {
+      const [, key, rest] = /^([\w-]+):(?: (.*))?$/.exec(entry)!;
+      map[key] = rest === undefined ? block(indentOf(lines[i])) : scalar(rest);
+    };
+    if (first !== undefined) take(first);
+    while (i < lines.length && indentOf(lines[i]) === indent && !lines[i].trimStart().startsWith("- ")) {
+      const entry = lines[i].trimStart();
+      i++;
+      take(entry);
+    }
+    return map;
+  };
+  return block(0) as Record<string, unknown>;
+}
+
+const declared = parseFrontmatter(frontmatter);
+const declaredSurface = { skills: declared.skills, tools: declared.tools };
+const surfaceOf = (release: DjonikRelease) => {
+  const { skills, tools } = buildAgentUpdateBody(release, release.agent.version - 1);
+  // YAML states an empty `configs` (the disabled Calendar toolset) by omitting it.
+  const omitEmpty = (tool: Record<string, unknown>) => {
+    const { configs, ...rest } = tool;
+    return Array.isArray(configs) && configs.length === 0 ? rest : tool;
+  };
+  return { skills, tools: (tools as Array<Record<string, unknown>>).map(omitEmpty) };
+};
+
+test("the serving release equals the declarative coordinator source managed-agents/djonik.md", () => {
+  const release = SERVING_RELEASE;
+  assert.equal(release.systemSha256, sha(SYSTEM_PROMPT), "prompt SHA = djonik.md body");
+  assert.deepEqual(declared.model, { id: release.model.id, effort: release.model.effort, speed: release.model.speed });
+  assert.deepEqual(declared.multiagent, { type: "coordinator", agents: [{ type: "agent", id: release.specialist.id, version: release.specialist.version }] });
+  assert.deepEqual(declared.mcp_servers, release.mcpServers.map((server) => ({ type: "url", name: server.name, url: server.url })));
+  // Skills (with explicit pins) and every tool — enabled flags AND permission policies — exactly as the
+  // generated update body of the serving release states them.
+  assert.deepEqual(declaredSurface, surfaceOf(release));
+});
+
+test("the declaration cannot silently stay on r26 while r27 is served (#39 Stage 3B-3A)", () => {
+  assert.notDeepEqual(declaredSurface, surfaceOf(RELEASE_R26), "djonik.md still declares r26");
+  const trello = (declared.tools as Array<Record<string, any>>).find((tool) => tool.mcp_server_name === "trello")!;
+  assert.equal(trello.default_config.permission_policy.type, "always_ask", "Trello fails closed for unreviewed tools");
+  const policies = (tools: Array<Record<string, any>>) =>
+    tools.flatMap((tool) => (tool.configs ?? []).filter((c: Record<string, any>) => c.permission_policy.type === "always_ask").map((c: Record<string, any>) => c.name));
+  assert.deepEqual(policies(declared.tools as Array<Record<string, any>>), ["write", "edit", "trelloWriteCard"]);
+  const skills = (declared.skills as Array<Record<string, string>>).map((skill) => skill.skill_id);
+  assert.ok(skills.includes(RELEASE_R27.skills.find((skill) => skill.name === "pm-rhythm")!.skillId), "pm-rhythm is declared");
 });
 
 test("r25 (current production, rollback target) is r26 minus exactly the three #33 changes", () => {

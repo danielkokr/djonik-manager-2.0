@@ -37,10 +37,11 @@ import type { TurnOrigin } from "./turnAuthority.js";
  * send. It holds no conversation logic: Claude composes every brief/review/exception in the normal
  * serving Session, following the `pm-rhythm` Skill.
  *
- * Wired into `telegramCli.ts` through `rhythmRuntime.ts` (docs/62), behind two locks that are both closed
- * in production: the `DJONIK_WORKING_RHYTHM` switch and a genuine pre-execution read-only boundary. Since
- * #39 Stage 3A the client can deny gated tools before execution, but the serving release (r26) gates none,
- * so the boundary is still post-hoc (docs/63). Activation is a separate, authorized stage.
+ * Wired into `telegramCli.ts` through `rhythmRuntime.ts` (docs/62), behind two locks: the
+ * `DJONIK_WORKING_RHYTHM` switch (unset in production) and a genuine pre-execution read-only boundary. Since
+ * #39 Stage 3A the client can deny gated tools before execution; serving r27 gates every reviewed mutating
+ * tool, so the boundary is pre-execution from the Stage 3B-3A cutover (docs/66; r26 gated none, docs/63).
+ * Activation (the switch) is a separate, authorized stage.
  */
 
 /**
@@ -228,7 +229,7 @@ export function buildExceptionPrompt(signals: readonly Signal[], now: Date): str
  *
  * - `pre_execution`: writes are impossible before they run: the Agent's mutating tools are `always_ask` and
  *   the client denies every confirmation in an autonomous turn (#39 Stage 3A). Derived from the served
- *   release (`readOnlyBoundaryFor` in `rhythmRuntime.ts`); serving r26 does not qualify.
+ *   release (`readOnlyBoundaryFor` in `rhythmRuntime.ts`); serving r27 qualifies, r25/r26 do not.
  * - `post_hoc_detection_only`: `autonomousWriteViolations` can only notice a provider-side write after
  *   it happened and withhold the message. That is not prevention.
  *

@@ -97,12 +97,19 @@ function withMeasuredToolsets(agent: Rec): Rec {
 
 // --- Definition -----------------------------------------------------------------------------------------------
 
-test("r27 is defined and reviewed, but NOT served: SERVING_RELEASE stays r26 and the serving boundary stays post-hoc", () => {
+test("r27 is served (Stage 3B-3A, docs/66); the serving boundary derives as pre_execution; r26 stays the post-hoc rollback", () => {
   assert.equal(RELEASES.r27, RELEASE_R27);
-  assert.equal(SERVING_RELEASE, RELEASE_R26);
-  assert.equal(SERVING_READ_ONLY_BOUNDARY, "post_hoc_detection_only");
-  assert.equal(readOnlyBoundaryFor(RELEASE_R26), "post_hoc_detection_only");
+  assert.equal(SERVING_RELEASE, RELEASE_R27);
+  assert.equal(SERVING_RELEASE.agent.version, 27);
+  // Derived, not asserted into existence: the serving boundary is whatever the serving release's tool surface gives.
+  assert.equal(SERVING_READ_ONLY_BOUNDARY, readOnlyBoundaryFor(SERVING_RELEASE));
+  assert.equal(SERVING_READ_ONLY_BOUNDARY, "pre_execution");
   assert.equal(readOnlyBoundaryFor(RELEASE_R27), "pre_execution");
+  assert.equal(readOnlyBoundaryFor(RELEASE_R26), "post_hoc_detection_only");
+  // The rollback release is still a reviewed, checkable release of its own.
+  assert.equal(RELEASES.r26, RELEASE_R26);
+  assert.equal(RELEASE_R26.agent.version, 26);
+  assert.equal(RELEASE_R26.confirmationRequired, undefined);
 });
 
 test("r27 is exactly the Stage 3A candidate resolved with the real remote identifiers (nothing else)", () => {

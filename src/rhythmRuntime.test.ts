@@ -104,9 +104,16 @@ test("feature OFF for anything but exactly `on`", () => {
   }
 });
 
-test("switched ON but only post-hoc detection (the serving boundary): blocked — zero autonomous model calls, zero reads", async () => {
-  assert.equal(SERVING_READ_ONLY_BOUNDARY, "post_hoc_detection_only");
-  const { d, effects, clock } = deps({ DJONIK_WORKING_RHYTHM: "on", STATE_DIRECTORY: "/var/lib/djonik" }, SERVING_READ_ONLY_BOUNDARY);
+test("this revision's production shape (serving r27 boundary, switch unset as on the host): OFF — lock 1 alone keeps it inactive", () => {
+  assert.equal(SERVING_READ_ONLY_BOUNDARY, "pre_execution", "derived from serving r27 (docs/66)");
+  const { d, effects, clock } = deps({ STATE_DIRECTORY: "/var/lib/djonik" }, SERVING_READ_ONLY_BOUNDARY);
+  assert.equal(startWorkingRhythm(d).status, "off");
+  assert.equal(zeroEffects(effects), 0);
+  assert.equal(clock.intervals.length, 0);
+});
+
+test("switched ON but only post-hoc detection (the r25/r26 rollback boundary): blocked — zero autonomous model calls, zero reads", async () => {
+  const { d, effects, clock } = deps({ DJONIK_WORKING_RHYTHM: "on", STATE_DIRECTORY: "/var/lib/djonik" }, "post_hoc_detection_only");
   const runtime = startWorkingRhythm(d);
   assert.equal(runtime.status, "blocked");
   assert.equal(runtime.reason, "read_only_boundary=post_hoc_detection_only");

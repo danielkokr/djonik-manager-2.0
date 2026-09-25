@@ -263,11 +263,11 @@ async function main(): Promise<number> {
   });
 
   /**
-   * Working Rhythm (#39), after the serving Session is attested and before polling starts. Two locks, both
-   * closed in this revision: `DJONIK_WORKING_RHYTHM` is unset in production, and the serving turn runner
-   * declares only `post_hoc_detection_only`. With either closed nothing is constructed or read (no Memory
-   * config read, no state file, no Trello facts, no model call, no timer); an allowed user's old button
-   * gets the stale-button answer. Buttons are only shortcuts to ordinary conversation: a valid click
+   * Working Rhythm (#39), after the serving Session is attested and before polling starts. Two locks:
+   * `DJONIK_WORKING_RHYTHM` (unset in production, so closed) and the serving turn runner's read-only
+   * boundary, derived from the serving release (open for r27). With either closed nothing is constructed
+   * or read (no Memory config read, no state file, no Trello facts, no model call, no timer); an allowed
+   * user's old button gets the stale-button answer. Buttons are only shortcuts to ordinary conversation: a valid click
    * becomes a typed-equivalent turn through the same grouping buffer and FIFO Session.
    */
   const rhythm = startWorkingRhythm({

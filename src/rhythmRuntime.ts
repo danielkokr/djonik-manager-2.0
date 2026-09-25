@@ -26,11 +26,12 @@ import { REVIEWED_CONFIRMATION_TOOLS } from "./toolConfirmation.js";
  * Working Rhythm runtime wiring (#39 Stage 2): the glue between the Stage 1 pieces and the one hosted
  * Telegram process. It owns no product logic.
  *
- * Two independent locks, both closed in this revision:
- *  1. `DJONIK_WORKING_RHYTHM` must be exactly `on` (unset in production; the unit does not set it);
- *  2. the serving turn runner must provide a genuine pre-execution read-only boundary. It does not
- *     (`SERVING_READ_ONLY_BOUNDARY`, derived from serving r26), so even with the switch on nothing is read,
- *     written, asked or sent.
+ * Two independent locks:
+ *  1. `DJONIK_WORKING_RHYTHM` must be exactly `on` (unset in production; the unit does not set it) — so
+ *     Working Rhythm stays off until a separately authorized activation;
+ *  2. the serving turn runner must provide a genuine pre-execution read-only boundary
+ *     (`SERVING_READ_ONLY_BOUNDARY`, derived from the serving release). Serving r27 provides it (docs/66);
+ *     under r25/r26 even the switch on read, wrote, asked and sent nothing.
  */
 
 /**
@@ -89,8 +90,10 @@ export function readOnlyBoundaryFor(release: Pick<DjonikRelease, "builtInTools" 
 
 /**
  * The read-only boundary the serving turn runner actually provides for scheduled turns: derived from the
- * one release this revision serves. Serving r26 (Agent v26) has every mutating tool `always_allow`, so this
- * is `post_hoc_detection_only` and Working Rhythm stays non-activatable until an attested r27 is served.
+ * one release this revision serves. Serving r27 (Agent v27) gates every reviewed mutating tool `always_ask`,
+ * so this is `pre_execution` — never hard-coded: it is recomputed from the release, and startup attestation
+ * proves those policies against the Agent version and Session snapshot. (r26 gave `post_hoc_detection_only`.)
+ * Working Rhythm still needs lock 1, the `DJONIK_WORKING_RHYTHM` switch.
  */
 export const SERVING_READ_ONLY_BOUNDARY: AutonomousReadOnlyBoundary = readOnlyBoundaryFor(SERVING_RELEASE);
 

@@ -4,6 +4,7 @@ import {
   confirmationPolicyProblems,
   RELEASE_R25,
   RELEASE_R26,
+  RELEASE_R27,
   RELEASE_R27_CANDIDATE,
   RELEASES,
   resolveReleaseCandidate,
@@ -49,8 +50,9 @@ function mismatchesOf(fn: () => unknown): string[] {
 
 // --- Serving stays r26 ----------------------------------------------------------------------------------------
 
-test("SERVING_RELEASE is still r26; r27 exists only as the resolved release (Stage 3B-1); the candidate is not servable", () => {
-  assert.equal(SERVING_RELEASE, RELEASE_R26);
+test("SERVING_RELEASE is the resolved r27 (Stage 3B-3A), never the candidate; the candidate is not servable", () => {
+  assert.equal(SERVING_RELEASE, RELEASE_R27);
+  assert.notEqual(SERVING_RELEASE as unknown, RELEASE_R27_CANDIDATE);
   assert.deepEqual(Object.keys(RELEASES).sort(), ["r25", "r26", "r27"]);
   assert.equal(Object.values(RELEASES).includes(RELEASE_R27_CANDIDATE as unknown as DjonikRelease), false);
   assert.equal(RELEASE_R27_CANDIDATE.agent.version, null, "no Agent v27 exists");
@@ -255,10 +257,11 @@ test("permission-policy comparison is order-insensitive (provider ordering is no
 
 // --- Rhythm activation gate ------------------------------------------------------------------------------------
 
-test("read-only boundary: r25/r26 → post_hoc_detection_only; the serving process (r26) cannot claim pre_execution", () => {
+test("read-only boundary: r25/r26 → post_hoc_detection_only; the serving process (r27) derives pre_execution", () => {
   assert.equal(readOnlyBoundaryFor(RELEASE_R25), "post_hoc_detection_only");
   assert.equal(readOnlyBoundaryFor(RELEASE_R26), "post_hoc_detection_only");
-  assert.equal(SERVING_READ_ONLY_BOUNDARY, "post_hoc_detection_only");
+  assert.equal(SERVING_READ_ONLY_BOUNDARY, readOnlyBoundaryFor(RELEASE_R27));
+  assert.equal(SERVING_READ_ONLY_BOUNDARY, "pre_execution");
 });
 
 test("read-only boundary: the candidate / an attested r27 shape satisfies the source contract → pre_execution", () => {
@@ -313,7 +316,7 @@ function rhythmDeps(boundary: ReturnType<typeof readOnlyBoundaryFor>) {
   };
 }
 
-test("activation gate: a hypothetical attested pre-execution release lets the existing runner pass; serving r26 stays blocked", async () => {
+test("activation gate: a hypothetical attested pre-execution release lets the existing runner pass; the r26 rollback stays blocked", async () => {
   const hypothetical = rhythmDeps(readOnlyBoundaryFor(HYPOTHETICAL_R27));
   const running = startWorkingRhythm(hypothetical.deps);
   assert.equal(running.status, "running");
@@ -322,9 +325,10 @@ test("activation gate: a hypothetical attested pre-execution release lets the ex
   assert.equal(hypothetical.turns, 1);
   await running.stop();
 
-  const serving = rhythmDeps(SERVING_READ_ONLY_BOUNDARY);
-  const blocked = startWorkingRhythm(serving.deps);
+  // Rolling back to r26 closes lock 2 again: even with the switch on, nothing runs.
+  const rollback = rhythmDeps(readOnlyBoundaryFor(RELEASE_R26));
+  const blocked = startWorkingRhythm(rollback.deps);
   assert.equal(blocked.status, "blocked");
   assert.equal(blocked.reason, "read_only_boundary=post_hoc_detection_only");
-  assert.equal(serving.turns, 0);
+  assert.equal(rollback.turns, 0);
 });
