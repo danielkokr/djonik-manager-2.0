@@ -51,6 +51,7 @@ Before substantial work, read:
 5. `AGENTS.md`
 6. `docs/17_DJONIK_V1_ARCHITECTURE_AUDIT.md` (accepted decisions, evidence and handoff) and `docs/21_ISSUE_29_WORK_HISTORY_ARCHITECTURE_AUDIT.md` (#29 supersession, work-history evidence decision)
 7. `docs/04_MANAGED_AGENT_TOKEN_COST_AUDIT.md` §27 (current validation policy)
+7a. `docs/76_DJONIK_PM_QUALITY_ARCHITECTURE_AUDIT.md` (PM quality / factual grounding audit), `docs/77_DJONIK_MESSAGE_TEMPLATES_APPROVED.md` (approved message templates) and `docs/79_DJONIK_SECOND_BRAIN_CONCEPT.md` (second-brain concept, #45–#52 queue)
 8. the GitHub issue that roadmap marks as canonical NOW and its latest comments.
 
 Distinguish proposed fixes, historical acceptance, current recorded Agent configuration and the actual serving Session. A fresh checkout with an older roadmap must obtain the governance documentation change before implementing new issues; issue numbering is not a substitute for canonical scope.

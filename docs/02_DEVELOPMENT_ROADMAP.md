@@ -20,6 +20,27 @@ Governance [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) rec
 
 ## Canonical delivery queue
 
+**Update 2026-09-25 — PM quality audit and second-brain queue (Product Owner decision; [docs/76](76_DJONIK_PM_QUALITY_ARCHITECTURE_AUDIT.md), [docs/77](77_DJONIK_MESSAGE_TEMPLATES_APPROVED.md), [docs/78](78_DJONIK_ISSUE_QUEUE_AND_DESIGNER_OPPORTUNITIES.md), [docs/79](79_DJONIK_SECOND_BRAIN_CONCEPT.md)).** This supersedes every earlier *canonical NOW* statement below and the #41–#44 order.
+- **Released:** #39, #41 and #42 serve in production as r28 (per Product Owner). Their GitHub closure is a separate Product Owner action.
+- **Audit finding:** reliability is solved; the r28 invented dates, durations and "no due → can wait" come from answer-form pressure, examples containing unsourced details, and Trello data that hides `Size`, checklists and missing fields (docs/76 §1).
+- **Approved:** message templates with emoji (docs/77). Telegram forwarding is the client-message channel; one "✅ Внести" per proposal; Telegram Business is out of scope for now (docs/79 §6).
+- **#43 is superseded by #48** (status reports are folded into client-message intake). **#44 moves to the end** and is decided by #46 benchmark scenarios.
+- #35 pilot continues as real use in parallel.
+
+| Order | Issue | Condition |
+|---|---|---|
+| 1 | **NOW — [#45 — Factual grounding + approved message templates](https://github.com/danielkokr/djonik-manager-2.0/issues/45)** | Source + Skill text; no new tools |
+| 2 | [#46 — PM quality benchmark + decision trace](https://github.com/danielkokr/djonik-manager-2.0/issues/46) | After #45 source; baseline run needs its own budget authorization |
+| 3 | [#47 — Read-only `trello_board_snapshot`](https://github.com/danielkokr/djonik-manager-2.0/issues/47) | Accepted through #46 |
+| 4 | [#48 — Forwarded client messages → one proposal with ✅](https://github.com/danielkokr/djonik-manager-2.0/issues/48) | After #45–#47; supersedes #43 |
+| 5 | [#49 — Telegram voice messages](https://github.com/danielkokr/djonik-manager-2.0/issues/49) | After or alongside #48 |
+| 6 | [#50 — Current focus, timebox, live re-planning](https://github.com/danielkokr/djonik-manager-2.0/issues/50) | After #48 |
+| 7 | [#51 — Client profiles](https://github.com/danielkokr/djonik-manager-2.0/issues/51) | After #48 |
+| 8 | [#52 — Feedback → approved working-style rules](https://github.com/danielkokr/djonik-manager-2.0/issues/52) | Any time after #46 |
+| 9 | [#44 — Retire Project Health specialist](https://github.com/danielkokr/djonik-manager-2.0/issues/44) | Decided by #46 scenarios; advisor model is a later candidate (docs/79 §8) |
+
+Only one item is NOW. Everything before this update is historical record.
+
 **Update 2026-09-22 — no "v1 release".** Product Owner decision: the target is a normal working PM agent, not a release milestone ([docs/00](00_DJONIK_PRODUCT_CONTRACT.md#working-pm-baseline--product-owner-decision-2026-09-22-replaces-the-2026-09-21-v1-release-boundary), [PM-agent audit docs/25](25_PM_AGENT_BEHAVIOR_AUDIT.md)). The queue below is the canonical order. #35 becomes a two-week working-rhythm pilot.
 
 ### DONE — Reliability: verify every Trello mutation against its own target and result (#31)
@@ -61,11 +82,11 @@ Verified outcome:
 | 6 | [#38 — Voice and Telegram UX](https://github.com/danielkokr/djonik-manager-2.0/issues/38) | DONE — accepted 2026-09-24: ordinary coordinator on Sonnet 5 medium/standard ([docs/46](46_ISSUE_38_ENRICHED_TRELLO_PLANNING_SMOKE.md)), Project Health F3 composition at `1014c05` ([docs/48](48_ISSUE_38_PROJECT_HEALTH_NATURAL_CUE_IMPLEMENTATION.md)), final live PH smoke PASS at `210a26d` ([docs/49](49_ISSUE_38_FINAL_PROJECT_HEALTH_LIVE_SMOKE.md)); closeout [docs/50](50_ISSUE_38_CLOSEOUT_AND_33_PROMOTION.md) |
 | 7 | [#33 — Pinned release, always-on host, serving Session](https://github.com/danielkokr/djonik-manager-2.0/issues/33) | DONE — accepted 2026-09-24: r26 (Agent v26) served always-on from Hetzner + systemd at `a6a627d`; hosted Telegram smoke, restart and provider-side attestation PASS ([docs/55](55_ISSUE_33_HOSTED_TELEGRAM_FINAL_ACCEPTANCE.md)) |
 | 8 | [#34 — Commitments, waiting and follow-up](https://github.com/danielkokr/djonik-manager-2.0/issues/34) | DONE — accepted 2026-09-24: source contract [docs/56](56_ISSUE_34_COMMITMENT_LIFECYCLE_SOURCE_CONTRACT.md) at `2e838b5`, live evidence [docs/57](57_ISSUE_34_COMMITMENT_LIFECYCLE_LIVE_VALIDATION.md)–[docs/59](59_ISSUE_34_TARGETED_AMBIGUITY_AND_MISSING_EVIDENCE_VALIDATION.md), production app `d59a532` (r26/v26 unchanged); closeout [docs/60](60_ISSUE_34_ACCEPTANCE_AND_39_PROMOTION.md) |
-| 9 | **NOW — [#39 — Working rhythm: brief, Monday plan, Friday review, exception signals](https://github.com/danielkokr/djonik-manager-2.0/issues/39)** | Dependencies #40, #33 and #34 are DONE; design in [docs/25](25_PM_AGENT_BEHAVIOR_AUDIT.md) §5 and [docs/01](01_CLAUDE_NATIVE_ARCHITECTURE.md) §10 |
+| 9 | **(historical NOW — superseded 2026-09-25, see top of queue)** [#39 — Working rhythm: brief, Monday plan, Friday review, exception signals](https://github.com/danielkokr/djonik-manager-2.0/issues/39) | Released in r28 per Product Owner; dependencies #40, #33 and #34 are DONE; design in [docs/25](25_PM_AGENT_BEHAVIOR_AUDIT.md) §5 and [docs/01](01_CLAUDE_NATIVE_ARCHITECTURE.md) §10 |
 | 10 | [#35 — Working-rhythm pilot (≈ two working weeks)](https://github.com/danielkokr/djonik-manager-2.0/issues/35) | After #39; Daniel decides what works and what to change next. Runs as real use while #41–#43 land; each rhythm message is free evidence for them |
 | 11 | [#41 — Clock in every turn + prompt aligned with the active rhythm](https://github.com/danielkokr/djonik-manager-2.0/issues/41) | Next NOW after #39 closes; small source + prompt change ([docs/70](70_DJONIK_PM_DELEGATION_ARCHITECTURE_AUDIT.md) §9 step 1) |
 | 12 | [#42 — PM judgement core + `planning-and-focus` (merge daily + weekly)](https://github.com/danielkokr/djonik-manager-2.0/issues/42) | After #41; main quality step (docs/70 §4, §7) |
-| 13 | [#43 — Status reports as verified actions: `task-operations` (merge intake), card metadata, lighter `pm-rhythm`](https://github.com/danielkokr/djonik-manager-2.0/issues/43) | After #42 |
+| 13 | ~~[#43 — Status reports as verified actions: `task-operations` (merge intake), card metadata, lighter `pm-rhythm`](https://github.com/danielkokr/djonik-manager-2.0/issues/43)~~ | Superseded 2026-09-25 by #48 |
 | 14 | [#44 — Retire the Project Health specialist after a bounded A/B](https://github.com/danielkokr/djonik-manager-2.0/issues/44) | After #42 (can follow #43); keep the specialist if the A/B shows a loss |
 | — | Candidate, no issue yet: read-only `trello_board_snapshot` tool + backlog hygiene in the Friday review | Only if the pilot after #41–#44 still shows date, payload or "untouched for long" problems (docs/70 §5, §9 step 5) |
 
