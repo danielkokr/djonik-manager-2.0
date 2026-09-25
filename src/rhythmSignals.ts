@@ -310,7 +310,9 @@ export function isMuted(signal: Signal, mutes: readonly RhythmMute[], today: str
 /**
  * `open`: current, not yet raised by an exception. `notified`: raised by a delivered exception.
  * `evaluated`: Claude saw it as an exception candidate and chose SILENT. Both of the latter prevent
- * a repeat while the fingerprint is unchanged. `resolved`: the fact is gone. Suppression is not a
+ * a repeat while the fingerprint is unchanged. An exception that ended without delivery (failed turn, empty
+ * reply, Telegram refused twice) leaves its signals `open` with `failedOn` = that Kyiv date: not reconsidered
+ * the same day (no regrouping loop), but a later day may raise it again under the ordinary limits. `resolved`: the fact is gone. Suppression is not a
  * stored status: it is derived from `/rhythm.md` mutes on every evaluation, so a stale suppression can
  * never outlive the mute that caused it.
  */
@@ -324,6 +326,8 @@ export interface SignalRecord {
   lastChangedAt: string;
   notifiedAt?: string;
   resolvedAt?: string;
+  /** Kyiv date an exception carrying this occurrence ended without delivery; blocks it for that day only. */
+  failedOn?: string;
 }
 
 export type SignalLedger = Record<string, SignalRecord>;
@@ -370,6 +374,18 @@ export function markSignals(ledger: SignalLedger, signals: readonly Signal[], st
   return next;
 }
 
+/** An undelivered, non-ambiguous exception: its signals stay `open` but wait until another Kyiv day. */
+export function markExceptionFailed(ledger: SignalLedger, signals: readonly Signal[], now: Date): SignalLedger {
+  const next = { ...ledger };
+  const today = kyivLocal(now).date;
+  for (const signal of signals) {
+    const record = next[signal.key];
+    if (!record || record.fingerprint !== signal.fingerprint || record.status !== "open") continue;
+    next[signal.key] = { ...record, failedOn: today, lastChangedAt: now.toISOString() };
+  }
+  return next;
+}
+
 // --- Selection limits ------------------------------------------------------------------------------
 
 /** Unsolicited exception deliveries already made (confirmed sent) — rituals never count. */
@@ -389,6 +405,11 @@ export interface ExceptionSelectionInput {
   lastRitualSentAt: string | null;
   /** Any exception occurrence that is in flight or ambiguous blocks another one (no blind resend). */
   exceptionInFlight: boolean;
+  /**
+   * Minutes until the next ritual still to come TODAY (Kyiv), or null when none remains. A ritual carries
+   * every non-muted signal (`ritualObservations`), so a candidate it can reasonably carry waits for it.
+   */
+  minutesToNextRitual?: number | null;
 }
 
 export type ExceptionDecision =
@@ -406,6 +427,12 @@ const SEVERITY_RANK: Record<SignalSeverity, number> = { low: 0, medium: 1, high:
  * 0 over 1 over 2: no candidate → none; quiet hours / weekend / spacing → defer (the facts wait for
  * the next ritual, they are not queued into a burst); the first exception of the day needs at least
  * medium severity; a second needs a NEW high-severity candidate; never more than the absolute cap.
+ *
+ * Nearest-ritual merge: a candidate the next ritual can reasonably carry is not sent separately. Without
+ * high severity it waits for any ritual still to come today; with high severity only for one within the
+ * exception spacing (a separate message that close to a ritual would be a burst). There is no stored queue:
+ * a deferred candidate stays `open` in the ledger and is re-detected from fresh facts on every later tick,
+ * so a situation that resolved meanwhile is never raised, and one that persists is judged again as current.
  */
 export function selectException(input: ExceptionSelectionInput): ExceptionDecision {
   const { now, config, ledger } = input;
@@ -424,6 +451,7 @@ export function selectException(input: ExceptionSelectionInput): ExceptionDecisi
     const record = ledger[signal.key];
     if (!record || record.fingerprint !== signal.fingerprint) return false;
     if (record.status !== "open") return false; // notified / evaluated: no repeat of an unchanged fact
+    if (record.failedOn === today) return false; // an undelivered exception today: a later day may retry
     // Known before today's ritual → it was that ritual's material, not a reason to interrupt.
     if (input.lastRitualSentAt && record.firstSeenAt <= input.lastRitualSentAt) return false;
     return SEVERITY_RANK[signal.severity] >= SEVERITY_RANK.medium;
@@ -450,6 +478,11 @@ export function selectException(input: ExceptionSelectionInput): ExceptionDecisi
   if (isQuietTime(local.minutes, config.quietHours)) return { decision: "defer", reason: "quiet_hours" };
   if (lastSent !== null && now.getTime() - new Date(lastSent).getTime() < exceptions.spacingMinutes * 60_000) {
     return { decision: "defer", reason: "spacing" };
+  }
+  const toRitual = input.minutesToNextRitual ?? null;
+  if (toRitual !== null && toRitual >= 0) {
+    const urgent = eligible.some((signal) => signal.severity === "high");
+    if (!urgent || toRitual <= exceptions.spacingMinutes) return { decision: "defer", reason: "next_ritual" };
   }
 
   const grouped = [...eligible]

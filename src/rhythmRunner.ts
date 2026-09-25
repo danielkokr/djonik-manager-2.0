@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   describeRhythmConfig,
+  formatLocalTime,
   parseRhythmConfig,
   type RhythmActivation,
   type RhythmConfig,
@@ -11,6 +12,7 @@ import { evaluateRituals, isQuietTime, kyivLocal, type RitualKind, type RitualOc
 import {
   advanceSignalLedger,
   detectSignals,
+  markExceptionFailed,
   markSignals,
   occurrenceHandle,
   ritualObservations,
@@ -207,10 +209,23 @@ export function buildRitualPrompt(
   return lines.filter(Boolean).join("\n");
 }
 
-export function buildExceptionPrompt(signals: readonly Signal[], now: Date): string {
+/** The next ritual still to come today, if any: the one an exception would otherwise wait for. */
+export interface NextRitual {
+  kind: RitualKind;
+  scheduledMinutes: number;
+}
+
+function nextRitualLine(next: NextRitual | null | undefined): string {
+  if (next === undefined) return "";
+  if (next === null) return "Сьогодні запланованих ритуалів більше немає; наступний — ранковий хід наступного робочого дня.";
+  return `Наступний ритуал сьогодні: ${RITUAL_SECTION[next.kind]} о ${formatLocalTime(next.scheduledMinutes)}.`;
+}
+
+export function buildExceptionPrompt(signals: readonly Signal[], now: Date, nextRitual?: NextRitual | null): string {
   return [
     `[Робочий ритм · автоматичний хід · можливий виняток · ${kyivLabel(now, true)}]`,
     "Код знайшов факти, які, можливо, не можуть чекати наступного ритуалу. Перевір їх свіжим Trello і за Skill pm-rhythm (розділ «винятки») виріши, чи писати зараз.",
+    nextRitualLine(nextRitual),
     `Якщо чекання до наступного брифу чи огляду суттєво нічого не погіршує — відповідай рівно ${SILENT_TOKEN} і нічого більше.`,
     READ_ONLY_RULES,
     "Якщо пишеш: одне коротке повідомлення про все разом, висновок першим, одна легка дія.",
@@ -462,7 +477,8 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
     const today = local.date;
 
     // Rituals first; at most one proactive message per tick.
-    const dueRitual = evaluateRituals(now, config).find((ritual) => ritual.status === "due" && mayAttempt(state.deliveries[ritual.key]));
+    const rituals = evaluateRituals(now, config);
+    const dueRitual = rituals.find((ritual) => ritual.status === "due" && mayAttempt(state.deliveries[ritual.key]));
     const exceptionWindowOpen =
       config.exceptions.enabled &&
       config.exceptions.maxPerDay > 0 &&
@@ -509,6 +525,9 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
     const inFlight = Object.values(state.deliveries).some(
       (record) => record.kind === "exception" && record.key.startsWith(`exception:${today}:`) && (record.status === "claimed" || record.status === "sending"),
     );
+    // The next ritual still to come today (the due one, if any, was handled above). `evaluateRituals` is sorted.
+    const upcoming = rituals.find((ritual) => ritual.status === "not_yet" && mayAttempt(state.deliveries[ritual.key]));
+    const nextRitual: NextRitual | null = upcoming ? { kind: upcoming.kind, scheduledMinutes: upcoming.scheduledMinutes } : null;
     const decision = selectException({
       now,
       config,
@@ -517,16 +536,24 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
       exceptionsSent: history,
       lastRitualSentAt: lastRitualSentToday(state, today),
       exceptionInFlight: inFlight,
+      minutesToNextRitual: nextRitual ? nextRitual.scheduledMinutes - local.minutes : null,
     });
     report.exceptionDecision = decision.decision === "consider" ? "consider" : `${decision.decision}:${decision.reason}`;
     if (decision.decision !== "consider") return report;
 
     const key = exceptionKey(today, decision.signals);
     if (!mayAttempt(state.deliveries[key])) return report;
-    const result = await attempt(state, key, "exception", "rhythm_exception", buildExceptionPrompt(decision.signals, now), report, {
+    const result = await attempt(state, key, "exception", "rhythm_exception", buildExceptionPrompt(decision.signals, now, nextRitual), report, {
       severity: decision.severity,
       signalHandles: decision.signals.map(occurrenceHandle),
     });
+    // An occurrence that ended without delivery and may not retry (failed turn, empty reply, refused twice):
+    // nothing reached Daniel, so its signals stay `open` but are blocked for the rest of this Kyiv day. Same day,
+    // a later tick cannot regroup them under a new key and pay for another turn; a later day (a weekend high
+    // exception when enabled, or the next ritual) may still raise them. Never used for ambiguous sends.
+    if (result.outcome === "failed" && !mayAttempt(result.state.deliveries[key])) {
+      await deps.store.update((current) => ({ ...current, signals: markExceptionFailed(current.signals, decision.signals, now) }));
+    }
     const raised: "evaluated" | "notified" | null =
       result.outcome === "silent"
         ? "evaluated"

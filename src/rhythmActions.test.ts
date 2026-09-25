@@ -89,3 +89,13 @@ test("proactive text is bounded to one Telegram message", () => {
   assert.equal(long.length, TELEGRAM_TEXT_LIMIT);
   assert.ok(long.endsWith("…"));
 });
+
+test("bounding never splits an emoji's surrogate pair at the cut", () => {
+  // 4094 BMP characters, then emoji: the cut at 4095 code units would land between the pair's halves.
+  const text = `${"х".repeat(TELEGRAM_TEXT_LIMIT - 2)}${"🔥".repeat(10)}`;
+  const bounded = boundTelegramText(text);
+  assert.ok(bounded.length <= TELEGRAM_TEXT_LIMIT);
+  assert.ok(bounded.endsWith("…"));
+  assert.doesNotMatch(bounded, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/, "no lone surrogate");
+  assert.ok(boundTelegramText(`${"х".repeat(TELEGRAM_TEXT_LIMIT - 3)}${"🔥".repeat(10)}`).includes("🔥"), "a whole emoji before the cut is kept");
+});

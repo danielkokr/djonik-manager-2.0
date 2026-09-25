@@ -637,3 +637,224 @@ test("invalid config note: fixed warnings are forgotten, so a later new problem 
   await scheduler.tick();
   assert.match(h.turns[1].prompt, /не вдалося застосувати/);
 });
+
+// --- Deferred signals, nearest-ritual merge, terminal exception failure (docs/71) -------------------------
+
+/** One exception already delivered Tuesday 18:00 Kyiv, so a new high candidate at 19:00 is held by spacing. */
+function stateWithTuesdayException(): RhythmState {
+  const key = "exception:2026-09-29:seed00000000";
+  return {
+    ...emptyRhythmState(),
+    deliveries: {
+      [key]: {
+        key, kind: "exception", status: "sent", attempts: 1, ref: "abcdef123456", sessionId: "sesn_serving",
+        createdAt: "2026-09-29T15:00:00.000Z", updatedAt: "2026-09-29T15:00:05.000Z", sendStartedAt: "2026-09-29T15:00:01.000Z",
+        sentAt: "2026-09-29T15:00:05.000Z", telegramMessageId: 7, actions: ["raise", "later", "suppress"], severity: "medium",
+      },
+    },
+  };
+}
+
+/** Card `y` became overdue Tuesday 18:30 Kyiv. */
+const lateCard = (list: CardFact["list"]): SignalFacts => ({
+  cards: [{ id: "y", name: "Макет банера", project: "extract", list, due: "2026-09-29T15:30:00Z", dueComplete: false, enteredListAt: null, reopenedFromDoneAt: null }],
+  projects: [],
+  followUps: [],
+});
+
+/** Tue 19:00 held by spacing → Tue 22:00 quiet (no facts read at all) → Wednesday morning. */
+async function holdOvernight(h: Harness, scheduler: ReturnType<typeof createRhythmScheduler>): Promise<void> {
+  h.setNow("2026-09-29T16:00:00Z"); // Tue 19:00 Kyiv
+  assert.equal((await scheduler.tick()).exceptionDecision, "defer:spacing");
+  h.setNow("2026-09-29T19:00:00Z"); // Tue 22:00 Kyiv
+  assert.equal((await scheduler.tick()).exceptionDecision, undefined, "quiet hours: no Trello read, no decision");
+  assert.equal(h.turns.length, 0);
+  assert.equal(h.store.snapshot().signals["overdue:y"].status, "open", "held as an open signal, not as prepared text");
+}
+
+test("deferred overnight, resolved by morning: re-detected from fresh facts, never raised", async () => {
+  let list: CardFact["list"] = "todo";
+  const h = harness({ now: "2026-09-29T16:00:00Z", config: "morning: off", state: stateWithTuesdayException(), facts: () => lateCard(list) });
+  const scheduler = createRhythmScheduler(h.deps);
+  await holdOvernight(h, scheduler);
+  list = "done";
+  h.setNow("2026-09-30T06:31:00Z"); // Wed 09:31 Kyiv, quiet hours just ended
+  assert.equal((await scheduler.tick()).exceptionDecision, "none:no_candidate");
+  assert.equal(h.turns.length + h.sends.length, 0);
+  assert.equal(h.store.snapshot().signals["overdue:y"].status, "resolved");
+});
+
+test("deferred overnight, still open, no ritual today: one current exception after quiet hours, then no repeat", async () => {
+  const h = harness({ now: "2026-09-29T16:00:00Z", config: "morning: off", state: stateWithTuesdayException(), facts: () => lateCard("todo") });
+  const scheduler = createRhythmScheduler(h.deps);
+  await holdOvernight(h, scheduler);
+  h.setNow("2026-09-30T06:31:00Z");
+  const report = await scheduler.tick();
+  assert.equal(report.delivery?.kind, "exception");
+  assert.equal(h.turns.length, 1);
+  assert.match(h.turns[0].prompt, /\[overdue:y@2026-09-29T15:30:00Z\]/);
+  assert.match(h.turns[0].prompt, /Сьогодні запланованих ритуалів більше немає/);
+  assert.equal(h.sends.length, 1);
+  h.setNow("2026-09-30T08:45:00Z");
+  await scheduler.tick();
+  assert.equal(h.turns.length, 1, "the unchanged signal is not sent again");
+});
+
+test("deferred overnight with a later morning brief: the brief carries it, no separate message before or after", async () => {
+  const h = harness({ now: "2026-09-29T16:00:00Z", config: "morning: 10:00", state: stateWithTuesdayException(), facts: () => lateCard("todo") });
+  const scheduler = createRhythmScheduler(h.deps);
+  await holdOvernight(h, scheduler);
+  h.setNow("2026-09-30T06:31:00Z"); // 09:31: quiet hours over, brief at 10:00
+  assert.equal((await scheduler.tick()).exceptionDecision, "defer:next_ritual");
+  assert.equal(h.turns.length, 0);
+  h.setNow("2026-09-30T07:00:00Z"); // 10:00: the brief
+  const brief = await scheduler.tick();
+  assert.equal(brief.delivery?.key, "morning:2026-09-30");
+  assert.match(h.turns[0].prompt, /overdue:y@2026-09-29T15:30:00Z/);
+  h.setNow("2026-09-30T07:30:00Z");
+  assert.equal((await scheduler.tick()).exceptionDecision, "none:no_candidate");
+  assert.equal(h.turns.length, 1);
+  assert.equal(h.sends.length, 1);
+});
+
+test("Friday midday: a non-urgent candidate waits for the Friday review instead of a separate message", async () => {
+  const dueMonday: SignalFacts = {
+    cards: [{ id: "m", name: "Лендінг", project: "limen", list: "todo", due: "2026-10-05T12:00:00Z", dueComplete: false, enteredListAt: null, reopenedFromDoneAt: null }],
+    projects: [],
+    followUps: [],
+  };
+  const h = harness({ now: "2026-10-02T09:30:00Z", facts: () => dueMonday }); // Fri 12:30 Kyiv, morning expired
+  const scheduler = createRhythmScheduler(h.deps);
+  assert.equal((await scheduler.tick()).exceptionDecision, "defer:next_ritual");
+  assert.equal(h.turns.length, 0);
+  h.setNow("2026-10-02T13:30:00Z"); // 16:30 Kyiv: the review
+  assert.equal((await scheduler.tick()).delivery?.key, "friday-review:2026-10-02");
+  assert.match(h.turns[0].prompt, /due-tomorrow:m@/);
+  h.setNow("2026-10-02T14:00:00Z");
+  assert.equal((await scheduler.tick()).exceptionDecision, "none:no_candidate");
+  assert.equal(h.sends.length, 1);
+});
+
+test("a terminally failed exception blocks its facts for the day: a new fact later is raised alone, not regrouped", async () => {
+  let fail = true;
+  let current = overdue();
+  const h = harness({
+    now: TUESDAY_1400,
+    facts: () => current,
+    reply: () => {
+      if (fail) throw new AutonomousTurnFailure([{ kind: "mcp", name: "trelloReadCard" }], "sesn_serving");
+      return { reply: "Банер прострочено щойно. Підняти?", toolUses: [] };
+    },
+  });
+  const scheduler = createRhythmScheduler(h.deps);
+  assert.equal((await scheduler.tick()).delivery?.status, "failed");
+  const failed = h.store.snapshot().signals["overdue:c1"];
+  assert.equal(failed.status, "open", "nothing reached Daniel: not settled as SILENT");
+  assert.equal(failed.failedOn, "2026-09-29", "blocked for the rest of this Kyiv day only");
+  fail = false;
+  h.setNow("2026-09-29T13:30:00Z"); // 16:30 Kyiv
+  current = { ...overdue(), cards: [...overdue().cards, ...lateCard("todo").cards.map((c) => ({ ...c, due: "2026-09-29T13:00:00Z" }))] };
+  const report = await scheduler.tick();
+  assert.equal(report.delivery?.status, "sent");
+  assert.equal(h.turns.length, 2);
+  assert.match(h.turns[1].prompt, /overdue:y@/);
+  assert.doesNotMatch(h.turns[1].prompt, /overdue:c1@/);
+});
+
+// --- Undelivered exception after the last ritual of the day (Product Lead edge case) ------------------------
+
+/** Friday 2026-10-02: the review was delivered at 16:30 Kyiv. */
+function stateAfterFridayReview(): RhythmState {
+  const key = "friday-review:2026-10-02";
+  return {
+    ...emptyRhythmState(),
+    deliveries: {
+      [key]: {
+        key, kind: "friday-review", status: "sent", attempts: 1, ref: "fedcba654321", sessionId: "sesn_serving",
+        createdAt: "2026-10-02T13:30:00.000Z", updatedAt: "2026-10-02T13:30:40.000Z", sendStartedAt: "2026-10-02T13:30:30.000Z",
+        sentAt: "2026-10-02T13:30:40.000Z", telegramMessageId: 9, actions: ["carry_over", "modify", "not_now"],
+      },
+    },
+  };
+}
+
+/** Card `f` became overdue Friday 17:50 Kyiv: a new high-severity situation after the review. */
+const fridayEvening: SignalFacts = {
+  cards: [{ id: "f", name: "Реліз макетів", project: "seqthera", list: "todo", due: "2026-10-02T14:50:00Z", dueComplete: false, enteredListAt: null, reopenedFromDoneAt: null }],
+  projects: [],
+  followUps: [],
+};
+const FRIDAY_1800 = "2026-10-02T15:00:00Z";
+const SATURDAY_0931 = "2026-10-03T06:31:00Z";
+
+async function fridayEveningThenSaturday(options: {
+  config: string;
+  fridayFails: "turn" | "empty" | "rejected" | "ambiguous";
+}): Promise<{ h: Harness; saturday: Awaited<ReturnType<ReturnType<typeof createRhythmScheduler>["tick"]>> }> {
+  let friday = true;
+  const h = harness({
+    now: FRIDAY_1800,
+    config: options.config,
+    state: stateAfterFridayReview(),
+    facts: () => fridayEvening,
+    reply: () => {
+      if (friday && options.fridayFails === "turn") throw new AutonomousTurnFailure([{ kind: "mcp", name: "trelloReadCard" }], "sesn_serving");
+      if (friday && options.fridayFails === "empty") return { reply: "", toolUses: [] };
+      return { reply: "Реліз макетів прострочено з пʼятниці. Підняти на понеділок першим?", toolUses: [] };
+    },
+    send: () => {
+      if (!friday) return { status: "sent", messageId: 500 };
+      if (options.fridayFails === "rejected") return { status: "rejected", reason: "http_400" };
+      if (options.fridayFails === "ambiguous") return { status: "unknown", reason: "timeout" };
+      return { status: "sent", messageId: 400 };
+    },
+  });
+  const scheduler = createRhythmScheduler(h.deps);
+  assert.equal((await scheduler.tick()).exceptionDecision, "consider", "no ritual left today, high severity");
+  h.setNow("2026-10-02T15:15:00Z"); // 18:15: one more Friday tick
+  await scheduler.tick();
+  h.setNow("2026-10-02T15:45:00Z"); // 18:45
+  await scheduler.tick();
+  friday = false;
+  h.setNow(SATURDAY_0931);
+  return { h, saturday: await scheduler.tick() };
+}
+
+test("undelivered after the last ritual — model failure before any send: blocked for Friday, raised again Saturday under the weekend rule", async () => {
+  for (const fridayFails of ["turn", "empty"] as const) {
+    const { h, saturday } = await fridayEveningThenSaturday({ config: "weekend_exceptions: on", fridayFails });
+    const fridayTurns = h.turns.filter((t) => t.occurrenceKey.startsWith("exception:2026-10-02:"));
+    assert.equal(fridayTurns.length, 1, `${fridayFails}: one Friday turn, never re-run the same day`);
+    assert.equal(saturday.delivery?.key.startsWith("exception:2026-10-03:"), true, `${fridayFails}: reconsidered Saturday`);
+    assert.equal(saturday.delivery?.status, "sent");
+    assert.equal(h.sends.length, 1, `${fridayFails}: exactly one message reached Daniel`);
+    assert.equal(h.store.snapshot().signals["overdue:f"].status, "notified");
+  }
+});
+
+test("undelivered after the last ritual — definitive Telegram refusal: one bounded Friday retry, then Saturday under the weekend rule", async () => {
+  const { h, saturday } = await fridayEveningThenSaturday({ config: "weekend_exceptions: on", fridayFails: "rejected" });
+  const fridayTurns = h.turns.filter((t) => t.occurrenceKey.startsWith("exception:2026-10-02:"));
+  assert.equal(fridayTurns.length, 2, "MAX_DELIVERY_ATTEMPTS on the same occurrence, no third Friday attempt");
+  assert.equal(h.store.snapshot().deliveries[fridayTurns[0].occurrenceKey].status, "failed");
+  assert.equal(saturday.delivery?.status, "sent");
+  assert.equal(h.sends.filter((s) => s.ref === h.store.snapshot().deliveries[saturday.delivery!.key].ref).length, 1);
+});
+
+test("undelivered after the last ritual — ambiguous send: possibly on screen, never raised again (not Saturday either)", async () => {
+  const { h, saturday } = await fridayEveningThenSaturday({ config: "weekend_exceptions: on", fridayFails: "ambiguous" });
+  assert.equal(h.turns.length, 1);
+  assert.equal(h.sends.length, 1);
+  assert.equal(h.store.snapshot().signals["overdue:f"].status, "notified");
+  assert.equal(saturday.exceptionDecision, "none:no_candidate");
+});
+
+test("undelivered after the last ritual with weekend exceptions off: held open for Monday's ritual, not settled", async () => {
+  const { h, saturday } = await fridayEveningThenSaturday({ config: "weekend_exceptions: off", fridayFails: "turn" });
+  assert.equal(saturday.exceptionDecision, undefined, "weekend without weekend exceptions: no fact collection");
+  assert.equal(h.turns.length, 1);
+  h.setNow("2026-10-05T06:30:00Z"); // Monday 09:30 Kyiv: the week plan
+  const monday = await createRhythmScheduler(h.deps).tick();
+  assert.equal(monday.delivery?.key, "monday-plan:2026-10-05");
+  assert.match(h.turns.at(-1)!.prompt, /overdue:f@2026-10-02T14:50:00Z/);
+});

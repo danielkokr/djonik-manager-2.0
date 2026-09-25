@@ -328,3 +328,37 @@ test("exceptions off, max 0 or an in-flight/ambiguous exception → none", () =>
   assert.equal(selectException(selection(interruptHigh, { config: zero })).decision, "none");
   assert.deepEqual(selectException(selection(interruptHigh, { exceptionInFlight: true })), { decision: "none", reason: "exception_in_flight" });
 });
+
+// --- Nearest-ritual merge (Product Lead clarification, docs/71) ------------------------------------------
+
+test("nearest-ritual merge: a non-high candidate waits for any ritual still to come today", () => {
+  assert.deepEqual(selectException(selection(interruptMedium, { minutesToNextRitual: 330 })), { decision: "defer", reason: "next_ritual" });
+  // No ritual left today (or the caller does not know) → the ordinary limits decide.
+  assert.equal(selectException(selection(interruptMedium, { minutesToNextRitual: null })).decision, "consider");
+  assert.equal(selectException(selection(interruptMedium)).decision, "consider");
+});
+
+test("nearest-ritual merge: a high candidate waits only for a ritual within the exception spacing", () => {
+  assert.deepEqual(selectException(selection(interruptHigh, { minutesToNextRitual: 90 })), { decision: "defer", reason: "next_ritual" });
+  assert.deepEqual(selectException(selection(interruptHigh, { minutesToNextRitual: 120 })), { decision: "defer", reason: "next_ritual" });
+  assert.equal(selectException(selection(interruptHigh, { minutesToNextRitual: 121 })).decision, "consider");
+  const wider: RhythmConfig = { ...defaults, exceptions: { ...defaults.exceptions, spacingMinutes: 240 } };
+  assert.deepEqual(selectException(selection(interruptHigh, { config: wider, minutesToNextRitual: 200 })), { decision: "defer", reason: "next_ritual" });
+});
+
+test("nearest-ritual merge: a group with one high candidate is urgent as a whole (grouped, not split)", () => {
+  const decision = selectException(selection([...interruptMedium, ...interruptHigh], { minutesToNextRitual: 300 }));
+  assert.equal(decision.decision, "consider");
+  assert.deepEqual(decision.decision === "consider" && decision.signals.map((s) => s.key), ["overdue:c", "due-tomorrow:a"]);
+});
+
+test("nearest-ritual merge never overrides the hard limits: quiet hours, weekends, caps and mutes still decide first", () => {
+  const night = new Date("2026-09-29T19:00:00Z");
+  const signals = detectSignals(facts({ cards: [card({ id: "c", due: "2026-09-29T18:30:00Z" })] }), night, defaults);
+  assert.deepEqual(selectException(selection(signals, { now: night, minutesToNextRitual: 30 })), { decision: "defer", reason: "quiet_hours" });
+  const sent = [
+    { sentAt: "2026-09-29T05:00:00Z", severity: "medium" as const },
+    { sentAt: "2026-09-29T06:00:00Z", severity: "high" as const },
+  ];
+  assert.deepEqual(selectException(selection(interruptHigh, { exceptionsSent: sent, minutesToNextRitual: 30 })), { decision: "none", reason: "daily_max_reached" });
+});

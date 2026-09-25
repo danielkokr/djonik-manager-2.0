@@ -147,5 +147,9 @@ export const TELEGRAM_TEXT_LIMIT = 4096;
 /** Keeps a proactive message within one Telegram message (one set of buttons, one delivery record). */
 export function boundTelegramText(text: string): string {
   if (text.length <= TELEGRAM_TEXT_LIMIT) return text;
-  return `${text.slice(0, TELEGRAM_TEXT_LIMIT - 1).trimEnd()}…`;
+  // Never cut between the two halves of a surrogate pair (emoji): a lone surrogate is not valid UTF-8.
+  let end = TELEGRAM_TEXT_LIMIT - 1;
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${text.slice(0, end).trimEnd()}…`;
 }
