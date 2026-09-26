@@ -16,8 +16,8 @@ const djonikSource = readFileSync(join(repoRoot, "managed-agents", "djonik.md"),
 /** The reviewed source prompt: the `managed-agents/djonik.md` body, as an Agent would store it (docs/42). */
 export const SOURCE_SYSTEM_PROMPT = /^---\n[\s\S]*?\n---\n\n([\s\S]*)$/.exec(djonikSource)![1].replace(/\n$/, "");
 
-/** The #45 coordinator-prompt edits (factual grounding), exact text before → after, applied on top of r28. Not synced:
- *  the served r28 prompt is the source minus these. */
+/** The #45 coordinator-prompt edits (factual grounding), exact text before → after, applied on top of r28.
+ *  r29 serves the source; reversing these still reconstructs the immutable r28 prompt. */
 export const ISSUE_45_PROMPT_EDITS: ReadonlyArray<{ before: string; after: string }> = [
   {
     // Fit is the time Daniel states, not a capacity Djonik estimates.
@@ -59,7 +59,7 @@ function revertEdits(prompt: string, edits: ReadonlyArray<{ before: string; afte
   }, prompt);
 }
 
-/** The prompt served r28 (Agent v28) stores: the source minus the unsynced #45 edits. */
+/** The prompt served r28 (Agent v28) stores: the current r29 source minus the #45 edits. */
 export const R28_SYSTEM_PROMPT = revertEdits(SOURCE_SYSTEM_PROMPT, ISSUE_45_PROMPT_EDITS, "#45");
 
 /** The two #41 coordinator-prompt edits (r27 → r28 candidate), exact text before → after. */
@@ -113,10 +113,10 @@ export const PRE_42_SYSTEM_PROMPT = revertEdits(R28_SYSTEM_PROMPT, ISSUE_42_PROM
 /** The prompt Agent versions v25–v27 carry: the r28 prompt minus #42, then minus #41. */
 export const PRE_41_SYSTEM_PROMPT = revertEdits(PRE_42_SYSTEM_PROMPT, ISSUE_41_PROMPT_EDITS, "#41");
 
-/** The prompt text whose SHA-256 a release pins: the r28 prompt (v28) or the pre-#41 prompt v25–v27 carry. */
+/** The prompt text whose SHA-256 a release pins. */
 export function systemPromptFor(release: Pick<DjonikRelease, "systemSha256">): string {
   const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
-  const match = [R28_SYSTEM_PROMPT, PRE_41_SYSTEM_PROMPT].find((prompt) => sha(prompt) === release.systemSha256);
+  const match = [SOURCE_SYSTEM_PROMPT, R28_SYSTEM_PROMPT, PRE_41_SYSTEM_PROMPT].find((prompt) => sha(prompt) === release.systemSha256);
   if (match === undefined) throw new Error(`no fixture prompt for system ${release.systemSha256.slice(0, 12)}`);
   return match;
 }

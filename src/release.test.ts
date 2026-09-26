@@ -4,11 +4,11 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28, RELEASE_R28_CANDIDATE, RELEASES, RETIRED_BY_R28, SERVING_RELEASE, type DjonikRelease } from "./release.js";
+import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28_CANDIDATE, RELEASE_R29, RELEASES, RETIRED_BY_R28, SERVING_RELEASE, type DjonikRelease } from "./release.js";
 import { SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
 import { buildAgentUpdateBody } from "./releasePlan.js";
 import { PROJECT_HEALTH_SPECIALIST_AGENT_ID } from "./djonikClient.js";
-import { ISSUE_45_PROMPT_EDITS, PRE_41_SYSTEM_PROMPT, R28_SYSTEM_PROMPT, SOURCE_SYSTEM_PROMPT } from "./releaseFixtures.test-helpers.js";
+import { PRE_41_SYSTEM_PROMPT, R28_SYSTEM_PROMPT, SOURCE_SYSTEM_PROMPT } from "./releaseFixtures.test-helpers.js";
 
 // #33 release definitions: one reviewed expectation per release, kept in lockstep with the declarative
 // Agent source (`managed-agents/*.md`) and the repo Skills, so a release can never silently diverge from
@@ -25,9 +25,9 @@ test("the serving release of this revision is one of the reviewed releases", () 
   assert.equal(RELEASES[SERVING_RELEASE.id], SERVING_RELEASE);
 });
 
-test("this revision serves r28 (source cutover, docs/75): Agent v28, every Skill pinned with its Session spelling, #36 exposed, writes gated", () => {
-  assert.equal(SERVING_RELEASE, RELEASE_R28);
-  assert.equal(SERVING_RELEASE.agent.version, 28);
+test("this revision serves r29: Agent v29, every Skill pinned with its measured Session spelling, #36 exposed, writes gated", () => {
+  assert.equal(SERVING_RELEASE, RELEASE_R29);
+  assert.equal(SERVING_RELEASE.agent.version, 29);
   assert.ok(SERVING_RELEASE.skills.every((skill) => skill.pin.kind === "explicit"), "no `latest` is served");
   // Without its measured Session spelling a pinned Skill fails the startup Session attestation closed.
   assert.ok(SERVING_RELEASE.skills.every((skill) => skill.pin.kind === "explicit" && /^\d+$/.test(skill.pin.sessionVersion ?? "")), "every sessionVersion measured");
@@ -86,14 +86,10 @@ const surfaceOf = (release: DjonikRelease) => {
   return { skills, tools: (tools as Array<Record<string, unknown>>).map(omitEmpty) };
 };
 
-test("the serving release (r28) equals the declarative coordinator source managed-agents/djonik.md, except the unsynced #45 prompt edits", () => {
-  // #41 + #42 source cutover (docs/75): djonik.md frontmatter is the serving release. #45 changes only the body, not yet
-  // synced: the body minus exactly ISSUE_45_PROMPT_EDITS is the served prompt, so nothing else can hide behind #45.
+test("the serving release (r29) equals the declarative coordinator source managed-agents/djonik.md", () => {
   const release = SERVING_RELEASE;
-  assert.equal(release.systemSha256, sha(R28_SYSTEM_PROMPT), "serving prompt SHA = djonik.md body minus the #45 edits");
+  assert.equal(release.systemSha256, sha(SOURCE_SYSTEM_PROMPT), "serving prompt SHA = current djonik.md body");
   assert.equal(RELEASE_R28_CANDIDATE.systemSha256, sha(R28_SYSTEM_PROMPT));
-  assert.notEqual(sha(SOURCE_SYSTEM_PROMPT), release.systemSha256, "#45 is source-only until a release syncs it");
-  assert.equal(ISSUE_45_PROMPT_EDITS.length, 3);
   assert.deepEqual(declared.model, { id: release.model.id, effort: release.model.effort, speed: release.model.speed });
   assert.deepEqual(declared.multiagent, { type: "coordinator", agents: [{ type: "agent", id: release.specialist.id, version: release.specialist.version }] });
   assert.deepEqual(declared.mcp_servers, release.mcpServers.map((server) => ({ type: "url", name: server.name, url: server.url })));
@@ -182,10 +178,9 @@ test("pinned Skill versions are the accepted repo Skills (recorded hashes in doc
     assert.ok(RELEASE_R26.skills.some((skill) => skill.name === name));
     assert.equal(sha(read(".claude", "skills", name, "SKILL.md")).slice(0, 8), prefix, `${name} repo source drifted from its pinned version`);
   }
-  // task-management's pin (r26–r28) was synced from `e994d31a…`. #45 narrows its trigger in the repo source; that
-  // revision is not synced and reaches production only as a new Skill version in a separately authorized release.
+  // task-management's older pin (r26–r28) was synced from `e994d31a…`; r29 pins the accepted #45 source.
   assert.ok(RELEASE_R26.skills.some((skill) => skill.name === "task-management"));
-  assert.notEqual(sha(read(".claude", "skills", "task-management", "SKILL.md")).slice(0, 8), "e994d31a", "#45 moves task-management ahead of its pin");
+  assert.equal(sha(read(".claude", "skills", "task-management", "SKILL.md")), "aec09d5aa2b8170fe4f9d365a61484d1a1dc8b5e3b49a55382f3b014a8d70b7a");
   // #42 retires daily-planning (`7fc9ff92…`) and weekly-planning (`0d6cca38…`) from the next release. Their pinned
   // versions stay immutable on the provider for the served r27 and its rollback; their source leaves the repo
   // (git history keeps it), so no repo file can silently drift from — or be re-synced as — a retired Skill.

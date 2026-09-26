@@ -100,7 +100,7 @@ function withMeasuredToolsets(agent: Rec): Rec {
 test("r27 is a reviewed release and the rollback of the r28 source cutover (docs/75); the serving boundary stays pre_execution", () => {
   assert.equal(RELEASES.r27, RELEASE_R27);
   assert.equal(RELEASE_R27.agent.version, 27);
-  assert.notEqual(SERVING_RELEASE, RELEASE_R27, "r28 is served by this revision");
+  assert.notEqual(SERVING_RELEASE, RELEASE_R27, "r29 is served by this revision");
   // Derived, not asserted into existence: the serving boundary is whatever the serving release's tool surface gives.
   assert.equal(SERVING_READ_ONLY_BOUNDARY, readOnlyBoundaryFor(SERVING_RELEASE));
   assert.equal(SERVING_READ_ONLY_BOUNDARY, "pre_execution");

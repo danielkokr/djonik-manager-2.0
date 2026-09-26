@@ -487,15 +487,42 @@ export const RELEASE_R28: DjonikRelease = {
   session: SESSION,
 };
 
-export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_R25, r26: RELEASE_R26, r27: RELEASE_R27, r28: RELEASE_R28 };
+/** r29 (#45 PM factual grounding): Agent v29 read back after one v28-preconditioned update. The prompt and these
+ * three existing coordinator Skills are the only semantic changes from r28. New Skill bytes were downloaded and
+ * SHA-256 verified against committed main; Session spellings were measured in zero-event read-only inspection
+ * Session sesn_01FiuPDV5Sto6wJqpg9XexX2. Studio intake, work review, specialist v4 and all tool/Session
+ * boundaries stay pinned to r28. In particular, the dormant #54 `reminder` tool is not exposed. */
+export const RELEASE_R29: DjonikRelease = {
+  id: "r29",
+  agent: { id: COORDINATOR_ID, version: 29 },
+  model: RELEASE_R28.model,
+  systemSha256: "fe28b19599d3c4334e68fb8c819063457f3634c9af96995cb9db4cc4db375025",
+  skills: [
+    { name: "task-management", skillId: "skill_01WS6JtY1GMu3rGZaKCVR9w1", pin: { kind: "explicit", version: "skver_01H9ZMhZKJv7Ryi3tdKiS4Ni", sessionVersion: "1790413381043587" } },
+    { name: "planning-and-focus", skillId: "skill_01PxXTvhbZSrbxqi7gmDs6KW", pin: { kind: "explicit", version: "skver_01ELK2Ap5N8oYTQxYtNpGptG", sessionVersion: "1790413383331016" } },
+    RELEASE_R28.skills.find((skill) => skill.name === "studio-intake")!,
+    RELEASE_R28.skills.find((skill) => skill.name === "work-review")!,
+    { name: "pm-rhythm", skillId: "skill_01GzpQX3bVuWNk5bhbGcbzku", pin: { kind: "explicit", version: "skver_011MPsX8NEXALfqBKMRzGVz8", sessionVersion: "1790413385648302" } },
+  ],
+  specialist: RELEASE_R28.specialist,
+  builtInTools: RELEASE_R28.builtInTools,
+  customTools: RELEASE_R28.customTools,
+  mcpServers: RELEASE_R28.mcpServers,
+  mcpToolsets: RELEASE_R28.mcpToolsets,
+  confirmationRequired: RELEASE_R28.confirmationRequired,
+  session: RELEASE_R28.session,
+};
+
+export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_R25, r26: RELEASE_R26, r27: RELEASE_R27, r28: RELEASE_R28, r29: RELEASE_R29 };
 
 /**
  * The one release this application revision serves. Changing it is the application half of a cutover
  * (docs/52): it was flipped to `r26` after Agent v26 existed and its read-back attested (docs/53), and to
  * `r27` after Agent v27 attested and its permission policies passed live validation (docs/64, docs/65,
- * docs/66), and to `r28` after Agent v28 attested and a zero-event inspection Session measured the last Session
- * spelling (docs/74, docs/75). This is a source cutover: production serves r27 until this revision is deployed, and
- * rollback redeploys the last r27 revision (Agent v27, unchanged). It is deliberately not an environment variable:
+ * docs/66), to `r28` after Agent v28 attested and a zero-event inspection Session measured its last Skill spelling
+ * (docs/74, docs/75), and to `r29` after the #45 prompt and three Skill versions attested on v29 with another
+ * zero-event inspection Session. Production serves its currently deployed revision until r29 is deployed.
+ * This is deliberately not an environment variable:
  * the reviewed revision, not host configuration, decides what is served.
  */
-export const SERVING_RELEASE: DjonikRelease = RELEASE_R28;
+export const SERVING_RELEASE: DjonikRelease = RELEASE_R29;

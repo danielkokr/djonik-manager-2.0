@@ -38,10 +38,10 @@ const ISSUE_41_CANDIDATE_SHA = "8469c4e0b463c92ca0a9c62495243629f591014b7674c84e
 
 const names = (skills: ReadonlyArray<{ name: string }>) => skills.map((skill) => skill.name);
 
-test("the resolved r28 is served, never the candidate: the candidate itself is not a release, has no Agent version and is not servable", () => {
-  assert.equal(SERVING_RELEASE.id, "r28");
+test("the resolved r28 remains reviewed, never the candidate: the candidate itself is not a release, has no Agent version and is not servable", () => {
+  assert.equal(SERVING_RELEASE.id, "r29");
   assert.notEqual(SERVING_RELEASE as unknown, RELEASE_R28_CANDIDATE);
-  assert.deepEqual(Object.keys(RELEASES).sort(), ["r25", "r26", "r27", "r28"]);
+  assert.deepEqual(Object.keys(RELEASES).sort(), ["r25", "r26", "r27", "r28", "r29"]);
   assert.equal(Object.values(RELEASES).includes(RELEASE_R28_CANDIDATE as unknown as DjonikRelease), false);
   assert.equal(RELEASE_R28_CANDIDATE.agent.version, null, "the candidate stays the unresolved input");
   assert.equal(RELEASE_R28_CANDIDATE.agent.fromVersion, RELEASE_R27.agent.version);

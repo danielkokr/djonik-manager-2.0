@@ -8,10 +8,10 @@ model:
 skills:
   - type: custom
     skill_id: skill_01WS6JtY1GMu3rGZaKCVR9w1
-    version: skver_01CJQkVY1kp1urhBWQgHUYxW
+    version: skver_01H9ZMhZKJv7Ryi3tdKiS4Ni
   - type: custom
     skill_id: skill_01PxXTvhbZSrbxqi7gmDs6KW
-    version: skver_01RzxVaCr47k6R11pHLWr62e
+    version: skver_01ELK2Ap5N8oYTQxYtNpGptG
   - type: custom
     skill_id: skill_015c8dtDnWyDfVLwS6NLS7r6
     version: skver_018sJv1GCnzfZRG4NbExbAzj
@@ -20,7 +20,7 @@ skills:
     version: skver_015LYzVdivGGMsBpuki4kW4S
   - type: custom
     skill_id: skill_01GzpQX3bVuWNk5bhbGcbzku
-    version: skver_01Y77TKeXY9suV99XZU3cv5a
+    version: skver_011MPsX8NEXALfqBKMRzGVz8
 multiagent:
   type: coordinator
   agents:

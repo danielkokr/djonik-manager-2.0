@@ -29,8 +29,7 @@ import { readOnlyBoundaryFor, SERVING_READ_ONLY_BOUNDARY } from "./rhythmRuntime
 
 // #41 + #42 — the real r28 (Agent v28, created 2026-09-25 from v27; docs/74) and its source cutover (docs/75). Offline:
 // the Session shapes below are the content-free Skill references of the zero-event inspection Session
-// `sesn_016UCPyKFRwMTXzLxC4xdLoE` pinned to v28. r28 is this revision's serving release; production serves r27 until
-// it is deployed, and no r28 Telegram serving Session exists yet.
+// `sesn_016UCPyKFRwMTXzLxC4xdLoE` pinned to v28. r28 remains an immutable reviewed release and rollback target.
 
 type Rec = Record<string, any>;
 
@@ -58,10 +57,10 @@ function mismatchesOf(fn: () => unknown): string[] {
 
 // --- Definition -----------------------------------------------------------------------------------------------
 
-test("r28 is this revision's serving release (source cutover); r27 stays a reviewed release — production until the deploy, then the rollback", () => {
+test("r28 remains a reviewed rollback release after the r29 source cutover", () => {
   assert.equal(RELEASES.r28, RELEASE_R28);
   assert.deepEqual(RELEASE_R28.agent, { id: RELEASE_R27.agent.id, version: 28 });
-  assert.equal(SERVING_RELEASE, RELEASE_R28);
+  assert.notEqual(SERVING_RELEASE, RELEASE_R28);
   assert.equal(RELEASES.r27, RELEASE_R27);
   assert.equal(SERVING_READ_ONLY_BOUNDARY, readOnlyBoundaryFor(SERVING_RELEASE));
   assert.equal(SERVING_READ_ONLY_BOUNDARY, "pre_execution");
