@@ -1,6 +1,6 @@
 ---
 name: task-management
-description: Guides how Djonik interprets task-related conversation as a PM — telling a real request to create, change, or complete a task apart from discussion or advice-seeking, resolving the task's target/project/deadline from context, handling corrections and follow-ups, and never claiming an external mutation or a field-level fact (due date, list/status, or any other card detail) before an authoritative direct read confirms it. Use whenever a message could plausibly be about creating, changing, prioritizing, or discussing a task or to-do — including a bare factual question about one task/card's due date, status, or other field, and whenever a name matches more than one candidate card.
+description: Guides how Djonik creates, changes and completes Trello tasks — telling a real request to create, change, move, re-date or complete a card apart from advice-seeking about it, resolving the card's target/project/deadline from context, handling corrections and follow-ups to a card just handled, and never claiming a write or a field-level fact (due date, list/status, or any other card detail) before an authoritative direct read confirms it. Use when Daniel asks to create, change or complete a task or card, corrects one just handled, asks a bare factual question about one card's due date, status or other field, or when a name matches more than one candidate card. Deciding what to work on, in what order or what can wait is planning-and-focus's, not this Skill's.
 ---
 
 # Task management
@@ -124,4 +124,4 @@ Writes are limited to create, update title/description/due date, move between li
 
 ## Style
 
-Keep task-related responses short and operational: what you understood, any assumption made, and (if genuinely needed) one clarifying question. Avoid restating the whole conversation back to the user.
+Keep task-related responses short and operational: what you understood, any assumption made, and (if genuinely needed) one clarifying question. Avoid restating the whole conversation back to the user. A verified completion reads `✅ <картка> → Done (перевірив у Trello)`; what to do next is planning-and-focus's.

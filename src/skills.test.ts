@@ -32,13 +32,13 @@ test("project-health frontmatter covers natural health questions without claimin
   assert.doesNotMatch(frontmatter, /Що робити сьогодні|Що робити цього тижня|create, update, move, or complete/i);
 });
 
-test("project-health explicitly hands daily, weekly, and mutation follow-ups to their owning Skills", () => {
-  // The specialist's pinned Skill (v4) is deliberately unchanged by #42: it still names the old planning Skills.
-  // The specialist cannot load coordinator Skills, so this is dead text, not a live route; the coordinator decides
-  // follow-ups (planning-and-focus). Rewording it needs a new specialist version — #44 owns that decision.
+test("project-health hands plan and mutation follow-ups to their current owners, never to the retired planning Skills", () => {
+  // #45 aligned the source with #42's planning-and-focus ownership. The specialist's pinned Skill (v4) still carries
+  // the old text until a new specialist version is released; whether the specialist stays at all is #44's decision.
   const section = projectHealthSection(readSkill("project-health"), "Scope and handoffs");
-  assert.match(section, /daily-planning/i);
-  assert.match(section, /weekly-planning/i);
+  assert.doesNotMatch(readSkill("project-health"), /daily-planning|weekly-planning/i);
+  assert.match(section, /planning-and-focus Skill owns plan construction/i);
+  assert.match(section, /do not build the plan here/i);
   assert.match(section, /task-management/i);
 });
 
@@ -262,7 +262,7 @@ test("project-health stays Skill-only with no new read-only-breaking behavior", 
 
 test("planning and task Skills share global semantics without adopting Project Health workflow", () => {
   const health = readSkill("project-health");
-  assert.match(health, /hand off to the daily-planning or weekly-planning Skill/i);
+  assert.match(health, /that is focus planning: the coordinator's planning-and-focus Skill owns plan construction/i);
   assert.match(health, /task-management owns that mutation request/i);
   for (const name of ["planning-and-focus", "task-management", "studio-intake"]) {
     const other = readSkill(name);
@@ -447,6 +447,22 @@ test("studio-intake Skill's style guidance does not force a rigid reply template
 
 // Issue #37 deliberately widens the write surface by exactly one thing — attaching/detaching an EXISTING
 // project label — and keeps label creation/renaming, non-project labels and bulk relabeling out of scope.
+test("#45: task-management triggers on create / change / complete and one card's field facts — not on planning or discussion", () => {
+  const content = readSkill("task-management");
+  const description = /^description: (.+)$/m.exec(content)?.[1] ?? "";
+  // docs/76 §3–4: "prioritizing, or discussing a task" loaded 14.8 KB of write rules on every planning question.
+  assert.doesNotMatch(description, /prioriti[sz]|discuss/i);
+  for (const owned of [/create/i, /change/i, /complete/i, /field/i, /more than one candidate card/i]) assert.match(description, owned);
+  assert.match(description, /apart from advice-seeking/i, "it still tells a real write request from advice");
+  assert.match(description, /what to work on, in what order or what can wait is planning-and-focus's/i);
+  // The advice/write boundary itself stays in the body, unchanged.
+  assert.match(content, /## Discussion vs. request/);
+  assert.match(content, /## Advice is not mutation/);
+  assert.match(content, /Giving an opinion never counts as executing a change — only an explicit request does/);
+  // docs/77 §4.8: the verified-completion line, with the next step left to planning.
+  assert.ok(content.includes("A verified completion reads `✅ <картка> → Done (перевірив у Trello)`; what to do next is planning-and-focus's."));
+});
+
 test("task-management Skill's write-surface boundary and verification rules are unchanged apart from the #37 project label", () => {
   const content = readSkill("task-management");
   assert.match(

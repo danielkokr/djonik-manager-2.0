@@ -143,9 +143,11 @@ test("r27 vs r26: same model, prompt, specialist, custom tool, MCP servers, Sess
   assert.deepEqual(RELEASE_R27.confirmationRequired, { builtIn: ["write", "edit"], mcp: { trello: ["trelloWriteCard"] } });
 });
 
-test("the pinned pm-rhythm version is the committed repo Skill (SHA-256 recorded at sync, docs/64 §3)", () => {
+test("the pinned pm-rhythm version was synced from SHA-256 8617fd5c…84f9 (docs/64 §3); #45 moves the repo Skill ahead of it", () => {
+  // r27 and r28 pin that synced text. The #45 source revision (docs/77 message templates) is not synced: it reaches
+  // production only as a new Skill version in a separately authorized release.
   const source = readFileSync(join(repoRoot, ".claude", "skills", "pm-rhythm", "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
-  assert.equal(createHash("sha256").update(source, "utf8").digest("hex"), "8617fd5c7e4d536a8b5a2d3a3e8e2efec41d22c9a5c41db853ddf6f760c984f9");
+  assert.notEqual(createHash("sha256").update(source, "utf8").digest("hex"), "8617fd5c7e4d536a8b5a2d3a3e8e2efec41d22c9a5c41db853ddf6f760c984f9");
 });
 
 // --- The body that created v27 ----------------------------------------------------------------------------------

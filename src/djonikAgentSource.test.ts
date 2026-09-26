@@ -246,60 +246,92 @@ test("prompt states Daniel's working timezone and leaves date arithmetic to code
   );
 });
 
-test("coordinator has one global factual-semantics contract independent of Skill activation", () => {
-  const section = system.split("# Factual semantics\n")[1]?.split("\n# ")[0];
-  assert.ok(section, "global factual-semantics section must exist");
-  // Keep related evidence close to its field without requiring a particular sentence boundary.
-  const contextFor = (field: RegExp, length = 300) => {
-    const match = field.exec(section);
-    assert.ok(match, `expected a semantic clause for ${field}`);
-    return section.slice(match.index, match.index + length);
-  };
-  const negation = /\b(?:not|never|neither|cannot|doesn't)\b/i;
+// #45 (docs/76 §10.1): one source principle replaced the field blacklist. The field meanings #38 made global survive as
+// short examples of that principle, one sentence each, so they are pinned per sentence rather than per character window.
+const factsSection = () => {
+  const section = system.split("# Where facts come from\n")[1]?.split("\n# ")[0];
+  assert.ok(section, "the global facts section must exist in the coordinator, independent of Skill activation");
+  return section;
+};
+const factSentence = (concept: RegExp) => {
+  const sentence = factsSection().split(/(?<=[.!?])\s+/).find((candidate) => concept.test(candidate));
+  assert.ok(sentence, `expected a facts sentence about ${concept}`);
+  return sentence;
+};
+const negation = /\b(?:not|never|neither|cannot|doesn't|needs)\b/i;
 
-  const search = contextFor(/search/i, 100);
-  assert.match(search, /discover|candidate/i);
-  assert.match(search, /direct/i);
-  assert.match(search, /card|list|board/i);
-  assert.match(search, /field/i);
+test("#45: every concrete detail needs a source — the principle, its why, and the sources it names", () => {
+  const principle = factSentence(/concrete detail/i);
+  for (const kind of [/date/i, /weekday/i, /time/i, /duration/i, /size/i, /person/i, /promise/i, /client expectation/i]) {
+    assert.match(principle, kind, `the principle covers ${kind}`);
+  }
+  for (const source of [/fresh read/i, /Memory/, /his own words/i, /clock/i]) assert.match(principle, source, `a source: ${source}`);
+  assert.match(factSentence(/trust/i), /invented detail[^.]*honest unknown/i, "the why, not only the rule");
+  assert.match(factsSection(), /leave it out or call it unknown/i, "no source → leave out or name the unknown");
+});
+
+test("#45: a missing field is unknown, not a value — the r28 failure 'no due → can wait' is named as the example", () => {
+  const missing = factSentence(/missing field/i);
+  assert.match(missing, /unknown, not a value/i);
+  assert.match(missing, /no `due` is not "can wait"/);
+  assert.match(missing, /no size is not "quick"/);
+  assert.match(missing, /no recorded promise is not "nobody waits"/);
+});
+
+test("#45: Djonik's own earlier answers are not evidence until a read or Daniel confirms them", () => {
+  assert.match(factSentence(/earlier answers/i), /not evidence until a read or Daniel confirms/i);
+});
+
+test("#45: judgement stays decisive — a plain sourced reason is complete, and inventing one is named", () => {
+  const core = system.split("# Deciding what matters\n")[1]?.split("\n# ")[0] ?? "";
+  assert.match(core, /plain sourced reason[^.]*вже в роботі й найближче до здачі[^.]*complete/i);
+  assert.match(core, /never invent a date, event or effort/i);
+  assert.match(core, /choose for him/i, "choosing stays Djonik's job");
+  assert.match(core, /what fits the time he says he has/i, "fit is his stated time, not an estimated capacity");
+  assert.doesNotMatch(system, /realistically fits his time/i);
+});
+
+test("#45: one principle, not a longer blacklist — the old field section is gone and not re-grown", () => {
+  assert.doesNotMatch(system, /^# Factual semantics$/m);
+  assert.equal(factsSection().split("\n\n").length, 2, "two paragraphs: the principle, then the field examples");
+  assert.ok(Buffer.byteLength(factsSection(), "utf8") <= 1650, "the facts section replaces the old one (1289 B), it does not double it");
+});
+
+test("coordinator keeps the #38 field meanings as short examples of the principle, independent of Skill activation", () => {
+  const search = factSentence(/Search/);
+  assert.match(search, /candidate/i);
+  assert.match(search, /direct card\/list\/board reads establish fields/i);
   assert.match(system, /fresh read/i);
   assert.match(system, /outrank Memory/i);
 
-  const activity = contextFor(/lastActivityAt/i, 220);
-  assert.match(activity, /Trello activity/i);
-  assert.match(activity, negation);
-  for (const concept of [/Daniel.*work|work.*Daniel/i, /progress/i, /complet/i, /stale|staleness/i]) {
+  const activity = factSentence(/lastActivityAt/);
+  assert.match(activity, /only Trello activity/i);
+  for (const concept of [/Daniel's work/i, /progress/i, /complet/i, /stale|staleness/i]) {
     assert.match(activity, concept, `lastActivityAt must not establish ${concept}`);
   }
 
-  const completion = contextFor(/Done/i, 190);
-  assert.match(completion, /dueComplete/i);
-  assert.match(completion, /current.*state/i);
-  assert.match(completion, negation);
-  assert.match(completion, /when|time|timestamp/i);
-  assert.match(section, /action.history/i);
-  assert.match(section, /transition/i);
+  const completion = factSentence(/dueComplete/);
+  assert.match(completion, /current state, not when/i);
+  assert.match(completion, /only action history dates a transition/i);
 
-  const waiting = contextFor(/Blocked/i, 190);
-  assert.match(waiting, /concrete/i);
-  assert.match(waiting, /dependency|problem/i);
-  assert.match(waiting, /prevents? progress/i);
-  assert.match(section, /Waiting alone.*(?:not|does not|never)/is);
+  const blocked = factSentence(/Blocked/);
+  assert.match(blocked, /concrete dependency or problem that prevents progress/i);
+  assert.match(blocked, /Waiting alone does not prove that/i);
+  assert.match(factSentence(/`Backlog`/), /not started is not Waiting, Blocked or at risk/i);
 
-  const due = contextFor(/Trello `due`/i, 260);
+  const due = factSentence(/Trello `due`/);
   assert.match(due, negation);
-  for (const concept of [/client commitment/i, /capacity/i, /urgency/i, /risk/i, /enough time|sufficient time/i]) {
+  for (const concept of [/client commitment/i, /capacity/i, /urgency/i, /risk/i, /enough time/i]) {
     assert.match(due, concept, `due alone must not establish ${concept}`);
   }
 
-  const judgement = contextFor(/external facts/i, 240);
-  assert.match(judgement, /external fact/i);
-  assert.match(judgement, /separate|distinguish/i);
-  assert.match(section, /(?:do not|never).*actor.*work history/is);
-  assert.match(section, /relative timing/i);
-  assert.match(section, /weekday/i);
-  assert.match(section, /local time/i);
-  assert.match(section, /authoritative evidence|formatter/i);
+  const inference = factSentence(/actor/);
+  assert.match(inference, /Never infer an actor or work history from raw metadata/i);
+  assert.match(inference, /present a judgement as an external fact/i);
+  const clock = factSentence(/relative timing/);
+  assert.match(clock, /weekday/i);
+  assert.match(clock, /local time/i);
+  assert.match(clock, /authoritative evidence or a formatter/i);
 });
 
 // --- F. Verified-write principle ----------------------------------------------------------------
@@ -384,8 +416,10 @@ test("prompt stays a role/voice/boundaries document rather than growing into a p
   // there is no minimum prompt size.
   // #42 (docs/70 §7.1) intentionally moved the PM judgement core here, because a priority model inside a Skill the
   // model may not load cannot shape ordinary turns or rhythm turns: 3794 → ~5.4 KB. The bound was reviewed for it.
+  // #45 (docs/76 §10.1) replaced the field blacklist with one source principle plus its field examples and dropped a
+  // duplicated "ask only if" line: 5499 → ~5.8 KB. The bound was reviewed for it; the next growth needs a new review.
   const bytes = Buffer.byteLength(system, "utf8");
-  assert.ok(bytes <= 5500, `review coordinator prompt growth (${bytes} bytes); 5500 is an editorial heuristic`);
+  assert.ok(bytes <= 5800, `review coordinator prompt growth (${bytes} bytes); 5800 is an editorial heuristic`);
 });
 
 // --- H. PM judgement core (#42) ------------------------------------------------------------------
@@ -449,13 +483,14 @@ test("#42 PM core: judgement, not a formula — no score, weights, points or fix
   assert.doesNotMatch(system, /\b(?:first|then|finally)\s*[:,]?\s*(?:rank|sort)\b/i);
 });
 
-test("#42 PM core: short decisions — one main thing, ≤ two secondary, the rest can wait, ≤ one risk; ask only if it changes the main thing", () => {
+test("#42 PM core: short decisions — one main thing, ≤ two secondary, the rest can wait, ≤ one risk; asking stays the global rule", () => {
   const core = pmCore();
   assert.match(core, /one main thing/i);
   assert.match(core, /up to two secondary/i);
   assert.match(core, /rest can wait/i);
   assert.match(core, /at most one risk/i);
-  assert.match(core, /Ask only if the answer could change the main thing/i);
+  // #45 dropped the core's own "ask only if…" line: it repeated the global rule in "How you speak", which still holds.
+  assert.match(system, /Ask only when the missing piece would change what you do or say/i);
   assert.doesNotMatch(core, /name (?:everything|all|each)[^.]*defer|never (?:silently )?drop/i, "no requirement to enumerate deferred work");
 });
 

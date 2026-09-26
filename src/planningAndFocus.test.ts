@@ -206,8 +206,10 @@ test("the accepted week plan is written only on explicit acceptance, where the M
 test("a small set of canonical cases teaches decisions, covering the situations Daniel actually hits", () => {
   const cases = section("Cases — the decision, not the wording");
   const items = cases.split("\n").filter((line) => /^\d+\. \*\*/.test(line));
-  assert.ok(items.length >= 5 && items.length <= 8, `5–8 cases, got ${items.length}`);
-  for (const situation of [/due vs real commitment/i, /Almost done/i, /Pass the ball/i, /Focus block/i, /Excluded project/i, /Overloaded week/i, /Project view/i]) {
+  // #45 added two empty-slot cases (no due but it matters; in progress with nothing else known) and turned the focus
+  // block into a time limit without a recorded size.
+  assert.ok(items.length >= 5 && items.length <= 10, `5–10 cases, got ${items.length}`);
+  for (const situation of [/Recorded commitment vs a due/i, /Almost done/i, /Pass the ball/i, /Time limit, no size/i, /Excluded project/i, /Overloaded week/i, /Project view/i, /No due, but it matters/i, /In progress, nothing else known/i]) {
     assert.match(cases, situation);
   }
   assert.match(cases, /illustrative/i);
@@ -218,7 +220,9 @@ test("a small set of canonical cases teaches decisions, covering the situations 
 test("the merged Skill is smaller than the two it replaces", () => {
   const bytes = Buffer.byteLength(skill, "utf8");
   assert.ok(bytes < 5558 + 8307, `planning-and-focus is ${bytes} B; daily + weekly were 13 865 B`);
-  assert.ok(bytes <= 8000, `review planning-and-focus growth (${bytes} B); 8000 is an editorial heuristic`);
+  // #45 grew it on purpose: every case now states its premise and source, two empty-slot cases and the approved
+  // docs/77 answer shape were added (7577 → ~11 KB, much of it two-byte Cyrillic). Reviewed; the next growth needs a new review.
+  assert.ok(bytes <= 11500, `review planning-and-focus growth (${bytes} B); 11500 is an editorial heuristic`);
 });
 
 // --- Memory contract (#42) -----------------------------------------------------------------------------
@@ -268,4 +272,100 @@ test("#42 Memory: the Skill, the Memory instructions and the unchanged pm-rhythm
 test("#42 Memory: the #34 date discipline still holds — the week marker is Daniel's clock, never a guessed date", () => {
   assert.equal(M.match(/YYYY-MM-DD/g)?.length, 1, "the only exact-date format stays the conditional next_check one");
   assert.doesNotMatch(M, /<date|timestamp|today's date\)/i);
+});
+
+// --- #45 factual grounding (docs/76 §10.3, docs/77 §4.7–4.8) --------------------------------------------------------
+// The cases are training examples: the model copies their shape. These tests pin that no example carries a concrete
+// weekday or duration Daniel did not say, that every case names where its facts come from, and that missing data still
+// ends in a decision. They do not prove model behaviour; that is the #46 benchmark's job (S2, S4, S5, S15).
+
+/** The Skill with Daniel's quoted words ("…" and «…») removed: a detail inside his own words has a source. */
+const outsideQuotes = (text: string) => text.replace(/"[^"\n]*"|«[^»\n]*»/g, "«…»");
+const WEEKDAY = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Wed|Thu|Fri)\b|понеділ|вівтор|серед[аиу]|четвер|п['ʼ’]ятниц|субот|неділ|(?<!\p{L})(?:пн|вт|ср|чт|пт)(?!\p{L})/iu;
+const DURATION = /\d+\s*(?:хв|хвилин\w*|min(?:ute)?s?|год\w*|h(?:ours?)?)\b|\b(?:a few|ten|five|fifteen|twenty) minutes\b|\bfits? (?:two|three|\d) hours\b|~\s*\d/i;
+const caseItems = () => section("Cases — the decision, not the wording").split("\n").filter((line) => /^\d+\. \*\*/.test(line));
+
+test("#45: no example teaches an unsourced weekday or duration — they appear only inside Daniel's own words", () => {
+  const free = outsideQuotes(body);
+  assert.doesNotMatch(free, WEEKDAY, "a weekday outside Daniel's words would be an invented event");
+  assert.doesNotMatch(free, DURATION, "a duration outside Daniel's words would be an invented estimate");
+  // The r28 sources of "в пн показ", "~2 години", "15 хвилин" are gone.
+  assert.doesNotMatch(skill, /on Monday|a few minutes|ten minutes|fits three hours|unblock days/i);
+});
+
+test("#45: every case states its premise with a source before the decision, and the decision repeats only that", () => {
+  assert.match(section("Cases — the decision, not the wording"), /Each premise names its source; a decision repeats only those facts/);
+  for (const item of caseItems()) {
+    const [premise = "", decision = ""] = item.split("→");
+    assert.ok(decision.length > 0, `a case ends in a decision: ${item.slice(0, 60)}`);
+    assert.match(premise, /Trello:|`commitments\/`|Memory|priorities\.md|Daniel|"[^"]+"/, `premise names a source: ${item.slice(0, 60)}`);
+  }
+});
+
+test("#45: missing data still ends in a confident main choice — no invented detail, no timid 'I don't know'", () => {
+  const byTitle = (title: RegExp) => {
+    const item = caseItems().find((line) => title.test(line));
+    assert.ok(item, `expected a case ${title}`);
+    return item;
+  };
+  // "I have two hours" and no recorded size: choose, order the work, no per-card hours.
+  const time = byTitle(/Time limit, no size/);
+  assert.match(time, /no recorded size|neither has a recorded size/i);
+  assert.match(time, /→ Main:/);
+  assert.match(time, /No hours per card/i);
+  assert.match(time, /if it ends early/i);
+  // No due, but Daniel said it matters: the missing due lowers nothing.
+  const noDue = byTitle(/No due, but it matters/);
+  assert.match(noDue, /no due/i);
+  assert.match(noDue, /Daniel/);
+  assert.match(noDue, /is the main thing/i);
+  assert.match(noDue, /missing due lowers nothing/i);
+  // In progress, no external deadline: a plain reason, no invented show date, no needless question.
+  const plain = byTitle(/In progress, nothing else known/);
+  assert.match(plain, /→ Main:/);
+  assert.match(plain, /already in progress/i);
+  assert.match(plain, /No show date, deadline or estimate/i);
+  assert.match(plain, /no question/i);
+  for (const item of caseItems()) assert.doesNotMatch(item, /не знаю|недостатньо даних|can't decide|cannot choose/i);
+});
+
+test("#45: an empty slot does not stop the choice, and absence is never read as the opposite value", () => {
+  const slots = bullet("Evidence", /slots/);
+  assert.match(slots, /only when one of those sources carries it/i);
+  assert.match(slots, /does not stop the choice/i);
+  assert.match(slots, /call it unknown/i);
+  for (const absence of [/No due does not lower a card/i, /no size does not make it small/i, /does not mean the client can wait/i]) {
+    assert.match(slots, absence);
+  }
+  assert.match(bullet("Decide", /Commitment/), /without a due can still be the main thing/i);
+  assert.match(bullet("Decide", /Finish before starting/), /full reason, no deadline needed/i);
+  assert.match(bullet("Decide", /\*\*Fit/), /order the work instead of timing it/i);
+  assert.match(bullet("Decide", /His words/), /his limit, not a task size/i);
+  assert.match(bullet("Decide", /Waiting and Backlog/), /How long something has waited comes only from a source/i);
+  assert.match(bullet("Plans, corrections and Trello", /correction/), /removed, not replaced by its opposite/i);
+});
+
+test("#45 / docs/77 §4.7: 'що мені робити?' uses the approved morning-brief shape; empty lines and 💭 are optional", () => {
+  const shape = bullet("Answer", /morning-brief shape/);
+  assert.match(shape, /each line only when a fact fills it/i);
+  const answer = section("Answer");
+  for (const line of ["🎯 Головне:", "➕ Якщо встигнеш:", "⏳ Чекаємо:", "🔥", "💭"]) assert.ok(answer.includes(line), line);
+  assert.match(answer, /Omit an empty line rather than fill it/);
+  assert.match(answer, /💭 only for something non-obvious resting on facts in this message/);
+  assert.match(answer, /never praise, repetition or an invented date or estimate/);
+  assert.match(answer, /narrow question gets a plain short answer/i, "the frame is not forced on every reply");
+});
+
+test("#45: 'що горить?' is a real cost of waiting, anchored in a fact read or said", () => {
+  const fire = bullet("Answer", /Що горить/);
+  for (const cost of [/until tomorrow/i, /blocked on him/i, /window closing today/i]) assert.match(fire, cost);
+  assert.match(fire, /only from a fact you read or he told you/i);
+});
+
+test("#45 / docs/77 §4.8: 'я доробив' claims ✅ Done only after a verified write; a report alone is not a write request", () => {
+  const done = bullet("Answer", /Я доробив/);
+  assert.match(done, /report is not yet a request to change Trello/i);
+  assert.match(done, /✅ <картка> → Done \(перевірив у Trello\)/);
+  assert.match(done, /only after a completion Daniel asked for passed task-management's verified write/i);
+  assert.match(done, /🎯 Далі:/);
 });

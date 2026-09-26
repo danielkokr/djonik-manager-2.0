@@ -117,3 +117,95 @@ test("'less' is not 'never': soft preferences never become a mute; snoozes need 
     assert.doesNotMatch(line, /→ `mute:/, line);
   }
 });
+
+// --- #45: the approved docs/77 message system -----------------------------------------------------------------------
+// Shapes, not a renderer: these pin the vocabulary, the omission rules and each ritual's markers, and that the
+// templates never ask the model to fill a slot without a source. Model output quality stays a benchmark question (#46).
+
+test("#45 / docs/77 §2: one fixed marker vocabulary, the same in every rhythm message", () => {
+  const markers = section("Markers");
+  for (const [emoji, meaning] of [["🎯", "головне"], ["➕", "якщо встигнеш"], ["⏳", "чекаємо на когось"], ["🔥", "справді горить"], ["⚠️", "ризик / виняток"], ["✅", "зроблено"], ["➡️", "переносимо / свідомо відпускаємо"], ["📌", "обіцянка комусь"], ["💭", "моя думка"]]) {
+    assert.ok(markers.includes(`${emoji} ${meaning}`), `${emoji} ${meaning}`);
+  }
+  for (const header of ["🗓 week plan", "🏁 Friday morning", "📊 🔄 ⏸ Friday review"]) assert.ok(markers.includes(header), header);
+  assert.match(markers, /One marker per line/);
+});
+
+test("#45 / docs/77 §3: empty sections are omitted, 💭 is rare and grounded, templates are not slots to fill", () => {
+  const markers = section("Markers");
+  assert.match(markers, /An empty section is not shown/);
+  assert.match(markers, /three true lines beat seven with one invented/);
+  assert.match(markers, /not slots to fill/);
+  assert.match(markers, /💭 only when you see something non-obvious/);
+  assert.match(markers, /resting on facts in the same message/);
+  assert.match(markers, /Never praise, moralise, repeat what is above, or invent a date or estimate/);
+  assert.match(section("What every rhythm message is"), /Up to about 10 short Telegram lines; a quiet day is one or two/);
+});
+
+test("#45 / docs/77 decision 3: waiting days only when a code hint states them (3+), never counted by the model", () => {
+  const markers = section("Markers");
+  assert.match(markers, /⏳ without day counts by default/);
+  assert.match(markers, /only when a code hint in this turn states it \(e\.g\. «у Waiting 6 дн\.»\) and it is 3 or more/);
+  assert.match(markers, /never count days yourself/);
+  // The hint the Skill quotes is the runtime's own wording for a long Waiting stint.
+  assert.match(readFileSync(join(repoRoot, "src", "rhythmSignals.ts"), "utf8"), /`у Waiting \$\{days\} дн\. \(waiting ≠ blocked\)`/);
+});
+
+test("#45: every concrete detail in a rhythm message has a source this turn; an earlier rhythm message is not one", () => {
+  const evidence = section("Evidence rules (shared semantics, not repeated here in full)");
+  assert.match(evidence, /Every date, duration, size, person or promise in a message has a source in this turn/);
+  assert.match(evidence, /an earlier rhythm message is not one/);
+  assert.match(evidence, /does not fit what Daniel has said about his time/);
+  assert.match(section("Markers"), /🔥 and ⚠️ only for a real cost of waiting[^.]*resting on a fact read in this turn/);
+});
+
+test("#45 / docs/77 §4: each ritual carries its approved shape", () => {
+  const monday = section("Monday — week-plan proposal");
+  for (const line of ["🗓 Тиждень", "🎯 1.", "📌 Обіцянки цього тижня:", "⏳ Чекаємо:", "➡️ Свідомо не чіпаємо:", "💭", "Приймаєш?"]) assert.ok(monday.includes(line), line);
+  assert.match(monday, /з рядка годинника/, "the week's dates come from the clock line");
+  assert.match(monday, /promises only as recorded in `commitments\/`/);
+  assert.match(monday, /up to three outcomes/i);
+  const brief = section("Tuesday–Thursday — morning brief");
+  for (const line of ["🎯 Головне:", "➕ Якщо встигнеш:", "⏳ Чекаємо:", "🔥", "Тримаємо так?"]) assert.ok(brief.includes(line), line);
+  assert.match(brief, /A plain reason \("він у роботі й найближчий до здачі"\) is enough/);
+  const friday = section("Friday morning — lighter");
+  for (const line of ["🏁 Реально закрити сьогодні:", "➡️ Спокійно на наступний тиждень:"]) assert.ok(friday.includes(line), line);
+  const quiet = section("Quiet day");
+  assert.match(quiet, /One or two lines/);
+  assert.ok(quiet.includes("«🎯 Без змін з учора: далі концепт Seqthera. Пожеж немає.»"));
+  const exception = section("Exceptions — interrupt only when waiting would hurt");
+  assert.ok(exception.includes("⚠️ <факт: що і чому саме зараз>"));
+  // No evening template (PO decision 5): the Skill teaches no evening ritual.
+  assert.doesNotMatch(skill, /^## .*(?:evening|вечір)/im);
+});
+
+test("#45: examples state the premise that sources every concrete detail they show", () => {
+  const brief = section("Tuesday–Thursday — morning brief");
+  const premise = brief.slice(brief.indexOf("Example, when"), brief.indexOf("«🎯 Головне: концепт"));
+  for (const source of [/checklist 4\/5/, /three projects In progress/, /Daniel said the Azov banner edits are ready/, /code hint says «у Waiting 6 дн\.»/]) {
+    assert.match(premise, source, `the example's premise names ${source}`);
+  }
+  const monday = section("Monday — week-plan proposal");
+  assert.match(monday, /when `priorities\.md` ranks Limen second/, "a 💭 challenge rests on a recorded priority, not on a remembered pattern");
+});
+
+test("#45 keeps the #36 exact relay: the Friday review never writes, repeats or rewords the work-history facts", () => {
+  const review = section("Friday afternoon — weekly review");
+  assert.match(review, /the trello_work_history facts block, delivered by code/);
+  assert.match(review, /reaches Daniel verbatim ahead of your text/);
+  assert.match(review, /never write, repeat or reword closed or moved cards yourself; your text starts at ⏸/);
+  assert.match(review, /If history is unavailable, say so in one line — never rebuild it from current card state/);
+  assert.match(review, /only for cards that clearly match a planned outcome/);
+  // The template lines the model writes start at ⏸; ✅/🔄 are never model-written lines.
+  const template = /```\n([\s\S]*?)```/.exec(review)?.[1] ?? "";
+  assert.doesNotMatch(template, /^✅|^🔄/m);
+});
+
+test("#45 keeps #39: read-only automatic turns, SILENT, quiet hours and verified carry-over are unchanged", () => {
+  const rules = section("Automatic turns are read-only");
+  assert.match(rules, /Do not create, move, re-date or complete any card/);
+  assert.match(rules, /Never accept a plan, a carry-over or a commitment on Daniel's behalf/);
+  assert.match(section("Exceptions — interrupt only when waiting would hurt"), /Otherwise answer exactly `SILENT` and nothing else/);
+  assert.match(section("Friday afternoon — weekly review"), /only after Daniel explicitly asks, through the task-management verified path/);
+  assert.match(skill, /"не пиши мені після 19" \| `quiet_hours: 19:00-<current end>`/);
+});

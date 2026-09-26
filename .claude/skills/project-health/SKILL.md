@@ -9,7 +9,7 @@ Project health is a short PM interpretation of fresh Trello evidence, never a st
 
 ## Scope and handoffs
 
-Use this Skill for a current project-condition, blocker, risk, or health-review question — not for deciding what Daniel should do today or this week. If a review leads to “ок, що робити сьогодні?” or a weekly-plan request, hand off to the daily-planning or weekly-planning Skill respectively; those Skills own plan construction and their own fresh-read requirements. If Daniel explicitly asks to create, update, move, or complete a task, task-management owns that mutation request. A health review may recommend a next PM step, but never performs it as a mutation.
+Use this Skill for a current project-condition, blocker, risk, or health-review question — not for deciding what Daniel should do today or this week. If a review leads to “ок, що робити сьогодні?” or a week-plan request, that is focus planning: the coordinator's planning-and-focus Skill owns plan construction and its own fresh-read requirements, so do not build the plan here. If Daniel explicitly asks to create, update, move, or complete a task, task-management owns that mutation request. A health review may recommend a next PM step, but never performs it as a mutation.
 
 ## Gather fresh evidence first
 

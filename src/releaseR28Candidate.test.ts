@@ -21,7 +21,7 @@ import {
   ISSUE_42_PROMPT_EDITS,
   PRE_41_SYSTEM_PROMPT,
   PRE_42_SYSTEM_PROMPT,
-  SYSTEM_PROMPT,
+  R28_SYSTEM_PROMPT,
 } from "./releaseFixtures.test-helpers.js";
 
 // #41 + #42 — the one combined r28 candidate (Product Owner: one cutover for both). r27 with exactly two changes: the
@@ -79,21 +79,21 @@ test("#42: daily-planning and weekly-planning are not in the next release; plann
   assert.ok(existsSync(join(repoRoot, ".claude", "skills", "planning-and-focus", "SKILL.md")));
 });
 
-test("the prompt diff is exactly the #41 and #42 edits: djonik.md = candidate, minus #42 = the #41 candidate, minus both = served r27", () => {
-  assert.equal(sha256(SYSTEM_PROMPT), RELEASE_R28_CANDIDATE.systemSha256);
+test("the prompt diff is exactly the #41 and #42 edits: r28 prompt (djonik.md minus #45) = candidate, minus #42 = the #41 candidate, minus both = served r27", () => {
+  assert.equal(sha256(R28_SYSTEM_PROMPT), RELEASE_R28_CANDIDATE.systemSha256);
   assert.equal(sha256(PRE_42_SYSTEM_PROMPT), ISSUE_41_CANDIDATE_SHA, "#41 is intact under #42; no other prompt change hides behind #42");
   assert.equal(sha256(PRE_41_SYSTEM_PROMPT), RELEASE_R27.systemSha256, "no other prompt change hides behind #41");
   assert.equal(ISSUE_41_PROMPT_EDITS.length, 2);
   assert.equal(ISSUE_42_PROMPT_EDITS.length, 4);
   assert.ok(ISSUE_42_PROMPT_EDITS[1].after.startsWith("\n# Deciding what matters\n"), "the PM core is one new section");
-  assert.ok(!SYSTEM_PROMPT.includes("You do not message him first"), "the stale pre-#41 line stays gone");
+  assert.ok(!R28_SYSTEM_PROMPT.includes("You do not message him first"), "the stale pre-#41 line stays gone");
 });
 
 test("the update body: v27 precondition, the real Skill pins, tools unchanged and the reviewed prompt — together", () => {
-  const body = buildCandidateUpdateBody(RELEASE_R28_CANDIDATE, TEST_ONLY_PINS, SYSTEM_PROMPT) as Record<string, unknown>;
+  const body = buildCandidateUpdateBody(RELEASE_R28_CANDIDATE, TEST_ONLY_PINS, R28_SYSTEM_PROMPT) as Record<string, unknown>;
   assert.deepEqual(Object.keys(body).sort(), ["skills", "system", "tools", "version"], "model, MCP servers and roster preserved by omission");
   assert.equal(body.version, 27);
-  assert.equal(body.system, SYSTEM_PROMPT);
+  assert.equal(body.system, R28_SYSTEM_PROMPT);
   const r27Body = agentVersionFixture(RELEASE_R27);
   assert.deepEqual(body.tools, r27Body.tools, "tool surface and permission policies are r27's");
   const skillIds = (body.skills as Array<{ skill_id: string; version: string }>).map((skill) => `${skill.skill_id}@${skill.version}`);
@@ -106,26 +106,26 @@ test("the update body: v27 precondition, the real Skill pins, tools unchanged an
 });
 
 test("the body cannot be built half: no unresolved Skill, no prompt without Skills, no wrong prompt", () => {
-  assert.throws(() => buildCandidateUpdateBody(RELEASE_R28_CANDIDATE, { skills: {} }, SYSTEM_PROMPT), UnresolvedReleaseCandidateError);
+  assert.throws(() => buildCandidateUpdateBody(RELEASE_R28_CANDIDATE, { skills: {} }, R28_SYSTEM_PROMPT), UnresolvedReleaseCandidateError);
   assert.throws(
-    () => buildCandidateUpdateBody(RELEASE_R28_CANDIDATE, { skills: { "planning-and-focus": { skillId: "planning-and-focus", version: "latest" } } }, SYSTEM_PROMPT),
+    () => buildCandidateUpdateBody(RELEASE_R28_CANDIDATE, { skills: { "planning-and-focus": { skillId: "planning-and-focus", version: "latest" } } }, R28_SYSTEM_PROMPT),
     UnresolvedReleaseCandidateError,
   );
   assert.throws(() => buildCandidateUpdateBody(RELEASE_R28_CANDIDATE, TEST_ONLY_PINS), /changes the prompt/);
   assert.throws(() => buildCandidateUpdateBody(RELEASE_R28_CANDIDATE, TEST_ONLY_PINS, PRE_42_SYSTEM_PROMPT), /does not match/, "the #41-only prompt");
   assert.throws(() => buildCandidateUpdateBody(RELEASE_R28_CANDIDATE, TEST_ONLY_PINS, PRE_41_SYSTEM_PROMPT), /does not match/);
-  assert.throws(() => buildCandidateUpdateBody(RELEASE_R28_CANDIDATE, TEST_ONLY_PINS, `${SYSTEM_PROMPT}\n`), /does not match/);
+  assert.throws(() => buildCandidateUpdateBody(RELEASE_R28_CANDIDATE, TEST_ONLY_PINS, `${R28_SYSTEM_PROMPT}\n`), /does not match/);
 });
 
 test("the body applied to v27 attests as the resolved r28 (test-only ids), and r27/r28 cannot stand in for each other", () => {
   const r28: DjonikRelease = resolveReleaseCandidate(RELEASE_R28_CANDIDATE, { ...TEST_ONLY_PINS, agentVersion: TEST_ONLY_AGENT_VERSION });
   assert.equal(r28.id, "r28");
   const v27 = agentVersionFixture(RELEASE_R27);
-  const body = buildCandidateUpdateBody(RELEASE_R28_CANDIDATE, TEST_ONLY_PINS, SYSTEM_PROMPT);
+  const body = buildCandidateUpdateBody(RELEASE_R28_CANDIDATE, TEST_ONLY_PINS, R28_SYSTEM_PROMPT);
   const next = { ...v27, version: TEST_ONLY_AGENT_VERSION, system: body.system, skills: body.skills, tools: body.tools };
   assert.doesNotThrow(() => attestAgentVersion(r28, next));
   // Served r27 with the new prompt or the new Skills is drift; so is r28 with the old prompt or the old Skills.
-  const promptDrift = compareWithRelease(RELEASE_R27, normalizeAgentConfig({ ...v27, system: SYSTEM_PROMPT }));
+  const promptDrift = compareWithRelease(RELEASE_R27, normalizeAgentConfig({ ...v27, system: R28_SYSTEM_PROMPT }));
   assert.ok(promptDrift.some((line) => line.startsWith("system sha")), promptDrift.join("; "));
   assert.ok(compareWithRelease(RELEASE_R27, normalizeAgentConfig({ ...v27, skills: body.skills })).length > 0, "r27 with r28's Skills");
   assert.throws(() => attestAgentVersion(r28, { ...next, system: PRE_41_SYSTEM_PROMPT }), ReleaseAttestationError);

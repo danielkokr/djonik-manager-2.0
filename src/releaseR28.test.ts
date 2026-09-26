@@ -24,7 +24,7 @@ import {
   sha256,
 } from "./releaseAttestation.js";
 import { buildCandidateUpdateBody, buildReleaseUpdateBody } from "./releasePlan.js";
-import { agentVersionFixture, PRE_41_SYSTEM_PROMPT, servingSessionFixture, SYSTEM_PROMPT } from "./releaseFixtures.test-helpers.js";
+import { agentVersionFixture, PRE_41_SYSTEM_PROMPT, servingSessionFixture, R28_SYSTEM_PROMPT } from "./releaseFixtures.test-helpers.js";
 import { readOnlyBoundaryFor, SERVING_READ_ONLY_BOUNDARY } from "./rhythmRuntime.js";
 
 // #41 + #42 — the real r28 (Agent v28, created 2026-09-25 from v27; docs/74) and its source cutover (docs/75). Offline:
@@ -82,7 +82,7 @@ test("r28 = r27 + the #41/#42 prompt + planning-and-focus in place of daily/week
   const { id, agent, systemSha256, skills, ...rest } = RELEASE_R28;
   const { id: _id, agent: _agent, systemSha256: r27System, skills: r27Skills, ...r27Rest } = RELEASE_R27;
   assert.deepEqual(rest, r27Rest, "model, specialist v4, tools, permission policies, custom tool, MCP, Session resources");
-  assert.equal(systemSha256, sha256(SYSTEM_PROMPT), "the reviewed managed-agents/djonik.md body");
+  assert.equal(systemSha256, sha256(R28_SYSTEM_PROMPT), "the reviewed djonik.md body as synced to v28 (source minus the #45 edits)");
   assert.notEqual(systemSha256, r27System);
   assert.deepEqual(names(skills), ["task-management", "planning-and-focus", "studio-intake", "work-review", "pm-rhythm"]);
   for (const retired of RETIRED_BY_R28) assert.ok(!names(skills).includes(retired), `${retired} is not in r28`);
@@ -104,15 +104,17 @@ test("r28 = r27 + the #41/#42 prompt + planning-and-focus in place of daily/week
   assert.doesNotMatch(JSON.stringify(RELEASE_R28), /TEST_ONLY|unresolved/);
 });
 
-test("the pinned planning-and-focus version is the committed repo Skill (SHA-256 verified byte-for-byte at sync, docs/74 §3)", () => {
+test("the pinned planning-and-focus version was synced from SHA-256 0efaf7d2…b628 (docs/74 §3); #45 moves the repo Skill ahead of it", () => {
+  // The r28 pin stays the synced text. The #45 source revision (factual grounding, docs/77 templates) is not synced:
+  // it reaches production only as a new Skill version in a separately authorized release.
   const source = readFileSync(join(repoRoot, ".claude", "skills", "planning-and-focus", "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
-  assert.equal(createHash("sha256").update(source, "utf8").digest("hex"), "0efaf7d29ae9f1cb6bf54518b796dd806b031bc789ef44af720a6b278043b628");
+  assert.notEqual(createHash("sha256").update(source, "utf8").digest("hex"), "0efaf7d29ae9f1cb6bf54518b796dd806b031bc789ef44af720a6b278043b628");
 });
 
 // --- The body that created v28 ----------------------------------------------------------------------------------
 
 test("the v27 → v28 update body regenerates byte-identically (the body actually sent, docs/74 §5)", () => {
-  const body = buildCandidateUpdateBody(RELEASE_R28_CANDIDATE, { skills: { "planning-and-focus": REAL_PLANNING_AND_FOCUS } }, SYSTEM_PROMPT);
+  const body = buildCandidateUpdateBody(RELEASE_R28_CANDIDATE, { skills: { "planning-and-focus": REAL_PLANNING_AND_FOCUS } }, R28_SYSTEM_PROMPT);
   assert.equal(sha256(JSON.stringify(body)), "4c59a49cdd619cc63efe21b7dc0d21dc4e71bf266e4b76ca1a9ccc8854d774e6");
   assert.deepEqual(Object.keys(body).sort(), ["skills", "system", "tools", "version"], "model, MCP servers and roster preserved by omission");
   assert.equal(body.version, 27);
