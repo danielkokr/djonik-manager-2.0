@@ -30,6 +30,7 @@ import { isReadOnlyReminderInput, REMINDER_TOOL_NAME, reminderConfirmationOf } f
 import { ToolConfirmationLifecycle, type ConfirmationRecord, type ConfirmationRequest } from "./toolConfirmation.js";
 import { mutationAuthorityFor, type MutationAuthority, type TurnOrigin } from "./turnAuthority.js";
 import { buildClockHeader } from "./turnClock.js";
+import { DecisionTraceCollector, type DecisionTrace } from "./decisionTrace.js";
 import {
   SessionEventFeed,
   SessionFeedDeadError,
@@ -257,6 +258,8 @@ export interface DjonikTurnTelemetry {
   documentBlockCount: number;
   /** Per-visible-turn delta, never the session's cumulative usage snapshot. */
   usage: DjonikCumulativeUsage | null;
+  /** #46: metadata from observed events and the #31 ledger; no transcript or tool result text. */
+  decisionTrace?: DecisionTrace;
 }
 
 export interface DjonikTurnTelemetryCollector {
@@ -265,6 +268,7 @@ export interface DjonikTurnTelemetryCollector {
   recordMcpResult(): void;
   recordBuiltInRead(input: Record<string, unknown>): void;
   recordVerificationNudge(): void;
+  recordDecisionTrace(trace: DecisionTrace): void;
   /** Records that this turn's input included an image. Content-free: mimeType/byteSize only. */
   recordInputImage(meta: { mimeType: string; byteSize: number }): void;
   /** Records that this turn's input included a document/file (#24). Content-free: mimeType/byteSize
@@ -307,6 +311,7 @@ export function createTurnTelemetryCollector(
   let imageBlockCount = 0;
   let documentBlockCount = 0;
   let cumulativeUsage: DjonikCumulativeUsage | null = null;
+  let decisionTrace: DecisionTrace | undefined;
 
   function delta(current: number | undefined, previous: number | undefined): number | undefined {
     if (current === undefined) return undefined;
@@ -354,6 +359,7 @@ export function createTurnTelemetryCollector(
       memoryRead ||= /(?:^|\/)memory\//.test(path);
     },
     recordVerificationNudge: () => { verificationNudges += 1; },
+    recordDecisionTrace: (trace) => { decisionTrace = trace; },
     recordInputImage: (meta) => {
       hasImage = true;
       imageMimeType = meta.mimeType;
@@ -408,6 +414,7 @@ export function createTurnTelemetryCollector(
       imageBlockCount,
       documentBlockCount,
       usage: turnUsage(),
+      ...(decisionTrace ? { decisionTrace } : {}),
     }),
     cumulativeUsage: () => cumulativeUsage === null ? null : { ...cumulativeUsage },
   };
@@ -1129,6 +1136,8 @@ export async function connectToDjonik(
   /** Content-free tool uses of the CURRENT visible turn (#39), including a verification-nudge rerun.
    *  Reset once per visible turn in `sendPartsSerial`, like `turnCustomToolUseIds`. */
   let turnToolUses: DjonikToolUse[] = [];
+  let sessionTurnIndex = 0;
+  let decisionTrace: DecisionTraceCollector | null = null;
   /** Session-scoped tool-confirmation lifecycle keyed by the gated tool-use event id (#39 Stage 3A). Like
    *  `customTools`, never reset per turn: a decision is immutable for the Session. */
   const confirmations = new ToolConfirmationLifecycle();
@@ -1310,6 +1319,7 @@ export async function connectToDjonik(
           specialist.onThreadIdle(event);
           break;
         case "agent.mcp_tool_use":
+          decisionTrace?.mcp(event.mcp_server_name, event.name, event.input as Record<string, unknown>);
           mcpToolCallsById.set(event.id, {
             serverName: event.mcp_server_name,
             toolName: event.name,
@@ -1356,6 +1366,7 @@ export async function connectToDjonik(
           break;
         }
         case "agent.custom_tool_use":
+          decisionTrace?.custom(event.name);
           // `session_thread_id` can identify a cross-posted subagent event, but is informational.
           // Result routing is exclusively by the observed blocking custom-tool event id (#40 lifecycle).
           customTools.observeUse({ id: event.id, name: event.name, input: event.input });
@@ -1369,6 +1380,7 @@ export async function connectToDjonik(
           );
           break;
         case "agent.tool_use":
+          decisionTrace?.builtIn(event.name, event.input as Record<string, unknown>);
           observeGatedToolUse(event, "builtin");
           turnToolUses.push({ kind: "builtin", name: event.name });
           if (event.name === "read") {
@@ -1576,6 +1588,11 @@ export async function connectToDjonik(
     // their own time line; the verification nudge below is not Daniel's turn. Counts above stay his content.
     const turnContent: SendableContentBlock[] =
       turnAuthority === "human" ? [{ type: "text", text: buildClockHeader(now()) }, ...content] : content;
+    sessionTurnIndex += 1;
+    decisionTrace = new DecisionTraceCollector(
+      sessionTurnIndex,
+      turnAuthority === "human" && turnContent[0].type === "text" ? turnContent[0].text : undefined,
+    );
 
     feed.setTurnActive(true);
     try {
@@ -1693,6 +1710,8 @@ export async function connectToDjonik(
           lateSpecialistResults: specialist.quarantinedResults,
         });
       }
+      if (decisionTrace) turnTelemetry.recordDecisionTrace(decisionTrace.finish(ledger.outcomes()));
+      decisionTrace = null;
       const completedTelemetry = turnTelemetry.summary();
       // A turn that saw no usage snapshot must not reset the cumulative baseline (that would make the
       // next turn's delta re-count everything before it).

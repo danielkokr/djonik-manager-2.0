@@ -11,6 +11,8 @@
     "start": "node dist/telegramCli.js",
     "release:check": "tsx src/releaseCheck.ts",
     "telemetry:reconcile": "tsx src/reconcileTelemetry.ts",
+    "turn:explain": "tsx src/turnExplain.ts",
+    "benchmark:pm": "tsx src/pmBenchmarkCli.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test src/**/*.test.ts"
   },

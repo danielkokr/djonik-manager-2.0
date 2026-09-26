@@ -1,0 +1,42 @@
+# #46 — PM quality benchmark and content-free decision trace (source pass)
+
+Date: 2026-09-26. Canonical issue: [#46](https://github.com/danielkokr/djonik-manager-2.0/issues/46), with no comments at implementation time. Source and offline tests only. No commit, push, deploy, paid inference, remote fixture mutation, Agent/Skill sync, or production diagnostic.
+
+## Summary
+
+The repo now has one 16-scenario PM benchmark contract, a bounded fixture specification and reset path, a three-repetition runner, source-aware concrete-claim lint, a four-dimension grader contract, a compact JSON/table report, and content-free per-turn decision metadata. `turn:explain` reads persisted provider events on demand without saving a transcript. Benchmark code observes answers; it never changes serving replies.
+
+## Files and architecture
+
+- `src/pmBenchmark.ts`, `src/pmClaimLint.ts`, `src/pmGrader.ts`: pure scenario, evaluation and report logic. S1–S16 retain the intent in docs/76 §13. The critical subset is S2/S4/S5/S11/S14/S15. S14 has three turns in one fresh Session per repetition; S15 has two. Each independent repetition gets a new Session.
+- `src/pmFixture.ts`, `src/pmTrelloFixture.ts`: 15 stable card keys on a dedicated `Djonik Eval` board, lists, five project labels, a text `Size` Custom Field, a 4/5 checklist, due/undated cards, and per-scenario Memory overlays in a separate tagged store. Reset is idempotent where state already matches, archives unexpected open cards on the dedicated board, and checks card/Memory postconditions. S2 clears Size. S6 adds an accepted Extract commitment; S13 removes all commitments. Waiting age comes from actual Trello actions; reset does not invent an old entry date.
+- `src/pmBenchmarkCli.ts`: offline simulation and a future guarded live path. Live requires explicit fixture-write and paid-run flags, a pinned Agent version, distinct eval board/store/vault IDs, session snapshot attestation, Session/total/grader budgets and admissions. The model grader is invoked only after the candidate Session has finished all scenario turns. Candidate and grader cost are reported separately; grader cost is estimated from measured tokens and caller-supplied rates.
+- `src/decisionTrace.ts`, `src/djonikClient.ts`, `src/turnExplain.ts`, `package.json`: the serving client adds optional `decisionTrace` to existing `[turn]` records. No existing field was removed or renamed. The trace records Skill names, Memory paths read/written, tool names, authoritative direct-card input IDs, #31 mutation outcomes, session-visible turn index, and the adapter's actual clock header. It stores no reply, user prose, Memory content, result payload, or private reasoning. `unsupportedConcrete` is absent/unknown in production because this source pass does not run a live pre-send fact checker. Benchmark findings are normalized `{type,value,confidence}` only.
+- Tests: `pmBenchmark.test.ts`, `pmClaimLint.test.ts`, `pmFixture.test.ts`, `decisionTrace.test.ts`, extended `turnTrace.test.ts`. `commitmentContract.test.ts` explicitly exempts the isolated #46 eval fixture from the earlier source scan that forbids production code from using the Memory API.
+
+## Scenario and evaluation semantics
+
+Runner identity is `fixture-revision/scenario/repetition`, plus release, fixed clock, verdict and cost. `infra_error` means setup, provider or grader failure; it is never a PM failure or counted as a repetition retry. `not_evaluable` means a genuine missing required surface or evaluation evidence, never successful prevention of an unsupported seed claim. The live path checks the pinned Agent's actual tool configuration for `trello_board_snapshot`; until #47, S3/S8/S10 remain unavailable. S10 also needs actual waiting-age evidence. S14 passes with `self_citation_prevented_at_source` if turn 1 makes no unsupported concrete date/weekday claim. If turn 1 does make one, its normalized finding is retained in `seedFindings`; later factual reuse fails the self-citation check, while no factual reuse passes it. S16 sends the existing rhythm exception prompt through `rhythm_exception` authority and checks exact `SILENT`.
+
+Mechanical checks cover unsupported duration/date findings where high-confidence, missing-due inference, verified writes, ambiguity with zero writes, exact SILENT, constrained focus phrasing and concision. The rubric covers main decision, source discipline, Daniel's frame versus real commitment, and useful concise action. Only relevant dimensions are graded per scenario. A grader result must have all four schema dimensions and agree with its verdict; malformed output is infrastructure failure. A deterministic failure and a grader judgement remain separately visible. A full result is 16 × 3 rows; factual `pass^3` and behavioural `≥2/3` are displayed per scenario, never rolled into one percentage. Candidate replies are inspected transiently and are not retained in the report.
+
+Claim lint compares normalized weekday/date/duration/Size/client-expectation slots to structured available evidence. Daniel's available-time budget is not treated as task effort. A clause with negation/unknown wording is review-grade to avoid automatic false failure. A missing due cannot imply “can wait.” It is a bounded screening aid, not a general Ukrainian semantic parser or a production response safeguard. Human weekly “would act / partly / no” ratings can be added to later reports; no feedback collection workflow was added.
+
+## Explain and privacy
+
+`npm run turn:explain -- <sessionId> <turnIndex>` fetches the provider Session event history only when requested. It reconstructs observed Skill/Memory/tool/card paths and replays the existing #31 ledger over the selected turn, including a verification nudge in that same visible turn. Missing fields print `unknown`. It reports observable events, not Claude's internal reasoning. The active telemetry collector likewise counts only one visible turn across a nudge. Old `[turn]` records remain parseable by `reconcileTelemetry.ts`.
+
+## Checks and evidence
+
+- Focused offline suites (`pmClaimLint`, `pmBenchmark`, `pmFixture`, `decisionTrace`, `turnTrace`, `commitmentContract`): **59/59 passed**. Fake provider streams and an injected HTTP fake; zero remote calls.
+- `npm run typecheck`: passed.
+- Earlier source pass, before the two S14 tests: `npm run build` passed; `npm test` had **1163/1165 passed; 2 failed**. The two failures are the same pre-existing Windows-only `deployConfig.test.ts` CRLF assertion and `processExit.test.ts` child exit-code mismatch documented in docs/81 and docs/82. Those files and `deploy/deploy.sh` have no diff in this pass.
+- `npm run benchmark:pm -- --offline --mode critical --release offline-test --output .tmp-benchmark.json`: produced a clearly marked simulation table; temporary file removed. Fake verdicts are not behavioural evidence.
+- `git diff --check`: passed.
+- Manual provider/Trello/Memory smoke: **not run**; no paid or remote action authorized.
+
+## Deferred and later baseline
+
+The real baseline needs an approved budget per docs/04 §27, an eval board and tagged Memory store provisioned with separate credentials, an eval Trello vault, frozen Agent version/environment/release, grader model and rates, and explicit permission for fixture writes and paid Sessions. The provision helper returns board/store IDs; reset then requires those exact IDs. A full candidate suite means up to 48 fresh Sessions plus 48 grader calls, and extra candidate turns for S14/S15. Docs/76 estimates about **$7** candidate list cost for full or **$3** for critical, before grader cost, fixture API traffic and variance; the actual ceiling must be declared from current comparable full-turn evidence before running. The CLI will stop admissions on missing usage or exhausted declared bounds. No real baseline result exists yet.
+
+#47 remains separate: no snapshot tool, Size/checklist conversational access, or days-in-list implementation was added. The fixed 2026-09-28 clock and real Trello action timestamps constrain S10; if 12 days cannot be established, its result is unevaluable. S14 records source prevention as a pass and retains any observed seed-turn factual finding even when the later self-citation check passes. A later authorized baseline must report genuine evidence limitations. No Daniel rating workflow, dashboard, transcript database, scheduled runs, PH retirement, model selection, or prompt repair was added.

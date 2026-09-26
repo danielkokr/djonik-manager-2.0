@@ -7,6 +7,7 @@ import {
   DjonikTurnIncompleteError,
   DjonikUnverifiedMutationError,
   type DjonikCustomToolExecutor,
+  type DjonikTurnTelemetry,
 } from "./djonikClient.js";
 import { isClockHeader } from "./turnClock.js";
 
@@ -63,11 +64,41 @@ const builtIn = (id: string, name: string, input: Record<string, unknown>) => ({
 const customUse = (id: string) => ({ type: "agent.custom_tool_use", id, name: "trello_work_history", input: { window: { kind: "this_week" }, scope: { kind: "board" } } });
 const requiresAction = (ids: string[]) => ({ type: "session.status_idle", stop_reason: { type: "requires_action", event_ids: ids } });
 
-async function open(executor?: DjonikCustomToolExecutor, withIds = false) {
+async function open(executor?: DjonikCustomToolExecutor, withIds = false, onTurnTelemetry?: (record: DjonikTurnTelemetry) => void) {
   const scripted = createScripted(withIds);
-  const session = await connectToDjonik(scripted.client, "agent_x", "env_x", "memstore_x", "vlt_x", undefined, undefined, "telegram", executor);
+  const session = await connectToDjonik(scripted.client, "agent_x", "env_x", "memstore_x", "vlt_x", undefined, onTurnTelemetry, "telegram", executor);
   return { ...scripted, session };
 }
+
+test("#46 telemetry records content-free paths, verified card identity and visible turn index", async () => {
+  const records: DjonikTurnTelemetry[] = [];
+  const { session, push, sendCalls } = await open(undefined, false, (record) => records.push(record));
+  const card = { id: "card_A", name: "A" };
+  push(
+    builtIn("s", "read", { file_path: "/workspace/skills/planning-and-focus/SKILL.md" }),
+    builtIn("m", "read", { file_path: "/mnt/memory/djonik/priorities.md" }),
+    builtIn("e", "edit", { file_path: "/mnt/memory/djonik/projects/seqthera.md", old_string: "SECRET" }),
+    mcpUse("w", "trelloWriteCard", { action: "update", cardId: "card_A", name: "A" }),
+    mcpResult("w", card), msg("SECRET REPLY"), IDLE_OK,
+  );
+  const first = session.send("SECRET USER");
+  await new Promise((resolve) => setImmediate(resolve));
+  push(mcpUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "card_A" }), mcpResult("r", card), msg("verified"), IDLE_OK);
+  await first;
+  assert.equal(sendCalls.length, 2, "nudge is not a second visible turn");
+  const firstTrace = records[0].decisionTrace!;
+  assert.equal(firstTrace.sessionTurnIndex, 1);
+  assert.deepEqual(firstTrace.skillPaths, ["planning-and-focus"]);
+  assert.deepEqual(firstTrace.memoryPathsRead, ["priorities.md"]);
+  assert.deepEqual(firstTrace.memoryPathsWritten, ["projects/seqthera.md"]);
+  assert.deepEqual(firstTrace.cardIdsRead, ["card_A"]);
+  assert.deepEqual(firstTrace.mutations, [{ cardIds: ["card_A"], status: "verified" }]);
+  assert.doesNotMatch(JSON.stringify(firstTrace), /SECRET|\/mnt\/memory/);
+  push(msg("second"), IDLE_OK);
+  await session.send("another user turn");
+  assert.equal(records[1].decisionTrace?.sessionTurnIndex, 2);
+  session.close();
+});
 
 test("traced turn: final reply, the producing Session id, and every MCP / built-in / custom tool name — content-free", async () => {
   const executor: DjonikCustomToolExecutor = async () => ({ isError: false, content: JSON.stringify({ answer_text: "Цього тижня на дошці: одна картка в Done." }) });

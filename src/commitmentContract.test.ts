@@ -382,14 +382,14 @@ test("#34 N runtime: a Memory read-back never counts as verification of a Trello
 /** The ONE reviewed direct Memory API read (#39, Product Lead 2026-09-24): `/rhythm.md`, read-only. */
 const RHYTHM_CONFIG_SOURCE = "rhythmMemoryConfig.ts";
 
-test("#34 scope: the application never reads, writes, parses or caches Memory content itself (sole exception: the #39 /rhythm.md read)", () => {
+test("#34 scope: serving code never accesses Memory content outside the #39 /rhythm.md read; #46 eval fixture is isolated", () => {
   const runtimeFiles = readdirSync(join(repoRoot, "src")).filter((name) => name.endsWith(".ts") && !name.includes(".test"));
   for (const name of runtimeFiles) {
     const source = read("src", name);
-    if (name !== RHYTHM_CONFIG_SOURCE) {
+    if (name !== RHYTHM_CONFIG_SOURCE && name !== "pmFixture.ts" && name !== "pmBenchmarkCli.ts") {
       assert.doesNotMatch(source, /memoryStores|\.memories\.|memoryVersions|memory_versions/, `${name} must not call the Memory API`);
     }
-    if (name !== "djonikClient.ts") assert.doesNotMatch(source, /commitments\//, `${name} must not handle commitment records`);
+    if (name !== "djonikClient.ts" && name !== "pmFixture.ts") assert.doesNotMatch(source, /commitments\//, `${name} must not handle commitment records`);
   }
 });
 
