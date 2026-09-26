@@ -31,11 +31,13 @@ Governance [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) rec
 
 **Update 2026-09-26 — #53 source accepted; hosted live check deferred (Product Owner decision).** The reconnect/reconcile source implementation is accepted and #53 is closed; evidence is recorded in [docs/80](80_ISSUE_53_STREAM_RECONNECT_SOURCE_REPORT.md). The hosted forced-stream-close check remains explicitly deferred and must not be represented as completed evidence. It does not block the queue. **Canonical NOW becomes [#45](https://github.com/danielkokr/djonik-manager-2.0/issues/45).**
 
+**Update 2026-09-26 — #45 source accepted (Product Owner decision).** The factual-grounding and approved-template source implementation is accepted and published at `10e0bb4fdcbf620dd0a3166a6e865b6ac6aa83eb`; evidence is recorded in [docs/81](81_ISSUE_45_FACTUAL_GROUNDING_SOURCE_REPORT.md). Remote Agent/Skills sync and behavioral benchmark/live validation remain separate steps. **Canonical NOW becomes [#54](https://github.com/danielkokr/djonik-manager-2.0/issues/54).**
+
 | Order | Issue | Condition |
 |---|---|---|
 | 0 | [#53 — Reconnect to the same Session when the stream drops; never lose an accepted message](https://github.com/danielkokr/djonik-manager-2.0/issues/53) | **DONE — source accepted 2026-09-26; hosted live check deferred by PO** ([docs/80](80_ISSUE_53_STREAM_RECONNECT_SOURCE_REPORT.md)) |
-| 1 | **NOW — [#45 — Factual grounding + approved message templates](https://github.com/danielkokr/djonik-manager-2.0/issues/45)** | #53 source accepted; source + Skill text; no new tools |
-| 1a | [#54 — Reminders stored and delivered by code](https://github.com/danielkokr/djonik-manager-2.0/issues/54) | After #45 (uses its templates); Product Owner decision 2026-09-25 |
+| 1 | [#45 — Factual grounding + approved message templates](https://github.com/danielkokr/djonik-manager-2.0/issues/45) | **DONE — source accepted 2026-09-26** ([docs/81](81_ISSUE_45_FACTUAL_GROUNDING_SOURCE_REPORT.md)); remote sync/behavioral validation deferred |
+| 1a | **NOW — [#54 — Reminders stored and delivered by code](https://github.com/danielkokr/djonik-manager-2.0/issues/54)** | #45 source accepted; code-owned durable reminders + rhythm delivery |
 | 2 | [#46 — PM quality benchmark + decision trace](https://github.com/danielkokr/djonik-manager-2.0/issues/46) | After #45 source; baseline run needs its own budget authorization |
 | 3 | [#47 — Read-only `trello_board_snapshot`](https://github.com/danielkokr/djonik-manager-2.0/issues/47) | Accepted through #46 |
 | 4 | [#48 — Forwarded client messages → one proposal with ✅](https://github.com/danielkokr/djonik-manager-2.0/issues/48) | After #45–#47; supersedes #43 |
