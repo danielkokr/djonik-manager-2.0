@@ -19,8 +19,10 @@ import { APIError } from "@anthropic-ai/sdk";
  *
  * This is an in-process guarantee only. It does not make an external side effect crash-safe; a future
  * side-effecting custom tool additionally needs a target-enforced idempotency key or durable intent
- * record plus #31-style verification (docs/01 §13). There is no persistence, event store or reconnect
- * reconciliation here — a dead stream stays `DjonikSessionDeadError` (fail-closed).
+ * record plus #31-style verification (docs/01 §13). There is no persistence or event store here. Since #53 a
+ * dropped stream is reconnected to the same Session and missed events are caught up from history; the feed
+ * delivers each event id once, and this lifecycle stays idempotent per id regardless (a replayed use keeps its
+ * first observation; a replayed status is a no-op for an id already executing or submitted).
  */
 export type CustomToolResolutionState =
   | "OBSERVED"

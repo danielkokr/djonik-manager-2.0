@@ -29,12 +29,24 @@ import { CustomToolResolution } from "./customToolResolution.js";
 import { ToolConfirmationLifecycle, type ConfirmationRecord, type ConfirmationRequest } from "./toolConfirmation.js";
 import { mutationAuthorityFor, type MutationAuthority, type TurnOrigin } from "./turnAuthority.js";
 import { buildClockHeader } from "./turnClock.js";
+import {
+  SessionEventFeed,
+  SessionFeedDeadError,
+  classifyPendingMessage,
+  isRefusedSend,
+  sessionIsGone,
+  type FeedDeathReason,
+  type PendingMessageState,
+  type SessionEventApi,
+  type StreamLifecycleEvent,
+} from "./sessionEventFeed.js";
 
 /** The only custom tool this client settles (#36): read-only, so no side-effect idempotency key is
  *  needed beyond the #40 per-id lifecycle (docs/01 §13 admission rule). */
 const WORK_HISTORY_TOOL = "trello_work_history";
 
 export { DjonikSpecialistUnverifiedError, DjonikTurnIncompleteError } from "./turnCorrelation.js";
+export type { PendingMessageState, StreamLifecycleEvent } from "./sessionEventFeed.js";
 
 /**
  * Raw image bytes for one multimodal turn, transported as an inline base64
@@ -387,15 +399,24 @@ export function createTurnTelemetryCollector(
 }
 
 /**
- * Thrown when the underlying Managed Session/event stream itself has died
- * (stream ended, session terminated, or a terminal session.error) rather than
- * an ordinary turn-level failure (e.g. unverified write, empty reply) where
- * the session is still usable for the next message. Callers that cache a
- * session (e.g. the Telegram adapter's one-session-per-process manager) can
- * use this to know the cached session must be discarded and reconnected,
- * without discarding it on every turn failure.
+ * Thrown when the Managed Session itself has to be given up (#53: it terminated, is gone, or its event
+ * stream could not be reconnected within the bounded attempts) rather than an ordinary turn-level failure
+ * (e.g. unverified write, empty reply) where the session is still usable for the next message. A merely
+ * dropped stream is NOT this error any more: the handle reconnects to the same Session and continues the
+ * turn. Callers that cache a session (the Telegram adapter's one-session-per-process manager) discard it on
+ * this error; `pendingMessage` tells them whether the turn's `user.message` may be resubmitted to a
+ * replacement Session (`canResubmit`) — never when it may already have been processed.
  */
-export class DjonikSessionDeadError extends Error {}
+export class DjonikSessionDeadError extends Error {
+  constructor(
+    message: string,
+    readonly pendingMessage: PendingMessageState = "unknown",
+    readonly reason: FeedDeathReason | "unspecified" = "unspecified",
+  ) {
+    super(message);
+    this.name = "DjonikSessionDeadError";
+  }
+}
 
 /**
  * Optional observability hook for validation/debugging (e.g. Foundation 8 live
@@ -904,6 +925,12 @@ export interface DjonikSessionOptions {
   attestSession?: (session: unknown) => void | Promise<void>;
   /** Clock for the #41 clock header of Daniel's turns; tests fix it. Defaults to the system clock. */
   now?: () => Date;
+  /** Content-free stream reconnect telemetry (#53). */
+  onStreamLifecycle?: (event: StreamLifecycleEvent) => void;
+  /** Reconnect backoff schedule (#53); tests shorten it. Defaults to `DEFAULT_RECONNECT_DELAYS_MS`. */
+  reconnectDelaysMs?: readonly number[];
+  /** Backoff sleep (#53); tests replace it. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /** How one submitted `user.message` ended (#32). Only `end_turn` is a completed turn. */
@@ -921,6 +948,19 @@ const PRE_ANCHOR_PASSTHROUGH: ReadonlySet<string> = new Set([
   "session.usage",
 ]);
 
+/** One event of the Session's stream/history, as the SDK types it. */
+type StreamEvent = Awaited<ReturnType<Anthropic["beta"]["sessions"]["events"]["stream"]>> extends AsyncIterable<infer T> ? T : never;
+
+/** Event types that show the Session working on a submitted message: live evidence (#53) that a turn
+ *  given up mid-way may have had effects, so it is never resubmitted. */
+function showsProcessing(type: string): boolean {
+  return type.startsWith("agent.") || type.startsWith("span.") || type.startsWith("session.thread_") || type === "session.status_running";
+}
+
+function sessionDead(reason: FeedDeathReason, pending: PendingMessageState, message?: string): DjonikSessionDeadError {
+  return new DjonikSessionDeadError(message ?? `Djonik session is unavailable (${reason}).`, pending, reason);
+}
+
 /** The id of the single `user.message` the provider accepted (official `events.send` response
  *  `data[0].id`), or null when the response carries none (then no per-turn anchor is available). */
 function submittedUserEventId(response: unknown): string | null {
@@ -934,7 +974,8 @@ function submittedUserEventId(response: unknown): string | null {
  * Connects to the already-existing Djonik Managed Agent (Claude Console is
  * the authoritative runtime/configuration for the agent itself) by starting
  * one Managed Agent Session against `agentId` + `environmentId`, then opens
- * that session's event stream once. `send()` reuses the same session/stream
+ * that session's event feed (#53: a stream that is reconnected to the same
+ * Session when it drops). `send()` reuses the same session/feed
  * for every turn, so conversational continuity is the official Managed
  * Agents Session primitive — this client never builds or replays its own
  * message history.
@@ -983,8 +1024,23 @@ export async function connectToDjonik(
   // Attest before the stream opens: a mismatched Session never receives a message (#33).
   await sessionOptions.attestSession?.(session);
 
-  const stream = await client.beta.sessions.events.stream(session.id);
-  const iterator = stream[Symbol.asyncIterator]();
+  /** The Session surface the #53 feed and the pending-message classifier read. */
+  const sessionApi: SessionEventApi<StreamEvent> = {
+    openStream: async () => {
+      const stream = await client.beta.sessions.events.stream(session.id);
+      return { events: stream, abort: () => stream.controller.abort() };
+    },
+    listHistory: () => client.beta.sessions.events.list(session.id, { limit: 1000 }) as unknown as AsyncIterable<StreamEvent>,
+    retrieveStatus: async () => (await client.beta.sessions.retrieve(session.id)).status,
+  };
+  /** Session-lifetime event feed (#53): one ordered, per-id de-duplicated event sequence across stream
+   *  reconnects, pumped in the background so a drop while idle is repaired before Daniel writes. Opened
+   *  before anything is sent, exactly like the single stream it replaces. */
+  const feed = await SessionEventFeed.open(sessionApi, {
+    onLifecycle: sessionOptions.onStreamLifecycle,
+    reconnectDelaysMs: sessionOptions.reconnectDelaysMs,
+    sleep: sessionOptions.sleep,
+  });
 
   /** Callable-agent name of the canonical Project Health specialist, proven from the resolved
    *  Session's coordinator roster at creation (#28/#32); null disables the specialist safeguard. */
@@ -1080,8 +1136,33 @@ export async function connectToDjonik(
    * pause, `requires_action`, exhausted retries or an unrecognised stop is `completed: false` and its
    * partial text is data, never a reply. It never resumes, resends or raises a budget.
    */
-  async function runTurn(events: SendableEvent[]): Promise<TurnEnd> {
-    const sent = await client.beta.sessions.events.send(session.id, { events });
+  async function runTurn(events: SendableEvent[], primary: boolean): Promise<TurnEnd> {
+    // #53: what giving the Session up means for Daniel's message when nothing of THIS submission reached
+    // it. A verification nudge (`primary === false`) follows a turn that already completed on his message.
+    const unsent: PendingMessageState = primary ? "not_submitted" : "processed";
+    try {
+      // Never send to a Session whose turn this client could not observe: a dropped stream is reconnected
+      // (same Session) first; a Session already known dead is given up with the message still unsent.
+      await feed.ensureReady();
+    } catch (error) {
+      if (error instanceof SessionFeedDeadError) throw sessionDead(error.reason, unsent);
+      throw error;
+    }
+    let sent: unknown;
+    try {
+      sent = await client.beta.sessions.events.send(session.id, { events });
+    } catch (error) {
+      // A refusal (4xx response) from a Session the provider reports terminated/gone proves the message
+      // reached no Session that could run it. Anything else keeps the pre-#53 turn-error behaviour.
+      if (isRefusedSend(error)) {
+        const gone = await sessionIsGone(sessionApi);
+        if (gone !== null) {
+          feed.markDead(gone);
+          throw sessionDead(gone, unsent);
+        }
+      }
+      throw error;
+    }
     const submittedId = submittedUserEventId(sent);
     // Strict only when the platform has already shown it echoes `user.message` on this stream AND
     // told us this submission's id: then every event before this turn's own echo is an earlier
@@ -1089,11 +1170,25 @@ export async function connectToDjonik(
     const strict = submittedId !== null && userEchoObserved;
     let anchored = !strict;
     let reply = "";
+    /** Whether this turn's own events showed the Session working on the submission (#53). */
+    let processingSeen = false;
+
+    /** Gives the Session up after this submission was accepted. The message is resubmittable only when
+     *  the provider's own history proves it was never processed (`classifyPendingMessage`). */
+    async function giveUp(reason: FeedDeathReason, message?: string): Promise<never> {
+      const pending: PendingMessageState = !primary || processingSeen ? "processed" : await classifyPendingMessage(sessionApi, submittedId);
+      throw sessionDead(reason, pending, message);
+    }
 
     for (;;) {
-      const { value: event, done } = await iterator.next();
-      if (done) {
-        throw new DjonikSessionDeadError("Djonik session event stream ended unexpectedly.");
+      let event: StreamEvent;
+      try {
+        // Ordered, each provider event id at most once for the Session: a reconnect's catch-up delivers the
+        // events the dropped connection missed, and never one this turn (or an earlier one) already handled.
+        event = await feed.next();
+      } catch (error) {
+        if (error instanceof SessionFeedDeadError) return giveUp(error.reason);
+        throw error;
       }
 
       if (event.type === "user.message") {
@@ -1125,6 +1220,7 @@ export async function connectToDjonik(
         preAnchorEventsQuarantined += 1;
         continue;
       }
+      if (showsProcessing(event.type)) processingSeen = true;
 
       switch (event.type) {
         case "agent.message":
@@ -1219,11 +1315,16 @@ export async function connectToDjonik(
           // `stop_reason: retries_exhausted` (incomplete, below) or with an
           // empty end_turn (the empty-reply check below).
           if (event.error.retry_status.type === "terminal") {
-            throw new DjonikSessionDeadError(`Djonik session error: ${event.error.message}`);
+            feed.markDead("session_terminated");
+            return giveUp("session_terminated", `Djonik session error: ${event.error.message}`);
           }
           break;
         case "session.status_terminated":
-          throw new DjonikSessionDeadError("Djonik session terminated unexpectedly.");
+          feed.markDead("session_terminated");
+          return giveUp("session_terminated", "Djonik session terminated unexpectedly.");
+        case "session.deleted":
+          feed.markDead("session_gone");
+          return giveUp("session_gone", "Djonik session was deleted.");
         case "session.status_idle": {
           // Idle is a pause, not a verdict: only `end_turn` completes the turn (#32).
           const stopKind = classifyStopReason(event.stop_reason);
@@ -1399,8 +1500,9 @@ export async function connectToDjonik(
     const turnContent: SendableContentBlock[] =
       turnAuthority === "human" ? [{ type: "text", text: buildClockHeader(now()) }, ...content] : content;
 
+    feed.setTurnActive(true);
     try {
-      let end = await runTurn([{ type: "user.message", content: turnContent }]);
+      let end = await runTurn([{ type: "user.message", content: turnContent }], true);
 
       let outcomes = ledger.outcomes();
       // A nudge is a corrective read request for a turn that COMPLETED with an unverified write. A turn
@@ -1413,7 +1515,7 @@ export async function connectToDjonik(
             type: "user.message",
             content: [{ type: "text", text: buildVerificationNudgeText(nudgeTargetIds(outcomes)) }],
           },
-        ]);
+        ], false);
         outcomes = ledger.outcomes();
       }
 
@@ -1497,6 +1599,7 @@ export async function connectToDjonik(
 
       return commentary;
     } finally {
+      feed.setTurnActive(false);
       if (preAnchorEventsQuarantined > 0 || specialist.quarantinedResults > 0) {
         onTrace?.({
           type: "late_events_quarantined",
@@ -1518,18 +1621,19 @@ export async function connectToDjonik(
    * Telegram dispatches settle on independent timers and can therefore call
    * `send`/`sendOrdered` concurrently on the same handle; `sendPartsSerial`
    * above and its private closure state (`turnTelemetry`, the per-turn Trello mutation
-   * `ledger` (#31), `mcpToolCallsById`) and the single event-stream
-   * `iterator` are only safe for one in-flight turn at a time. `enqueue` is a
+   * `ledger` (#31), `mcpToolCallsById`) and the Session's event `feed`
+   * are only safe for one in-flight turn at a time. `enqueue` is a
    * thin queue in front of the unchanged `sendPartsSerial` logic: each call
    * waits for every previously queued call to fully settle (resolve or
    * reject) before its own `sendPartsSerial` starts, so at most one turn ever
-   * touches the shared state or reads from `iterator` concurrently.
+   * touches the shared state or reads from `feed` concurrently.
    * `queueTail` is derived with a swallowing `.then(ok, ok)` specifically so a
    * failed turn (an ordinary turn-level error, or even
    * `DjonikSessionDeadError`) never poisons the chain — the next queued call
-   * still runs (and, for a dead session, will independently discover and
-   * report that same dead state; this handle does not reconnect itself,
-   * matching `DjonikSessionManager` owning that responsibility). Both `send`
+   * still runs (and, for a dead session, fails before sending with
+   * `pendingMessage: "not_submitted"`: this handle reconnects its stream to
+   * the same Session (#53) but never replaces the Session itself, which
+   * `DjonikSessionManager` owns). Both `send`
    * and `sendOrdered` (#27) go through this one queue, since both ultimately
    * call the same `sendPartsSerial`.
    */
@@ -1590,7 +1694,7 @@ export async function connectToDjonik(
   }
 
   function close(): void {
-    stream.controller.abort();
+    feed.close();
   }
 
   return { sessionId: session.id, send, sendOrdered, sendTraced, close };

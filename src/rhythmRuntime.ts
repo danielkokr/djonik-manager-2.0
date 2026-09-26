@@ -18,7 +18,7 @@ import {
   type RhythmCallbackDeps,
   type RhythmCallbackQuery,
 } from "./rhythmTelegram.js";
-import { handleSessionError, isAllowedUser, type DjonikSessionManager } from "./telegramAdapter.js";
+import { isAllowedUser, runWithSessionRecovery, type DjonikSessionManager, type SessionRecoveryEvent } from "./telegramAdapter.js";
 import { confirmationPolicyProblems, REVIEWED_TRELLO_READ_TOOLS, SERVING_RELEASE, type DjonikRelease } from "./release.js";
 import { REVIEWED_CONFIRMATION_TOOLS } from "./toolConfirmation.js";
 
@@ -185,27 +185,33 @@ export function createRhythmTimer(options: {
 /**
  * The scheduler's `runTurn`: one text turn through the SAME serving Session, FIFO queue and pipeline as
  * Daniel's messages (`sendTraced`), returning the final reply, the Session that produced it and the turn's
- * tool uses. A dead Session is invalidated exactly as for a typed turn. A failed turn surfaces its tool uses
- * so the read-only guard still sees an attempted write.
+ * tool uses. A Session given up mid-turn goes through the same #53 recovery as a typed turn (replacement, and a
+ * resubmission only when the prompt provably never started processing), so a rhythm turn — and therefore its
+ * one proactive delivery — still produces at most one result. A failed turn surfaces its tool uses so the
+ * read-only guard still sees an attempted write.
  */
-export function createSessionTurnRunner(sessions: DjonikSessionManager<DjonikTracedSessionHandle>): AutonomousTurnRunner {
+export function createSessionTurnRunner(
+  sessions: DjonikSessionManager<DjonikTracedSessionHandle>,
+  onSessionRecovery?: (event: SessionRecoveryEvent) => void,
+): AutonomousTurnRunner {
   return async (request) => {
-    let session: DjonikTracedSessionHandle;
+    let sessionId: string | null = null;
     try {
-      session = await sessions.getSession();
-    } catch {
-      throw new AutonomousTurnFailure([], null);
-    }
-    try {
-      // The origin is the scheduler's own (`rhythm_ritual` / `rhythm_exception`): autonomous authority, so
-      // the client denies every gated tool before it executes (#39 Stage 3A).
-      return await session.sendTraced([{ type: "text", text: request.prompt }], request.origin);
+      return await runWithSessionRecovery(
+        sessions,
+        (session) => {
+          sessionId = session.sessionId;
+          // The origin is the scheduler's own (`rhythm_ritual` / `rhythm_exception`): autonomous authority, so
+          // the client denies every gated tool before it executes (#39 Stage 3A).
+          return session.sendTraced([{ type: "text", text: request.prompt }], request.origin);
+        },
+        onSessionRecovery,
+      );
     } catch (error) {
       if (error instanceof DjonikTracedTurnError) {
-        handleSessionError(sessions, error.error);
         throw new AutonomousTurnFailure(error.toolUses, error.sessionId, error.autonomousMutationAttempt);
       }
-      throw new AutonomousTurnFailure([], session.sessionId);
+      throw new AutonomousTurnFailure([], sessionId);
     }
   };
 }

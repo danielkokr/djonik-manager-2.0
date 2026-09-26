@@ -1,9 +1,12 @@
 import {
   DjonikSessionDeadError,
+  DjonikTracedTurnError,
   type DjonikDocumentInput,
   type DjonikImageInput,
   type DjonikSessionHandle,
+  type PendingMessageState,
 } from "./djonikClient.js";
+import { canResubmit } from "./sessionEventFeed.js";
 
 /** MIME types the Claude API accepts as an `image` content block (Vision docs, 2026-09-17). */
 export const SUPPORTED_IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
@@ -229,8 +232,20 @@ export function isAllowedUser(fromId: number | undefined, allowedUserId: string)
   return fromId !== undefined && String(fromId) === allowedUserId.trim();
 }
 
-/** Bounds a failed turn to a short, secret-free, user-visible message. */
+/** #53: the reply could not be obtained and the message provably never started processing anywhere. */
+export const SESSION_LOST_RESEND_TEXT = "⚠️ Не вдалося отримати відповідь — перешли, будь ласка, ще раз.";
+
+/** #53: the reply could not be obtained and the message may already have been acted on. */
+export const SESSION_LOST_CHECK_TEXT =
+  "⚠️ Не вдалося отримати відповідь — зв'язок із сесією обірвався. Перешли, будь ласка, ще раз; " +
+  "якщо просив зміну в Trello, спершу перевір, чи вона вже є.";
+
+/** Bounds a failed turn to a short, secret-free, user-visible message. A lost Session (#53) never shows
+ *  raw provider/runtime text: one fixed Ukrainian line, with a Trello check hint unless the message
+ *  provably never started processing. */
 export function formatUserFacingError(error: unknown): string {
+  const dead = sessionDeadErrorOf(error);
+  if (dead) return canResubmit(dead.pendingMessage) ? SESSION_LOST_RESEND_TEXT : SESSION_LOST_CHECK_TEXT;
   const message = error instanceof Error ? error.message : String(error);
   return `⚠️ Джонік не зміг відповісти на це повідомлення: ${message}`;
 }
@@ -254,12 +269,13 @@ export interface DjonikSessionManager<H extends DjonikSessionHandle = DjonikSess
   closeIfOpen(): void;
   /**
    * Discards the cached session so the next `getSession()` reconnects instead
-   * of reusing a session whose event stream has already died. Call this only
+   * of reusing a session that has been given up. Call this only
    * for a `DjonikSessionDeadError` (see `handleSessionError`) — ordinary
    * turn-level failures (unverified write, empty reply) leave a perfectly
-   * usable session and must not be torn down.
+   * usable session and must not be torn down. With `handle` (#53), only that
+   * exact handle is discarded: a replacement created meanwhile is kept.
    */
-  invalidate(): void;
+  invalidate(handle?: H): void;
 }
 
 /**
@@ -300,7 +316,9 @@ export function createSessionManager<H extends DjonikSessionHandle>(
     sessionPromise?.then((session) => session.close()).catch(() => {});
   }
 
-  function invalidate(): void {
+  function invalidate(handle?: H): void {
+    if (handle !== undefined && connected !== handle) return;
+    connected?.close();
     sessionPromise = null;
     connected = null;
   }
@@ -317,7 +335,70 @@ export function createSessionManager<H extends DjonikSessionHandle>(
  * continuity for no reason.
  */
 export function handleSessionError(manager: DjonikSessionManager, error: unknown): void {
-  if (error instanceof DjonikSessionDeadError) {
+  if (sessionDeadErrorOf(error)) {
     manager.invalidate();
+  }
+}
+
+/** The `DjonikSessionDeadError` behind `error`, including one wrapped by a traced (#39) turn. */
+export function sessionDeadErrorOf(error: unknown): DjonikSessionDeadError | null {
+  if (error instanceof DjonikSessionDeadError) return error;
+  if (error instanceof DjonikTracedTurnError && error.error instanceof DjonikSessionDeadError) return error.error;
+  return null;
+}
+
+/** Content-free Session-replacement telemetry (#53). */
+export type SessionRecoveryEvent =
+  | { type: "session_replaced"; pendingMessage: PendingMessageState; resubmit: boolean }
+  | { type: "message_resubmitted"; outcome: "completed" | "turn_failed" | "not_delivered" };
+
+/**
+ * #53: runs one turn on the process's Session and owns the only Session REPLACEMENT path. A dropped stream
+ * never reaches here — the handle reconnects to the same Session itself; this handles the Session being
+ * given up (`DjonikSessionDeadError`):
+ *
+ * - the dead handle (and only it) is discarded, so the next turn gets a fresh Session;
+ * - the turn is run again on the replacement ONCE, and only when the error proves its message never
+ *   started processing (`not_submitted` / `unprocessed`). A possibly processed message (`processed`,
+ *   `unknown`) is never resubmitted: the original error propagates and the caller shows the fixed
+ *   Ukrainian line (`formatUserFacingError`), so Daniel decides — nothing is duplicated.
+ *
+ * A failure of the replacement Session itself propagates as the ORIGINAL error (safe to resend, since
+ * nothing was processed); a second give-up on the replacement only invalidates it.
+ */
+export async function runWithSessionRecovery<H extends DjonikSessionHandle, T>(
+  manager: DjonikSessionManager<H>,
+  run: (session: H) => Promise<T>,
+  onRecovery?: (event: SessionRecoveryEvent) => void,
+  logError: (message: string, error: unknown) => void = (message, error) => console.error(message, error),
+): Promise<T> {
+  const session = await manager.getSession();
+  try {
+    return await run(session);
+  } catch (error) {
+    const dead = sessionDeadErrorOf(error);
+    if (!dead) throw error;
+    const resubmit = canResubmit(dead.pendingMessage);
+    manager.invalidate(session);
+    onRecovery?.({ type: "session_replaced", pendingMessage: dead.pendingMessage, resubmit });
+    if (!resubmit) throw error;
+
+    let replacement: H;
+    try {
+      replacement = await manager.getSession();
+    } catch (connectError) {
+      logError("Djonik replacement Session could not be created:", connectError);
+      onRecovery?.({ type: "message_resubmitted", outcome: "not_delivered" });
+      throw error;
+    }
+    try {
+      const result = await run(replacement);
+      onRecovery?.({ type: "message_resubmitted", outcome: "completed" });
+      return result;
+    } catch (retryError) {
+      onRecovery?.({ type: "message_resubmitted", outcome: "turn_failed" });
+      if (sessionDeadErrorOf(retryError)) manager.invalidate(replacement);
+      throw retryError;
+    }
   }
 }

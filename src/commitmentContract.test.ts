@@ -270,7 +270,7 @@ function fakeClient(events: unknown[]): { client: Anthropic; sendCalls: unknown[
     [Symbol.asyncIterator]() {
       let index = 0;
       return {
-        next: async () => (index < events.length ? { value: events[index++], done: false } : { value: undefined, done: true }),
+        next: async () => (index < events.length ? { value: events[index++], done: false } : new Promise<never>(() => {})),
       };
     },
   };

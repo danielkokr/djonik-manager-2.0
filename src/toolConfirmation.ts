@@ -22,8 +22,8 @@ import type { MutationAuthority } from "./turnAuthority.js";
  * `session.status_idle{requires_action}` is a level-triggered status, as for custom tools (#40): a
  * repeated idle naming an already SUBMITTED id changes nothing and sends nothing.
  *
- * This is an in-process guarantee. There is no persistence and no reconnect reconciliation; a dead stream
- * stays `DjonikSessionDeadError`.
+ * This is an in-process guarantee with no persistence. A #53 stream reconnect replays nothing into it twice
+ * (per-id feed), and a replayed request would keep its first, immutable decision anyway.
  */
 
 /** The only tools a human turn may confirm: the reviewed mutating surface that r27 sets to `always_ask`.

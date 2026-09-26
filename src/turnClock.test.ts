@@ -390,7 +390,7 @@ test("the write-verification nudge is not Daniel's turn: no header on it", async
             let index = 0;
             return {
               controller: { abort: () => {} },
-              [Symbol.asyncIterator]: () => ({ next: async () => (index < events.length ? { value: events[index++], done: false } : { value: undefined, done: true }) }),
+              [Symbol.asyncIterator]: () => ({ next: async () => (index < events.length ? { value: events[index++], done: false } : new Promise<never>(() => {})) }),
             };
           },
           send: async (_id: string, params: Batch) => {

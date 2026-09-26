@@ -3,8 +3,9 @@ import { buildGroupingTelemetry } from "./messageGrouping.js";
 import {
   formatGroupFailureError,
   formatUserFacingError,
-  handleSessionError,
+  runWithSessionRecovery,
   type DjonikSessionManager,
+  type SessionRecoveryEvent,
 } from "./telegramAdapter.js";
 
 /**
@@ -24,6 +25,8 @@ export interface GroupDispatchDeps {
   onGroupTelemetry?: (telemetry: ReturnType<typeof buildGroupingTelemetry>) => void;
   /** Defaults to `console.error`; overridable so tests can assert on/silence it. */
   logError?: (message: string, error: unknown) => void;
+  /** Content-free Session replacement / resubmission telemetry (#53). */
+  onSessionRecovery?: (event: SessionRecoveryEvent) => void;
 }
 
 export interface GroupDispatchHandlers {
@@ -38,16 +41,21 @@ export function createGroupDispatchHandlers(deps: GroupDispatchDeps): GroupDispa
     onDispatch: async (chatId, _userId, intake) => {
       deps.onGroupTelemetry?.(buildGroupingTelemetry(intake));
       try {
-        const session = await deps.djonikSession.getSession();
         // #27: send in original Telegram order/relationship (caption next to
         // its own image, text → image → correction kept in sequence) via
         // `sendOrdered`, not the legacy `send(text, images, documents)`
-        // flattening, which loses that structure.
-        const reply = await session.sendOrdered(intake.parts);
+        // flattening, which loses that structure. #53: a Session given up
+        // mid-turn is replaced, and the intake resubmitted only when provably
+        // unprocessed — never twice, never a possibly processed turn.
+        const reply = await runWithSessionRecovery(
+          deps.djonikSession,
+          (session) => session.sendOrdered(intake.parts),
+          deps.onSessionRecovery,
+          logError,
+        );
         await deps.sendMessage(chatId, reply);
       } catch (error) {
         logError("Djonik grouped turn failed:", error);
-        handleSessionError(deps.djonikSession, error);
         await deps.sendMessage(chatId, formatUserFacingError(error));
       }
     },

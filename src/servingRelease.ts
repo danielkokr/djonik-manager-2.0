@@ -6,6 +6,7 @@ import {
   type DjonikTraceEvent,
   type DjonikTurnSource,
   type DjonikTurnTelemetry,
+  type StreamLifecycleEvent,
 } from "./djonikClient.js";
 import type { DjonikRelease } from "./release.js";
 import {
@@ -217,6 +218,8 @@ export interface ServingSessionHooks {
   onTurnTelemetry?: (telemetry: DjonikTurnTelemetry) => void;
   /** Receives the content-free serving tuple line after each attested Session creation. */
   onServing?: (line: string) => void;
+  /** Content-free stream reconnect telemetry of the Session (#53). */
+  onStreamLifecycle?: (event: StreamLifecycleEvent) => void;
   trelloHistoryField?: string;
   /** Optional provider-enforced Session list-cost cap in USD cents (`budget.max_list_cost`). Bounded
    *  validation Sessions use it as a hard spend backstop; the Telegram serving Session sets none. */
@@ -252,6 +255,7 @@ export async function connectServingSession(
       memoryAccess: release.session.memoryAccess,
       metadata: { source: hooks.turnSource, release: release.id, app_revision: config.appRevision.slice(0, 64) },
       maxListCostUsdCents: hooks.maxListCostUsdCents,
+      onStreamLifecycle: hooks.onStreamLifecycle,
       // Attest the persisted Session as the provider reports it on retrieval (the #33 "supported serving-
       // Session retrieval"), not just the create response: that is the configuration turns will run on.
       attestSession: async (session) => {

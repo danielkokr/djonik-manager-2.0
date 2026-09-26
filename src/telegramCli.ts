@@ -88,6 +88,8 @@ async function main(): Promise<number> {
   }
 
   const trace = process.env.DJONIK_TRACE === "1";
+  /** #53 Session lifecycle evidence (reconnects, replacement, resubmission): content-free, always logged. */
+  const logSessionLifecycle = (event: { type: string }) => console.log("[session]", JSON.stringify(event));
   const turnTelemetry = process.env.DJONIK_TURN_TELEMETRY === "1";
   let polling: Promise<unknown> = Promise.resolve();
   /** Set once serving has started; before that a failure simply ends `main` with its exit code. */
@@ -99,6 +101,8 @@ async function main(): Promise<number> {
         onTrace: trace ? (event) => console.error("[trace]", JSON.stringify(event)) : undefined,
         onTurnTelemetry: turnTelemetry ? (summary) => console.error("[turn]", JSON.stringify(summary)) : undefined,
         onServing: (line) => console.log(line),
+        // #53: content-free stream reconnect evidence, always on (counts/causes only, never content or ids).
+        onStreamLifecycle: logSessionLifecycle,
         trelloHistoryField: trello.field,
       });
     } catch (error) {
@@ -173,6 +177,7 @@ async function main(): Promise<number> {
     djonikSession,
     sendMessage: sendText,
     onGroupTelemetry: turnTelemetry ? (telemetry) => console.error("[group]", JSON.stringify(telemetry)) : undefined,
+    onSessionRecovery: logSessionLifecycle,
   });
   const groupBuffer = new MessageGroupBuffer({ onDispatch, onFailure });
 
@@ -287,7 +292,7 @@ async function main(): Promise<number> {
             log: (line) => console.log(line),
           })
       : undefined,
-    runTurn: createSessionTurnRunner(djonikSession),
+    runTurn: createSessionTurnRunner(djonikSession, logSessionLifecycle),
     send: createTelegramProactiveSender(bot.api, Number(telegramConfig.allowedUserId)),
     currentSessionId: () => djonikSession.currentSessionId(),
     answer: (query, alert) =>

@@ -53,7 +53,8 @@ function createFakeClient(events: unknown[], sessionAgent?: unknown): { client: 
       let index = 0;
       return {
         next: async () => {
-          if (index >= events.length) return { value: undefined, done: true };
+          // A live stream stays open after the scripted events (#53: an ending stream is a drop).
+          if (index >= events.length) return new Promise<never>(() => {});
           return { value: events[index++], done: false };
         },
       };
@@ -402,11 +403,14 @@ test("an exhausted session.error with no assistant message still fails the turn"
   session.close();
 });
 
-test("a terminal session.error immediately fails the turn", async () => {
-  const { client } = createFakeClient([retryingError(), terminalError("Session crashed"), AGENT_MESSAGE, IDLE]);
+test("a terminal session.error fails the turn — and (#53) one already on the stream means nothing is sent at all", async () => {
+  const { client, sendCalls } = createFakeClient([retryingError(), terminalError("Session crashed"), AGENT_MESSAGE, IDLE]);
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
 
-  await assert.rejects(() => session.send("Привіт"), /Session crashed/);
+  const error = await session.send("Привіт").then(() => null, (e: unknown) => e);
+  assert.ok(error instanceof DjonikSessionDeadError);
+  assert.equal(error.pendingMessage, "not_submitted", "the Session announced its end before the message was sent");
+  assert.equal(sendCalls.length, 0, "no message is sent to a Session that already reported a terminal error");
   session.close();
 });
 
@@ -1374,7 +1378,7 @@ test("Scenario B: a failed first queued turn does not poison the queue — the s
   session.close();
 });
 
-test("Scenario C: a DjonikSessionDeadError from the first queued turn stays correctly typed, and the already-queued next turn still runs on the same (now-dead) handle without any auto-reconnect", async () => {
+test("Scenario C (#53): a DjonikSessionDeadError from the first queued turn stays correctly typed, and the already-queued next turn is NOT sent to the dead Session (it fails as not_submitted, for the manager to resubmit)", async () => {
   const { client, sendCalls, push } = createStreamedFakeClient();
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
 
@@ -1384,17 +1388,16 @@ test("Scenario C: a DjonikSessionDeadError from the first queued turn stays corr
   assert.equal(sendCalls.length, 1);
 
   push({ type: "session.status_terminated" });
-  await assert.rejects(() => p1, DjonikSessionDeadError);
+  const first = await p1.then(() => null, (e: unknown) => e);
+  assert.ok(first instanceof DjonikSessionDeadError);
+  assert.equal(first.pendingMessage, "unknown", "the fake cannot prove the first message unprocessed, so it is never resubmitted");
 
-  // Documented current behavior: the queue does not skip or reconnect — it
-  // still starts the next queued turn on the same handle, which independently
-  // hits the same dead stream. `DjonikSessionManager` (the Telegram adapter's
-  // one-session-per-process cache), not `DjonikSessionHandle` itself, owns
-  // reconnection via `DjonikSessionDeadError`.
-  await flushMicrotasks();
-  assert.equal(sendCalls.length, 2, "the queue still attempts the next turn rather than skipping it");
-  push({ type: "session.status_terminated" });
-  await assert.rejects(() => p2, DjonikSessionDeadError);
+  // The queue still runs the next turn, but the handle knows its Session is dead: nothing is sent, and the
+  // error says so. `DjonikSessionManager` (not the handle) owns Session replacement (#53).
+  const second = await p2.then(() => null, (e: unknown) => e);
+  assert.ok(second instanceof DjonikSessionDeadError);
+  assert.equal(second.pendingMessage, "not_submitted");
+  assert.equal(sendCalls.length, 1, "the queued turn was never sent to the dead Session");
 
   session.close();
 });
@@ -1534,7 +1537,7 @@ test("Scenario H (#27): sendOrdered() shares the exact same event-stream iterato
   session.close();
 });
 
-test("Scenario I (#27): a DjonikSessionDeadError raised by sendOrdered() behaves identically to send() — same dead-session typing, same non-reconnecting queue", async () => {
+test("Scenario I (#27): a DjonikSessionDeadError raised by sendOrdered() behaves identically to send() — same dead-session typing, same queued not_submitted failure", async () => {
   const { client, sendCalls, push } = createStreamedFakeClient();
   const session = await connectToDjonik(client, "agent_x", "env_x", "memstore_x", "vlt_x");
 
@@ -1546,10 +1549,10 @@ test("Scenario I (#27): a DjonikSessionDeadError raised by sendOrdered() behaves
   push({ type: "session.status_terminated" });
   await assert.rejects(() => p1, DjonikSessionDeadError);
 
-  await flushMicrotasks();
-  assert.equal(sendCalls.length, 2, "the queue still attempts the next sendOrdered() turn rather than skipping it — identical to send()'s documented behavior");
-  push({ type: "session.status_terminated" });
-  await assert.rejects(() => p2, DjonikSessionDeadError);
+  const second = await p2.then(() => null, (e: unknown) => e);
+  assert.ok(second instanceof DjonikSessionDeadError);
+  assert.equal(second.pendingMessage, "not_submitted", "identical to send()");
+  assert.equal(sendCalls.length, 1);
 
   session.close();
 });
