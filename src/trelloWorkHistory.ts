@@ -62,6 +62,14 @@ export interface TrelloList {
   name: string;
 }
 
+/** A single card's current state as a reminder delivery reads it (#54). */
+export interface TrelloCardState {
+  name: string;
+  closed: boolean;
+  dueComplete: boolean;
+  listName: string | null;
+}
+
 export interface HistoryCoverage {
   pagesRead: number;
   truncated: boolean;
@@ -658,6 +666,14 @@ export class TrelloWorkHistoryClient {
       throw new TrelloWorkHistoryError("malformed");
     }
     return value as TrelloList[];
+  }
+
+  /** One card's current name, list name and completion flags, read fresh at reminder delivery (#54). */
+  async readCardState(cardId: string): Promise<TrelloCardState> {
+    const value = await this.getJson(`/cards/${encodeURIComponent(cardId)}`, { fields: "name,closed,dueComplete,idList", list: "true" });
+    if (!isRecord(value) || typeof value.name !== "string") throw new TrelloWorkHistoryError("malformed");
+    const list = isRecord(value.list) && typeof value.list.name === "string" ? value.list.name : null;
+    return { name: value.name, closed: value.closed === true, dueComplete: value.dueComplete === true, listName: list };
   }
 
   /** The card's most recent list-changing action (a move, or its creation), however old, or null (#39). */

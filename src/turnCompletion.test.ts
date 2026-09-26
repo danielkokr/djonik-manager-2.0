@@ -1150,9 +1150,9 @@ function countingExecutor(inner: DjonikCustomToolExecutor): { executor: DjonikCu
   const calls: unknown[] = [];
   return {
     calls,
-    executor: async (input) => {
+    executor: async (input, context) => {
       calls.push(input);
-      return inner(input);
+      return inner(input, context);
     },
   };
 }

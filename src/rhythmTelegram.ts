@@ -24,13 +24,14 @@ export function classifySendError(error: unknown): SendOutcome {
 
 /**
  * Sends one final proactive message to Daniel's private chat. The keyboard comes only from the
- * delivery's bounded action list; the text is Claude's final reply (never interim text), rendered by the
+ * delivery's bounded action list (or, for a #54 reminder, the code-built reminder keyboard); the text is
+ * Claude's final reply (never interim text) or a code-owned reminder, rendered by the
  * same shared Telegram HTML path as ordinary replies (`sendFormattedMessage`). A parse-error fallback's
  * own failure is classified exactly like any other send failure.
  */
 export function createTelegramProactiveSender(api: TelegramProactiveApi, chatId: number): ProactiveSender {
   return async (message: OutboundMessage, ref: string) => {
-    const replyMarkup = toTelegramReplyMarkup(message.actions, ref);
+    const replyMarkup = message.actions.length === 0 && message.keyboard ? message.keyboard : toTelegramReplyMarkup(message.actions, ref);
     try {
       const sent = await sendFormattedMessage(api, chatId, message.text, replyMarkup);
       return { status: "sent", messageId: sent.message_id };

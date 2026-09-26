@@ -26,6 +26,7 @@ import {
 } from "./turnCorrelation.js";
 import { executeTrelloWorkHistoryFromEnvironment, type CustomToolExecutionResult } from "./trelloWorkHistory.js";
 import { CustomToolResolution } from "./customToolResolution.js";
+import { isReadOnlyReminderInput, REMINDER_TOOL_NAME, reminderConfirmationOf } from "./reminderTool.js";
 import { ToolConfirmationLifecycle, type ConfirmationRecord, type ConfirmationRequest } from "./toolConfirmation.js";
 import { mutationAuthorityFor, type MutationAuthority, type TurnOrigin } from "./turnAuthority.js";
 import { buildClockHeader } from "./turnClock.js";
@@ -41,9 +42,21 @@ import {
   type StreamLifecycleEvent,
 } from "./sessionEventFeed.js";
 
-/** The only custom tool this client settles (#36): read-only, so no side-effect idempotency key is
- *  needed beyond the #40 per-id lifecycle (docs/01 §13 admission rule). */
+/** Read-only work history (#36): no side-effect idempotency key is needed beyond the #40 per-id lifecycle. */
 const WORK_HISTORY_TOOL = "trello_work_history";
+/** The custom tools this client settles. `reminder` (#54) is side-effecting; it meets the docs/01 §13 admission
+ *  rule itself: its executor keys a durable outcome record on the `custom_tool_use_id` in the same atomic write as
+ *  the mutation, verifies the result by a fresh read, and refuses mutations without human authority. */
+export const SUPPORTED_CLIENT_CUSTOM_TOOLS = [WORK_HISTORY_TOOL, REMINDER_TOOL_NAME] as const;
+
+/** What a custom-tool executor learns about the call besides its input (#54). */
+export interface CustomToolCallContext {
+  /** The provider's `custom_tool_use_id`: the idempotency key of a side-effecting tool. */
+  toolUseId: string;
+  name: string;
+  /** Mutation authority of the turn that OBSERVED the call (its trusted origin, never its text). */
+  authority: MutationAuthority;
+}
 
 export { DjonikSpecialistUnverifiedError, DjonikTurnIncompleteError } from "./turnCorrelation.js";
 export type { PendingMessageState, StreamLifecycleEvent } from "./sessionEventFeed.js";
@@ -161,6 +174,8 @@ export interface DjonikTracedSessionHandle extends DjonikSessionHandle {
 export interface DjonikToolUse {
   kind: "mcp" | "builtin" | "custom";
   name: string;
+  /** Custom tools only: this call's own input proves it read-only (#54 `reminder` `list`). */
+  readOnly?: boolean;
 }
 
 export interface DjonikTracedTurn {
@@ -426,8 +441,11 @@ export class DjonikSessionDeadError extends Error {
 export type DjonikTraceEvent =
   | { type: "mcp_tool_use"; serverName: string; toolName: string; input: Record<string, unknown> }
   | { type: "mcp_tool_result"; serverName: string; toolName: string; isError: boolean }
-  /** Content-free #36 audit marker: the only supported client-side custom tool was requested/resolved. */
-  | { type: "custom_tool_result_sent"; toolName: "trello_work_history"; isError: boolean }
+  /** Content-free #36 audit marker: a supported client-side custom tool's result was submitted. */
+  | { type: "custom_tool_result_sent"; toolName: string; isError: boolean }
+  /** Content-free (#54): this turn's successful reminder change(s) reached the reply — quoted by the model, or
+   *  (`prepended`) placed first by code because the model's text did not carry the code-resolved line. */
+  | { type: "reminder_confirmation_composed"; mode: "model_quoted" | "prepended"; count: number }
   /** Content-free (#39 Stage 3A): a tool confirmation was submitted and accepted by the API. Permission to
    *  attempt, never verification — an allowed Trello write is still verified by #31. */
   | { type: "tool_confirmation_sent"; toolName: string; decision: ConfirmationRecord["decision"]; reason: ConfirmationRecord["reason"] }
@@ -470,6 +488,9 @@ export type DjonikTraceEvent =
  * 4096 characters; the tests also keep its UTF-8 size within that, in case bytes are counted.
  * A successful native write/edit tool result is the persistence evidence; a separate read-back is
  * optional (docs/56 §19). This applies to Memory files only — Trello writes keep #31 verification.
+ *
+ * Issue #54: a commitment's `next_check` is Memory context, never a scheduled message; a reminder is the code-owned
+ * `reminder` tool. The last rule keeps them apart and allows a reminder promise only after that tool saved it.
  */
 export const DJONIK_MEMORY_INSTRUCTIONS =
   "Write only durable, useful context: stable preferences, client/project facts, " +
@@ -530,7 +551,8 @@ export const DJONIK_MEMORY_INSTRUCTIONS =
   "- In a new session, when Daniel refers to an earlier outcome, search commitments/ first; " +
   "read a linked card fresh if its current state matters. If nothing matches, say so; do not " +
   "reconstruct it.\n" +
-  "- A next_check never means you will message first; do not promise reminders.";
+  "- A next_check never means you will message first and is not a reminder. Promise a reminder " +
+  "only after the reminder tool saved it.";
 
 /**
  * Deterministic backstop for the task-management Skill's verify-before-claiming-success
@@ -881,6 +903,18 @@ export function composeWorkHistoryReply(commentary: string, answerText: string):
 }
 
 /**
+ * Issue #54: the code-resolved confirmation of a reminder change. The model is asked to quote the tool's
+ * `confirmation` line; if its reply already contains every line verbatim nothing changes, otherwise the missing
+ * lines lead the reply, so the date/time Daniel sees is always the one code stored — never a re-computed one.
+ */
+export function composeReminderConfirmations(reply: string, lines: readonly string[]): { text: string; mode: "model_quoted" | "prepended" } {
+  const missing = lines.filter((line) => !reply.includes(line));
+  if (missing.length === 0) return { text: reply, mode: "model_quoted" };
+  const trimmed = reply.trim();
+  return { text: trimmed.length === 0 ? missing.join("\n") : `${missing.join("\n")}\n\n${trimmed}`, mode: "prepended" };
+}
+
+/**
  * Extracts a usable `answer_text` from a successful `trello_work_history` custom-tool result's raw
  * JSON `content` string. Returns null (never throws) for unparsable JSON or a missing/empty/non-string
  * `answer_text` — the caller treats that exactly like an unsuccessful result, so a malformed payload
@@ -906,8 +940,21 @@ type SendableContentBlock =
 
 type SendableEvent = { type: "user.message"; content: SendableContentBlock[] };
 
-/** Injected in local tests only; production uses the bounded environment-backed executor. */
-export type DjonikCustomToolExecutor = (input: unknown) => Promise<CustomToolExecutionResult>;
+/**
+ * Executes one custom-tool call. The default routes `trello_work_history` to the bounded environment-backed
+ * executor and refuses `reminder` (no reminder store in this process); the serving adapter injects a router with
+ * the reminder service (#54). Tests inject their own.
+ */
+export type DjonikCustomToolExecutor = (input: unknown, context: CustomToolCallContext) => Promise<CustomToolExecutionResult>;
+
+const REMINDERS_UNAVAILABLE = JSON.stringify({
+  ok: false,
+  error: { code: "unavailable", message: "Reminders are unavailable in this process; nothing was saved. Tell Daniel it is not saved." },
+});
+
+/** Default executor: work history from the environment; reminders unavailable (never a silent promise). */
+export const defaultCustomToolExecutor: DjonikCustomToolExecutor = async (input, context) =>
+  context.name === REMINDER_TOOL_NAME ? { isError: true, content: REMINDERS_UNAVAILABLE } : executeTrelloWorkHistoryFromEnvironment(input);
 
 /** Narrow Session-creation controls for isolated validation. Production callers retain the defaults. */
 export interface DjonikSessionOptions {
@@ -999,7 +1046,7 @@ export async function connectToDjonik(
   onTrace?: (event: DjonikTraceEvent) => void,
   onTurnTelemetry?: (telemetry: DjonikTurnTelemetry) => void,
   turnSource: DjonikTurnSource = "unknown",
-  customToolExecutor: DjonikCustomToolExecutor = executeTrelloWorkHistoryFromEnvironment,
+  customToolExecutor: DjonikCustomToolExecutor = defaultCustomToolExecutor,
   sessionOptions: DjonikSessionOptions = {},
 ): Promise<DjonikTracedSessionHandle> {
   const memoryAccess = sessionOptions.memoryAccess ?? "read_write";
@@ -1065,7 +1112,13 @@ export async function connectToDjonik(
   /** Session-scoped custom-tool lifecycle keyed by `custom_tool_use_id` (#40, docs/30): lives as long as
    *  the Managed Session, never reset per turn, so a re-emitted `requires_action` can never execute an
    *  id twice — not within a turn, not across a verification-nudge rerun, not in a later turn. */
-  const customTools = new CustomToolResolution([WORK_HISTORY_TOOL]);
+  const customTools = new CustomToolResolution(SUPPORTED_CLIENT_CUSTOM_TOOLS);
+  /** Mutation authority each custom-tool call was OBSERVED under (#54), fixed at first observation for the
+   *  Session: the executor of a side-effecting tool decides from it, never from the call's input or text. */
+  const customToolAuthority = new Map<string, MutationAuthority>();
+  /** The executor as the #40 lifecycle calls it: once per id, with that id's own name and observed authority. */
+  const executeCustomTool = (input: unknown, call: { id: string; name: string }) =>
+    customToolExecutor(input, { toolUseId: call.id, name: call.name, authority: customToolAuthority.get(call.id) ?? "autonomous_read_only" });
   /** Distinct `custom_tool_use_id`s observed during the CURRENT visible turn (across a possible
    *  verification-nudge rerun of `runTurn`), in first-seen order. Reset once per visible turn in
    *  `sendPartsSerial`, never inside `runTurn`, so a nudge rerun cannot lose an earlier call — and never
@@ -1125,6 +1178,21 @@ export async function connectToDjonik(
     }
     const answerText = extractWorkHistoryAnswerText(result.content);
     return answerText === null ? { status: "unverified" } : { status: "verified", answerText };
+  }
+
+  /** The `confirmation` lines of this turn's successful reminder changes (#54), in call order: one per distinct
+   *  `custom_tool_use_id` whose one cached result the provider accepted. Errors and `list` carry none. */
+  function reminderConfirmations(): string[] {
+    const lines: string[] = [];
+    for (const id of turnCustomToolUseIds) {
+      if (customTools.name(id) !== REMINDER_TOOL_NAME) continue;
+      const state = customTools.state(id);
+      const result = customTools.result(id);
+      if (result === undefined || result.isError || (state !== "SUBMITTED" && state !== "RESOLVED")) continue;
+      const line = reminderConfirmationOf(result.content);
+      if (line !== null && !lines.includes(line)) lines.push(line);
+    }
+    return lines;
   }
   let turnTelemetry: DjonikTurnTelemetryCollector | null = null;
   /** Session usage events are cumulative; this is the completed-turn baseline. */
@@ -1291,8 +1359,14 @@ export async function connectToDjonik(
           // `session_thread_id` can identify a cross-posted subagent event, but is informational.
           // Result routing is exclusively by the observed blocking custom-tool event id (#40 lifecycle).
           customTools.observeUse({ id: event.id, name: event.name, input: event.input });
+          // First observation wins, like the lifecycle's own: a replayed event can never upgrade authority.
+          if (!customToolAuthority.has(event.id)) customToolAuthority.set(event.id, turnAuthority);
           if (!turnCustomToolUseIds.includes(event.id)) turnCustomToolUseIds.push(event.id);
-          turnToolUses.push({ kind: "custom", name: event.name });
+          turnToolUses.push(
+            event.name === REMINDER_TOOL_NAME && isReadOnlyReminderInput(event.input)
+              ? { kind: "custom", name: event.name, readOnly: true }
+              : { kind: "custom", name: event.name },
+          );
           break;
         case "agent.tool_use":
           observeGatedToolUse(event, "builtin");
@@ -1351,12 +1425,12 @@ export async function connectToDjonik(
               }
               let executed = 0;
               if (rest.length > 0) {
-                const resolution = await customTools.resolveBlocking(rest, customToolExecutor, (results) =>
+                const resolution = await customTools.resolveBlocking(rest, executeCustomTool, (results) =>
                   client.beta.sessions.events.send(session.id, { events: results }),
                 );
                 executed = resolution.executed.length;
                 for (const sent of resolution.submitted) {
-                  onTrace?.({ type: "custom_tool_result_sent", toolName: WORK_HISTORY_TOOL, isError: sent.isError });
+                  onTrace?.({ type: "custom_tool_result_sent", toolName: customTools.name(sent.id) ?? "unknown", isError: sent.isError });
                 }
               }
               // Text before a tool pause is provisional (as for #40): only a fresh final message counts.
@@ -1373,7 +1447,7 @@ export async function connectToDjonik(
             // #40: this idle is a STATUS over the Session-scoped lifecycle, not an execution command.
             // Only OBSERVED ids execute (once); ids already executing/submitted are no-ops; a cached
             // result is (re)submitted only when it was never accepted. Anything else fails closed.
-            const resolution = await customTools.resolveBlocking(blockingIds, customToolExecutor, (results) =>
+            const resolution = await customTools.resolveBlocking(blockingIds, executeCustomTool, (results) =>
               client.beta.sessions.events.send(session.id, { events: results }),
             );
             // Any text before a tool pause is provisional. It cannot become a visible answer if the
@@ -1381,7 +1455,7 @@ export async function connectToDjonik(
             // on a real new execution: a re-emitted status for an already-running call changes nothing.
             if (resolution.executed.length > 0) reply = "";
             for (const sent of resolution.submitted) {
-              onTrace?.({ type: "custom_tool_result_sent", toolName: WORK_HISTORY_TOOL, isError: sent.isError });
+              onTrace?.({ type: "custom_tool_result_sent", toolName: customTools.name(sent.id) ?? "unknown", isError: sent.isError });
             }
             continue;
           }
@@ -1393,10 +1467,13 @@ export async function connectToDjonik(
           // #36: a verified trello_work_history result is likewise a complete answer on its own —
           // the coordinator may legitimately have nothing to add after it.
           const workHistoryVerified = workHistoryVerdict().status === "verified";
+          // #54: so is a successful reminder change — its code-resolved confirmation is the answer.
+          const reminderConfirmed = reminderConfirmations().length > 0;
           if (
             !reply &&
             idleVerdict !== "unverified" &&
             !workHistoryVerified &&
+            !reminderConfirmed &&
             (idleVerdict !== "verified" || ledger.outcomes().length > 0)
           ) {
             throw new Error("Djonik produced no text reply for this turn.");
@@ -1583,6 +1660,15 @@ export async function connectToDjonik(
         commentary = composed.text;
       } else {
         commentary = finalizeMutationReply(reply, outcomes);
+      }
+
+      // Issue #54: a reminder change this turn is a code-owned fact. Its code-resolved `confirmation` line must reach
+      // Daniel exactly; when the model's text does not quote it, code places it first (never re-dated by the model).
+      const reminderLines = reminderConfirmations();
+      if (reminderLines.length > 0) {
+        const composedReminders = composeReminderConfirmations(commentary, reminderLines);
+        onTrace?.({ type: "reminder_confirmation_composed", mode: composedReminders.mode, count: reminderLines.length });
+        commentary = composedReminders.text;
       }
 
       // Issue #36: a verified `trello_work_history` result is the authoritative factual block and

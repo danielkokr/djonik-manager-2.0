@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { BUILT_IN_TOOL_NAMES, type DjonikRelease } from "./release.js";
+import { REMINDER_TOOL } from "./reminderTool.js";
 import { TRELLO_WORK_HISTORY_TOOL } from "./trelloWorkHistory.js";
 
 /**
@@ -17,9 +18,11 @@ import { TRELLO_WORK_HISTORY_TOOL } from "./trelloWorkHistory.js";
  */
 
 /** Custom tools this application can execute. An Agent exposing any other custom tool would stall on
- *  `requires_action` (the client settles only these), so attestation requires an exact match. */
+ *  `requires_action` (the client settles only these), so attestation requires an exact match. `reminder` (#54) is
+ *  executable by this revision; no reviewed release exposes it yet (a separately authorized release adds it). */
 export const SUPPORTED_CUSTOM_TOOLS: Readonly<Record<string, { description: string; input_schema: unknown }>> = {
   [TRELLO_WORK_HISTORY_TOOL.name]: TRELLO_WORK_HISTORY_TOOL,
+  [REMINDER_TOOL.name]: REMINDER_TOOL,
 };
 
 export class ReleaseAttestationError extends Error {

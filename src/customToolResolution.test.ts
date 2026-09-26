@@ -30,9 +30,9 @@ function harness(executorImpl?: CustomToolExecutor, sendErrors: unknown[] = []) 
   const table = new CustomToolResolution([TOOL]);
   const executed: unknown[] = [];
   const attempts: CustomToolResultEvent[][] = [];
-  const executor: CustomToolExecutor = async (input) => {
+  const executor: CustomToolExecutor = async (input, call) => {
     executed.push(input);
-    return executorImpl ? executorImpl(input) : { isError: false, content: JSON.stringify({ echo: input }) };
+    return executorImpl ? executorImpl(input, call) : { isError: false, content: JSON.stringify({ echo: input }) };
   };
   const send = async (events: CustomToolResultEvent[]) => {
     attempts.push(JSON.parse(JSON.stringify(events)) as CustomToolResultEvent[]);

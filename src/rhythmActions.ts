@@ -128,6 +128,8 @@ export function decodeCallbackData(data: string | undefined): DecodedCallback {
 export interface OutboundMessage {
   text: string;
   actions: readonly RhythmActionId[];
+  /** A code-built keyboard for a message without rhythm actions (#54 reminder buttons); never from model output. */
+  keyboard?: TelegramInlineKeyboard;
 }
 
 export interface TelegramInlineKeyboard {

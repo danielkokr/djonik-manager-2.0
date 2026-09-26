@@ -1,6 +1,6 @@
 import { posix } from "node:path";
 import { DjonikTracedTurnError, type DjonikTracedSessionHandle } from "./djonikClient.js";
-import { resolveRhythmActivation, type RhythmConfigSource } from "./rhythmConfig.js";
+import { parseRhythmConfig, resolveRhythmActivation, type RhythmConfig, type RhythmConfigSource } from "./rhythmConfig.js";
 import {
   AutonomousTurnFailure,
   createRhythmScheduler,
@@ -10,7 +10,15 @@ import {
   type RhythmScheduler,
   type RhythmTickDeps,
 } from "./rhythmRunner.js";
-import type { RhythmStateStore } from "./rhythmState.js";
+import { recoverRhythmState, type RhythmStateStore } from "./rhythmState.js";
+import type { CardContext } from "./reminders.js";
+import {
+  createReminderCallbackHandler,
+  createReminderScheduler,
+  isReminderCallbackData,
+  type ReminderCallbackResolution,
+  type ReminderScheduler,
+} from "./reminderDelivery.js";
 import {
   createRhythmCallbackHandler,
   STALE_BUTTON_TEXT,
@@ -135,6 +143,9 @@ export interface RhythmTimer {
   start(): void;
   /** Stops future ticks at once; resolves when an in-flight tick (and its turn) has finished. */
   stop(): Promise<void>;
+  /** One tick now, through the same single-flight guard; resolves when it (or the tick already in flight) has
+   *  finished. Tests and diagnostics — production relies on the interval. */
+  runNow(): Promise<void>;
 }
 
 /**
@@ -175,6 +186,10 @@ export function createRhythmTimer(options: {
       stopped = true;
       if (handle !== null) timers.clearInterval(handle);
       handle = null;
+      await inFlight;
+    },
+    async runNow() {
+      fire();
       await inFlight;
     },
   };
@@ -224,12 +239,33 @@ export interface WorkingRhythmRuntime {
   status: WorkingRhythmStatus;
   /** Content-free reason for the startup log. */
   reason: string;
+  /** #54: whether code-owned reminder delivery runs in this process. */
+  reminders: "on" | "off";
   /** Handles a callback query from an allowed user. Off/blocked: a stale-button answer, no state access. */
-  handleCallback(query: RhythmCallbackQuery): Promise<CallbackResolution>;
+  handleCallback(query: RhythmCallbackQuery): Promise<CallbackResolution | ReminderCallbackResolution>;
   /** Stops the timer (no further ticks) and waits for an in-flight tick. */
   stop(): Promise<void>;
   /** Present only while running (tests and diagnostics). */
   scheduler?: RhythmScheduler;
+  /** Present only while reminders are on (tests and diagnostics). */
+  reminderScheduler?: ReminderScheduler;
+  /** One combined tick now through the timer's single-flight guard (tests and diagnostics); absent when inert. */
+  tickNow?: () => Promise<void>;
+}
+
+/**
+ * Reminder delivery (#54). Independent of the rhythm switch: a reminder is a promise Djonik made to Daniel, so its
+ * delivery runs whenever the serving release exposes the `reminder` tool and the state file has a known home — even
+ * with the Working Rhythm off (then every reminder is delivered directly). It needs no read-only boundary: delivering
+ * a reminder involves no model turn at all.
+ */
+export interface ReminderRuntimeDeps {
+  /** The serving release exposes the `reminder` custom tool (derived from the release, never from the env). */
+  enabled: boolean;
+  /** Fresh read-only card state for a card-linked reminder; its failure never blocks delivery. */
+  cardContext?: (cardId: string) => Promise<CardContext | null>;
+  /** A short, dismissible acknowledgement of a reminder button (defaults to `answer`). */
+  notify?: (query: RhythmCallbackQuery, text: string) => Promise<unknown>;
 }
 
 export interface WorkingRhythmDeps {
@@ -250,62 +286,152 @@ export interface WorkingRhythmDeps {
   intervalMs?: number;
   timers?: IntervalTimers;
   log?: (line: string) => void;
+  /** #54 reminder delivery; absent = off (the pre-#54 behaviour, byte for byte). */
+  reminders?: ReminderRuntimeDeps;
 }
 
 /**
- * Assembles and starts the Working Rhythm — or, with either lock closed, returns an inert runtime whose
- * only behaviour is to answer an allowed user's (necessarily old) button with the stale-button text.
+ * Assembles and starts the Working Rhythm and (#54) reminder delivery — or, with both off, returns an inert runtime
+ * whose only behaviour is to answer an allowed user's (necessarily old) button with the stale-button text.
  * Call only after the serving Session is attested (telegramCli does, before polling starts).
+ *
+ * One timer, one state store instance, one lifecycle: every tick first recovers the shared state file once (at
+ * startup), then runs the rhythm tick (a morning ritual claims today's date-only reminders atomically with its own
+ * record) and then the reminder tick (every other due reminder, directly). They never run concurrently, so two
+ * workers can never claim the same reminder. `createStateStore` is called once; the adapter passes the SAME store
+ * instance its `reminder` tool executor writes through, so all writes share one serialized update chain.
  */
 export function startWorkingRhythm(deps: WorkingRhythmDeps): WorkingRhythmRuntime {
   const log = deps.log ?? (() => {});
-  const inert = (status: Exclude<WorkingRhythmStatus, "running">, reason: string): WorkingRhythmRuntime => {
-    log(`[rhythm] ${status} reason=${reason}`);
-    return {
-      status,
-      reason,
-      async handleCallback(query) {
-        if (!isAllowedUser(query.fromId, deps.allowedUserId)) return { outcome: "ignored", reason: "unauthorized" };
-        await deps.answer(query, STALE_BUTTON_TEXT).catch(() => undefined);
-        return { outcome: "rejected", reason: `rhythm_${status}` };
-      },
-      stop: async () => {},
-    };
+  const staleAnswer = async (query: RhythmCallbackQuery, reason: string): Promise<CallbackResolution> => {
+    if (!isAllowedUser(query.fromId, deps.allowedUserId)) return { outcome: "ignored", reason: "unauthorized" };
+    await deps.answer(query, STALE_BUTTON_TEXT).catch(() => undefined);
+    return { outcome: "rejected", reason };
   };
 
   const activation = resolveRhythmActivation(deps.env);
-  if (!activation.enabled) return inert("off", activation.reason);
-  if (deps.readOnlyBoundary !== "pre_execution") return inert("blocked", `read_only_boundary=${deps.readOnlyBoundary}`);
   const statePath = resolveRhythmStatePath(deps.env);
-  if (statePath === null) return inert("blocked", "state_path_unknown");
+  let status: WorkingRhythmStatus = "running";
+  let reason = activation.reason;
+  if (!activation.enabled) status = "off";
+  else if (deps.readOnlyBoundary !== "pre_execution") [status, reason] = ["blocked", `read_only_boundary=${deps.readOnlyBoundary}`];
+  else if (statePath === null) [status, reason] = ["blocked", "state_path_unknown"];
+  const remindersOn = deps.reminders?.enabled === true && statePath !== null;
+  if (status !== "running") log(`[rhythm] ${status} reason=${reason}`);
+  if (deps.reminders?.enabled === true && !remindersOn) log("[reminder] off reason=state_path_unknown");
+
+  if (status !== "running" && !remindersOn) {
+    return {
+      status,
+      reason,
+      reminders: "off",
+      handleCallback: (query) => staleAnswer(query, `rhythm_${status}`),
+      stop: async () => {},
+    };
+  }
 
   const now = deps.now ?? (() => new Date());
-  const store = deps.createStateStore(statePath);
-  const scheduler = createRhythmScheduler({
-    activation,
-    readOnlyBoundary: deps.readOnlyBoundary,
-    now,
-    configSource: deps.createConfigSource(),
-    store,
-    runTurn: deps.runTurn,
-    send: deps.send,
-    ...(deps.createFactCollector ? { collectFacts: deps.createFactCollector() } : {}),
-    log,
-  });
-  const timer = createRhythmTimer({ tick: () => scheduler.tick().then((report) => log(`[rhythm] tick ${report.status}`)), intervalMs: deps.intervalMs, timers: deps.timers, log });
-  const handleCallback = createRhythmCallbackHandler({
-    allowedUserId: deps.allowedUserId,
-    store,
-    now,
-    currentSessionId: deps.currentSessionId,
-    answer: deps.answer,
-    clearButtons: deps.clearButtons,
-    enqueueUserText: deps.enqueueUserText,
-    log,
-  });
+  const store = deps.createStateStore(statePath!);
+  const configSource = deps.createConfigSource();
+  const scheduler =
+    status === "running"
+      ? createRhythmScheduler({
+          activation,
+          readOnlyBoundary: deps.readOnlyBoundary,
+          now,
+          configSource,
+          store,
+          runTurn: deps.runTurn,
+          send: deps.send,
+          ...(deps.createFactCollector ? { collectFacts: deps.createFactCollector() } : {}),
+          log,
+          // The runtime recovers the shared file once, before either scheduler acts.
+          recoverOnFirstTick: false,
+          ...(deps.reminders?.cardContext ? { reminderCardContext: deps.reminders.cardContext } : {}),
+        })
+      : undefined;
+  const reminderScheduler = remindersOn
+    ? createReminderScheduler({
+        store,
+        now,
+        send: deps.send,
+        // With the rhythm not running no ritual can carry a reminder: every one is delivered directly.
+        ritualConfig: () => scheduler?.ritualConfig() ?? null,
+        ...(deps.reminders?.cardContext ? { cardContext: deps.reminders.cardContext } : {}),
+        log,
+      })
+    : undefined;
+
+  let recovered = false;
+  const tick = async (): Promise<void> => {
+    if (!recovered) {
+      try {
+        await store.update((current) => recoverRhythmState(current, now()));
+        recovered = true;
+      } catch {
+        // Unreadable state: nothing is sent this tick (a lost state must never become a duplicate message).
+        log("[proactive] recovery_failed");
+        return;
+      }
+    }
+    if (scheduler) log(`[rhythm] tick ${(await scheduler.tick()).status}`);
+    if (reminderScheduler) {
+      const report = await reminderScheduler.tick();
+      if (report.status !== "ran" || report.deliveries.length > 0) log(`[reminder] tick ${report.status} sends=${report.sends}`);
+    }
+  };
+  const timer = createRhythmTimer({ tick, intervalMs: deps.intervalMs, timers: deps.timers, log });
+
+  const rhythmCallback = scheduler
+    ? createRhythmCallbackHandler({
+        allowedUserId: deps.allowedUserId,
+        store,
+        now,
+        currentSessionId: deps.currentSessionId,
+        answer: deps.answer,
+        clearButtons: deps.clearButtons,
+        enqueueUserText: deps.enqueueUserText,
+        log,
+      })
+    : null;
+  const reminderCallback = remindersOn
+    ? createReminderCallbackHandler({
+        allowedUserId: deps.allowedUserId,
+        store,
+        now,
+        readConfig: reminderConfigReader(configSource),
+        answer: (query, text) => (deps.reminders?.notify && text !== undefined ? deps.reminders.notify(query, text) : deps.answer(query, text)),
+        clearButtons: deps.clearButtons,
+        log,
+      })
+    : null;
+  const handleCallback = (query: RhythmCallbackQuery): Promise<CallbackResolution | ReminderCallbackResolution> => {
+    if (isReminderCallbackData(query.data)) {
+      if (reminderCallback) return reminderCallback(query);
+      return staleAnswer(query, "reminders_off");
+    }
+    if (rhythmCallback) return rhythmCallback(query);
+    return staleAnswer(query, `rhythm_${status}`);
+  };
+
   timer.start();
-  log("[rhythm] running");
-  return { status: "running", reason: activation.reason, handleCallback, stop: () => timer.stop(), scheduler };
+  if (scheduler) log("[rhythm] running");
+  if (reminderScheduler) log("[reminder] running");
+  return {
+    status,
+    reason,
+    reminders: remindersOn ? "on" : "off",
+    handleCallback,
+    stop: () => timer.stop(),
+    tickNow: () => timer.runNow(),
+    ...(scheduler ? { scheduler } : {}),
+    ...(reminderScheduler ? { reminderScheduler } : {}),
+  };
+}
+
+/** Reads the rhythm config for a reminder decision; an unreadable `/rhythm.md` is the safe defaults (#54). */
+export function reminderConfigReader(source: RhythmConfigSource): () => Promise<RhythmConfig> {
+  return async () => parseRhythmConfig(await source.read()).config;
 }
 
 // --- grammY callback wiring ---------------------------------------------------------------------------

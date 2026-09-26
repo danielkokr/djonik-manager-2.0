@@ -385,7 +385,8 @@ const REVIEWED_RHYTHM_IMPORTS: Record<string, RegExp> = {
   "rhythmFacts.ts": /^\.\/(rhythmConfig|rhythmSignals|trelloWorkHistory)\.js$/, // type-only use of the GET-only client
   "rhythmMemoryConfig.ts": /^\.\/rhythmConfig\.js$/,
   // #39 Stage 3A: the reviewed release (to derive the serving boundary) and the reviewed confirmation surface.
-  "rhythmRuntime.ts": /^\.\/(djonikClient|release|rhythmConfig|rhythmRunner|rhythmState|rhythmTelegram|telegramAdapter|toolConfirmation)\.js$/,
+  // #54: the deterministic reminder delivery it co-schedules (no model turn, no Trello write; guarded in reminders.test.ts).
+  "rhythmRuntime.ts": /^\.\/(djonikClient|release|rhythmConfig|rhythmRunner|rhythmState|rhythmTelegram|telegramAdapter|toolConfirmation|reminders|reminderDelivery)\.js$/,
 };
 
 test("the rhythm runtime has no deterministic path to Trello writes, the Session client or Memory (reviewed exceptions only)", () => {

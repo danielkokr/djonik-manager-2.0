@@ -3,6 +3,7 @@ import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ProactiveKind, RhythmActionId } from "./rhythmActions.js";
 import type { SignalLedger, SignalSeverity } from "./rhythmSignals.js";
+import { emptyReminderLedger, recoverReminders, ReminderLedgerError, validateReminderLedger, type ReminderLedger } from "./reminders.js";
 
 /**
  * Host-side durable state for the Working Rhythm (#39): one small JSON file, replaced atomically.
@@ -21,6 +22,11 @@ import type { SignalLedger, SignalSeverity } from "./rhythmSignals.js";
  * The record is written BEFORE the model call and again BEFORE the Telegram call. A crash leaves
  * `claimed` (nothing visible happened; may retry) or `sending` (the send may have happened; on restart
  * it becomes `ambiguous` and is never resent).
+ *
+ * Since #54 the same file also holds Daniel's reminders (`reminders`, its own versioned ledger, see
+ * `reminders.ts`): a morning ritual claims a date-only reminder in the same atomic write as its own record. The
+ * field is optional and absent until the first reminder, so a rhythm-only state file is unchanged, and an older
+ * revision that does not know it keeps it untouched (every writer spreads the current state).
  */
 
 export type DeliveryStatus = "claimed" | "sending" | "sent" | "ambiguous" | "failed" | "silent" | "blocked";
@@ -59,6 +65,8 @@ export interface RhythmState {
   signals: SignalLedger;
   /** The set of `/rhythm.md` warnings already mentioned to Daniel in a ritual (a digest only, no text). */
   configNotice?: { digest: string; notedAt: string };
+  /** Daniel's code-owned reminders (#54); absent = none yet. Validated on every load. */
+  reminders?: ReminderLedger;
 }
 
 export function emptyRhythmState(): RhythmState {
@@ -66,6 +74,17 @@ export function emptyRhythmState(): RhythmState {
 }
 
 export class RhythmStateError extends Error {}
+
+/** The reminder ledger of a state (empty when none was ever written). */
+export function remindersOf(state: RhythmState): ReminderLedger {
+  return state.reminders ?? emptyReminderLedger();
+}
+
+/** `state` with `ledger`; a still-empty ledger is not written into a state that never had one. */
+export function withReminders(state: RhythmState, ledger: ReminderLedger): RhythmState {
+  if (state.reminders === undefined && Object.keys(ledger.items).length === 0 && Object.keys(ledger.toolCalls).length === 0) return state;
+  return { ...state, reminders: ledger };
+}
 
 /**
  * `update` is the only write path: a serialized load → mutate → atomic save, so the scheduler and a
@@ -94,15 +113,22 @@ function serialized(load: () => Promise<RhythmState>, save: (state: RhythmState)
 
 function isState(value: unknown): value is RhythmState {
   const candidate = value as Partial<RhythmState> | null;
-  return (
+  const base =
     typeof candidate === "object" &&
     candidate !== null &&
     candidate.version === 1 &&
     typeof candidate.deliveries === "object" &&
     candidate.deliveries !== null &&
     typeof candidate.signals === "object" &&
-    candidate.signals !== null
-  );
+    candidate.signals !== null;
+  if (!base || candidate.reminders === undefined) return base;
+  try {
+    validateReminderLedger(candidate.reminders);
+    return true;
+  } catch (error) {
+    if (error instanceof ReminderLedgerError) return false;
+    throw error;
+  }
 }
 
 /**
@@ -173,7 +199,8 @@ const RETENTION_DAYS = 21;
  * Startup recovery: a record left in `sending` may already be on Daniel's screen, so it becomes
  * `ambiguous` and is never resent. A ritual left `claimed` stays retryable: nothing visible happened
  * and the ritual is expected. An exception left `claimed` is dropped (`failed`): its facts wait for
- * the next ritual instead of an interruption re-attempted after a crash. Old records are pruned.
+ * the next ritual instead of an interruption re-attempted after a crash. Old records are pruned. Reminders
+ * recover by the same rule (`recoverReminders`: `sending` → `ambiguous`, crash-left ritual claims released).
  */
 export function recoverRhythmState(state: RhythmState, now: Date): RhythmState {
   const cutoff = now.getTime() - RETENTION_DAYS * 86_400_000;
@@ -188,7 +215,7 @@ export function recoverRhythmState(state: RhythmState, now: Date): RhythmState {
       deliveries[key] = { ...record };
     }
   }
-  return { ...state, deliveries };
+  return state.reminders === undefined ? { ...state, deliveries } : { ...state, deliveries, reminders: recoverReminders(state.reminders, now) };
 }
 
 /** Maximum model+send attempts per occurrence (only definite non-delivery or an interrupted claim retries). */

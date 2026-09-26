@@ -2,6 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { execFileSync } from "node:child_process";
 import {
   connectToDjonik,
+  type DjonikCustomToolExecutor,
   type DjonikTracedSessionHandle,
   type DjonikTraceEvent,
   type DjonikTurnSource,
@@ -224,6 +225,9 @@ export interface ServingSessionHooks {
   /** Optional provider-enforced Session list-cost cap in USD cents (`budget.max_list_cost`). Bounded
    *  validation Sessions use it as a hard spend backstop; the Telegram serving Session sets none. */
   maxListCostUsdCents?: string;
+  /** Custom-tool router; omitted = the client default (work history; reminders unavailable). The Telegram adapter
+   *  passes one with the process's reminder service (#54). */
+  customToolExecutor?: DjonikCustomToolExecutor;
 }
 
 /**
@@ -249,7 +253,7 @@ export async function connectServingSession(
     hooks.onTrace,
     hooks.onTurnTelemetry,
     hooks.turnSource,
-    undefined,
+    hooks.customToolExecutor,
     {
       agentVersion: release.agent.version,
       memoryAccess: release.session.memoryAccess,

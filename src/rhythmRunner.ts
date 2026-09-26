@@ -25,11 +25,24 @@ import {
   mayAttempt,
   newDeliveryRef,
   recoverRhythmState,
+  remindersOf,
   RhythmStateError,
+  withReminders,
   type DeliveryRecord,
   type RhythmState,
   type RhythmStateStore,
 } from "./rhythmState.js";
+import {
+  beginRitualSend,
+  claimedBy,
+  claimForRitual,
+  releaseRitualClaims,
+  ritualReminderBlock,
+  settleRitualSend,
+  type CardContext,
+  type Reminder,
+  type ReminderLedger,
+} from "./reminders.js";
 import type { ConfirmationRecord } from "./toolConfirmation.js";
 import type { TurnOrigin } from "./turnAuthority.js";
 
@@ -56,6 +69,9 @@ export type { TurnOrigin };
 export interface ToolUseRecord {
   kind: "mcp" | "builtin" | "custom";
   name: string;
+  /** Custom tools only: the client proved from this call's own input that it cannot change anything (#54: a
+   *  `reminder` `list`). Absent = treat as a possible mutation. */
+  readOnly?: boolean;
 }
 
 /** A tool confirmation the turn runner answered (#39 Stage 3A) — content-free. */
@@ -120,15 +136,17 @@ const READ_ONLY_CUSTOM_TOOLS = new Set(["trello_work_history"]);
 /**
  * Tools an autonomous turn must never use: any Trello write, any MCP tool with a mutating verb
  * (Calendar included), Memory `write`/`edit`, and any custom tool other than the read-only
- * `trello_work_history`. This is the post-hoc detector: a violating turn's text is never delivered; a fixed
- * notice tells Daniel instead. Under a pre-execution release the same rule applies to a gated call the client
- * denied (`AutonomousTurnResult.autonomousMutationAttempt`): prevented, but still a violation.
+ * `trello_work_history` or a call the client proved read-only from its input (#54 `reminder` `list`). This is the
+ * post-hoc detector: a violating turn's text is never delivered; a fixed notice tells Daniel instead. Under a
+ * pre-execution release the same rule applies to a gated call the client denied
+ * (`AutonomousTurnResult.autonomousMutationAttempt`): prevented, but still a violation. A `reminder` mutation in an
+ * autonomous turn is refused by its executor before any state access — prevented, and still a violation here.
  */
 export function autonomousWriteViolations(toolUses: readonly ToolUseRecord[]): ToolUseRecord[] {
   return toolUses.filter((use) => {
     if (use.kind === "mcp") return MUTATING_MCP_NAME.test(use.name);
     if (use.kind === "builtin") return use.name === "write" || use.name === "edit";
-    return !READ_ONLY_CUSTOM_TOOLS.has(use.name);
+    return !READ_ONLY_CUSTOM_TOOLS.has(use.name) && use.readOnly !== true;
   });
 }
 
@@ -185,6 +203,7 @@ export function buildRitualPrompt(
   observations: readonly Signal[],
   now: Date,
   configWarnings: readonly string[] = [],
+  reminders: readonly Reminder[] = [],
 ): string {
   const lines = [
     `[Робочий ритм · автоматичний хід · ${RITUAL_SECTION[ritual.kind]} · ${kyivLabel(now, true)}]`,
@@ -194,6 +213,14 @@ export function buildRitualPrompt(
     buttonLine(ritual.kind),
     `Налаштування ритму: ${describeRhythmConfig(config)}.`,
   ];
+  if (reminders.length > 0) {
+    // #54: code prepends these lines itself (a guaranteed fact, never a hint the model may drop).
+    lines.push(
+      "Нагадування, які Daniel просив на сьогодні: код сам поставить їх першими рядками цього повідомлення. Не повторюй їх; " +
+        "врахуй у плані, якщо стосуються. Не створюй, не скасовуй і не перенось нагадування в цьому ході:",
+      ...reminders.map((reminder) => `- ${reminder.text}${reminder.project ? ` (${reminder.project})` : ""}`),
+    );
+  }
   if (observations.length > 0) {
     lines.push("Підказки коду (перевір свіжим Trello; це не готові висновки):", ...hintLines(observations));
   }
@@ -274,6 +301,37 @@ export interface RhythmTickDeps {
   factsIntervalMs?: number;
   newRef?: () => string;
   log?: (line: string) => void;
+  /**
+   * Startup recovery on the first tick (default true). The serving runtime recovers the shared state file once
+   * itself, before either the rhythm or the reminder scheduler acts, and passes false (#54).
+   */
+  recoverOnFirstTick?: boolean;
+  /** Fresh read-only card state for a card-linked reminder in a morning ritual (#54); failure = no context. */
+  reminderCardContext?: (cardId: string) => Promise<CardContext | null>;
+}
+
+/** The rituals that carry date-only reminders (#54): the morning of a work day. */
+export const REMINDER_RITUALS: ReadonlySet<RitualKind> = new Set(["monday-plan", "morning", "friday-morning"]);
+
+const CARD_CONTEXT_TIMEOUT_MS = 3_000;
+
+async function cardContexts(reminders: readonly Reminder[], lookup: RhythmTickDeps["reminderCardContext"]): Promise<Map<string, CardContext | null>> {
+  const contexts = new Map<string, CardContext | null>();
+  if (!lookup) return contexts;
+  for (const reminder of reminders) {
+    if (!reminder.card || contexts.has(reminder.card.id)) continue;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const context = await Promise.race([
+      lookup(reminder.card.id).catch(() => null),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), CARD_CONTEXT_TIMEOUT_MS);
+        (timer as { unref?: () => void }).unref?.();
+      }),
+    ]);
+    if (timer !== undefined) clearTimeout(timer);
+    contexts.set(reminder.card.id, context);
+  }
+  return contexts;
 }
 
 export interface DeliveryAttemptReport {
@@ -297,6 +355,8 @@ export interface TickReport {
   delivery?: DeliveryAttemptReport;
   exceptionDecision?: string;
   configWarnings?: string[];
+  /** Date-only reminders the due ritual claimed (#54). */
+  remindersClaimed?: number;
 }
 
 function exceptionKey(date: string, signals: readonly Signal[]): string {
@@ -327,6 +387,9 @@ function lastRitualSentToday(state: RhythmState, today: string): string | null {
 export interface RhythmScheduler {
   /** One evaluation. Single-flight: an overlapping call returns `busy` without doing anything. */
   tick(): Promise<TickReport>;
+  /** The config under which rituals could run at the last tick; null when none could (off, disabled, unreadable)
+   *  — then a date-only reminder never waits for a ritual (#54). */
+  ritualConfig(): RhythmConfig | null;
 }
 
 export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
@@ -335,6 +398,7 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
   const factsIntervalMs = deps.factsIntervalMs ?? DEFAULT_FACTS_INTERVAL_MS;
   let running = false;
   let recovered = false;
+  let ritualConfig: RhythmConfig | null = null;
   /** In-memory cadence only (not task state): when facts were last requested. */
   let lastFactsAt: number | null = null;
 
@@ -346,6 +410,7 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
     prompt: string,
     report: TickReport,
     extra: Partial<DeliveryRecord> = {},
+    carriesReminders = false,
   ): Promise<{ state: RhythmState; outcome: DeliveryRecord["status"] }> {
     const previous = state.deliveries[key];
     const stamp = () => deps.now().toISOString();
@@ -362,9 +427,15 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
       actions: [],
       ...extra,
     };
-    const persist = async () => {
-      state = await deps.store.update((current) => ({ ...current, deliveries: { ...current.deliveries, [key]: record } }));
+    /** Writes the record — and, for a ritual carrying reminders (#54), their transition — in ONE atomic update. */
+    const persist = async (reminders?: (ledger: ReminderLedger) => ReminderLedger) => {
+      state = await deps.store.update((current) => {
+        const next = { ...current, deliveries: { ...current.deliveries, [key]: record } };
+        return carriesReminders && reminders ? withReminders(next, reminders(remindersOf(next))) : next;
+      });
     };
+    /** Nothing will be sent for this occurrence: its reminder claims go back to direct delivery. */
+    const release = (ledger: ReminderLedger) => releaseRitualClaims(ledger, key, deps.now());
     // Durable intent before any model call or send.
     await persist();
 
@@ -379,7 +450,7 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
       const attempted = failure !== null && (failure.autonomousMutationAttempt || autonomousWriteViolations(failure.toolUses).length > 0);
       if (!attempted) {
         record = { ...record, status: "failed", failure: "turn_failed", retryable: false, updatedAt: stamp() };
-        await persist();
+        await persist(release);
         log(`[rhythm] ${key} turn_failed`);
         return { state, outcome: record.status };
       }
@@ -398,12 +469,12 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
       log(`[rhythm] ${key} autonomous_write_${result.autonomousMutationAttempt === true ? "denied" : "detected"} tools=${names.join(",")}`);
     } else if (origin === "rhythm_exception" && isSilentReply(result.reply)) {
       record = { ...record, status: "silent", updatedAt: stamp() };
-      await persist();
+      await persist(release);
       return { state, outcome: record.status };
     } else if (result.reply.trim() === "" || isSilentReply(result.reply)) {
       // A ritual always speaks (quiet day = tiny brief); an empty/SILENT ritual reply is a turn failure.
       record = { ...record, status: "failed", failure: "empty_reply", retryable: false, updatedAt: stamp() };
-      await persist();
+      await persist(release);
       return { state, outcome: record.status };
     } else {
       message = { text: boundTelegramText(result.reply), actions: buttonsFor(kind) };
@@ -419,7 +490,17 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
       sendStartedAt: stamp(),
       updatedAt: stamp(),
     };
-    await persist();
+    // #54: the reminders this ritual still holds become `sending` in the SAME write as the record, and their
+    // code-owned lines lead the message — the model's reply or the fixed notice alike. A reminder cancelled or
+    // moved while the turn ran has lost its claim and is not included.
+    let included: Reminder[] = [];
+    const cards = carriesReminders ? await cardContexts(claimedBy(remindersOf(state), key), deps.reminderCardContext) : new Map<string, CardContext | null>();
+    await persist((ledger) => {
+      const begun = beginRitualSend(ledger, key, deps.now());
+      included = begun.included;
+      return begun.ledger;
+    });
+    if (included.length > 0) message = { ...message, text: boundTelegramText(`${ritualReminderBlock(included, cards)}\n\n${message.text}`) };
 
     let outcome: SendOutcome;
     try {
@@ -435,13 +516,15 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
     } else {
       record = { ...record, status: "ambiguous", failure: `send_unknown:${outcome.reason}`.slice(0, 80), retryable: false, updatedAt: stamp() };
     }
-    await persist();
+    const settled = outcome;
+    await persist((ledger) => settleRitualSend(ledger, key, settled, deps.now()));
     log(`[rhythm] ${key} ${record.status}`);
     return { state, outcome: record.status };
   }
 
   async function tickOnce(): Promise<TickReport> {
     const report: TickReport = { status: "ran", modelCalls: 0, sends: 0 };
+    ritualConfig = null;
     // Kill switch first: disabled means no config read, no state write, no model call, no send.
     if (!deps.activation.enabled) return { ...report, status: "disabled" };
     // Even when switched on, autonomous turns run only behind a genuine pre-execution read-only boundary.
@@ -467,12 +550,12 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
       return { ...report, status: "state_unavailable" };
     }
     const now = deps.now();
-    if (!recovered) {
-      state = await deps.store.update((current) => recoverRhythmState(current, now));
-      recovered = true;
-    }
+    if (!recovered && deps.recoverOnFirstTick !== false) state = await deps.store.update((current) => recoverRhythmState(current, now));
+    recovered = true;
     const local = kyivLocal(now);
     const today = local.date;
+    // From here on rituals can run under `config`: a date-only reminder may wait for its morning ritual (#54).
+    ritualConfig = config;
 
     // Rituals first; at most one proactive message per tick.
     const rituals = evaluateRituals(now, config);
@@ -505,8 +588,20 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
       // A changed set of /rhythm.md warnings is mentioned once, inside the next ritual — never on its own.
       const notice = configNoticeDigest(parsed.warnings);
       const noteWarnings = notice !== null && state.configNotice?.digest !== notice;
-      const prompt = buildRitualPrompt(dueRitual, config, ritualObservations(signals, config, now), now, noteWarnings ? parsed.warnings : []);
-      const result = await attempt(state, dueRitual.key, dueRitual.kind, "rhythm_ritual", prompt, report);
+      // #54: a morning ritual claims today's date-only reminders before its turn, so the prompt can name them and no
+      // other worker delivers them meanwhile. The claim, the send and its outcome are atomic with the ritual record.
+      const carriesReminders = REMINDER_RITUALS.has(dueRitual.kind);
+      let claimed: Reminder[] = [];
+      if (carriesReminders) {
+        state = await deps.store.update((current) => {
+          const result = claimForRitual(remindersOf(current), dueRitual.key, today, now);
+          claimed = result.claimed;
+          return result.claimed.length > 0 ? withReminders(current, result.ledger) : current;
+        });
+        if (claimed.length > 0) report.remindersClaimed = claimed.length;
+      }
+      const prompt = buildRitualPrompt(dueRitual, config, ritualObservations(signals, config, now), now, noteWarnings ? parsed.warnings : [], claimed);
+      const result = await attempt(state, dueRitual.key, dueRitual.kind, "rhythm_ritual", prompt, report, {}, carriesReminders);
       if (noteWarnings && (result.outcome === "sent" || result.outcome === "ambiguous")) {
         await deps.store.update((current) => ({ ...current, configNotice: { digest: notice, notedAt: now.toISOString() } }));
       }
@@ -580,5 +675,6 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
         running = false;
       }
     },
+    ritualConfig: () => ritualConfig,
   };
 }

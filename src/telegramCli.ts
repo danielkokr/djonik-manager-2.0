@@ -32,13 +32,19 @@ import { createMemoryRhythmConfigSource, sdkRhythmMemoryReader } from "./rhythmM
 import {
   createCallbackListener,
   createSessionTurnRunner,
+  reminderConfigReader,
+  resolveRhythmStatePath,
   SERVING_READ_ONLY_BOUNDARY,
   startWorkingRhythm,
+  type WorkingRhythmRuntime,
 } from "./rhythmRuntime.js";
-import { createFileRhythmStateStore } from "./rhythmState.js";
+import { createFileRhythmStateStore, type RhythmStateStore } from "./rhythmState.js";
 import { createTelegramProactiveSender, enqueueClickAfterPendingText } from "./rhythmTelegram.js";
 import { createFormattedTextSender } from "./telegramFormat.js";
-import { TrelloWorkHistoryClient } from "./trelloWorkHistory.js";
+import { executeTrelloWorkHistoryFromEnvironment, TrelloWorkHistoryClient } from "./trelloWorkHistory.js";
+import { createReminderToolExecutor, REMINDER_TOOL_NAME } from "./reminderTool.js";
+import { trelloCardContext } from "./reminderDelivery.js";
+import type { DjonikCustomToolExecutor } from "./djonikClient.js";
 
 /**
  * The one Telegram serving process (#33). Startup order, fail-closed before any update is polled:
@@ -94,6 +100,32 @@ async function main(): Promise<number> {
   let polling: Promise<unknown> = Promise.resolve();
   /** Set once serving has started; before that a failure simply ends `main` with its exit code. */
   let requestStop: ((reason: string, code: number) => void) | null = null;
+
+  /**
+   * #54 reminders. Enabled only when the served release exposes the `reminder` custom tool (so this revision changes
+   * nothing for a release without it). ONE state store instance for the whole process: the tool executor and the
+   * scheduler/button handlers share its serialized update chain. With no known state path the executor answers
+   * "unavailable" — a reminder is never promised without a durable home.
+   */
+  const remindersEnabled = release.customTools.includes(REMINDER_TOOL_NAME);
+  const statePath = resolveRhythmStatePath(process.env);
+  let sharedStore: RhythmStateStore | null = null;
+  const stateStore = (path: string): RhythmStateStore => (sharedStore ??= createFileRhythmStateStore(path));
+  const rhythmConfigSource = createMemoryRhythmConfigSource({ reader: sdkRhythmMemoryReader(anthropic), memoryStoreId: release.session.memoryStoreId });
+  let rhythm: WorkingRhythmRuntime | null = null;
+  const reminderExecutor = createReminderToolExecutor({
+    store: remindersEnabled && statePath !== null ? stateStore(statePath) : null,
+    now: () => new Date(),
+    readConfig: reminderConfigReader(rhythmConfigSource),
+    ritualsRunning: () => rhythm?.status === "running",
+    log: (line) => console.log(line),
+  });
+  const customToolExecutor: DjonikCustomToolExecutor = (input, context) =>
+    context.name === REMINDER_TOOL_NAME
+      ? reminderExecutor(input, { toolUseId: context.toolUseId, authority: context.authority })
+      : executeTrelloWorkHistoryFromEnvironment(input);
+  const trelloReader = config.trello ? new TrelloWorkHistoryClient({ apiKey: config.trello.apiKey, readToken: config.trello.readToken }) : null;
+
   const djonikSession = createSessionManager(async () => {
     try {
       return await connectServingSession(anthropic, config, preflight, {
@@ -104,6 +136,7 @@ async function main(): Promise<number> {
         // #53: content-free stream reconnect evidence, always on (counts/causes only, never content or ids).
         onStreamLifecycle: logSessionLifecycle,
         trelloHistoryField: trello.field,
+        customToolExecutor,
       });
     } catch (error) {
       // A Session re-created after a dead stream must attest too; drift there means the remote release
@@ -277,18 +310,20 @@ async function main(): Promise<number> {
    * or read (no Memory config read, no state file, no Trello facts, no model call, no timer); an allowed
    * user's old button gets the stale-button answer. Buttons are only shortcuts to ordinary conversation: a valid click
    * becomes a typed-equivalent turn through the same grouping buffer and FIFO Session.
+   *
+   * #54 reminder delivery shares this one timer and state store; it runs whenever the served release exposes the
+   * `reminder` tool (independent of the rhythm switch — delivering a reminder involves no model turn).
    */
-  const rhythm = startWorkingRhythm({
+  const startedRhythm = startWorkingRhythm({
     env: process.env,
     readOnlyBoundary: SERVING_READ_ONLY_BOUNDARY,
     allowedUserId: telegramConfig.allowedUserId,
-    createConfigSource: () =>
-      createMemoryRhythmConfigSource({ reader: sdkRhythmMemoryReader(anthropic), memoryStoreId: release.session.memoryStoreId }),
-    createStateStore: createFileRhythmStateStore,
-    createFactCollector: config.trello
+    createConfigSource: () => rhythmConfigSource,
+    createStateStore: stateStore,
+    createFactCollector: trelloReader
       ? () =>
           createRhythmFactCollector({
-            reader: new TrelloWorkHistoryClient({ apiKey: config.trello!.apiKey, readToken: config.trello!.readToken }),
+            reader: trelloReader,
             log: (line) => console.log(line),
           })
       : undefined,
@@ -300,15 +335,21 @@ async function main(): Promise<number> {
     clearButtons: (chatId, messageId) => bot.api.editMessageReplyMarkup(chatId, messageId, { reply_markup: { inline_keyboard: [] } }),
     enqueueUserText: enqueueClickAfterPendingText(groupBuffer),
     log: (line) => console.log(line),
+    reminders: {
+      enabled: remindersEnabled,
+      ...(trelloReader ? { cardContext: trelloCardContext(trelloReader) } : {}),
+      notify: (query, text) => (query.id === undefined ? Promise.resolve() : bot.api.answerCallbackQuery(query.id, { text })),
+    },
   });
-  bot.on("callback_query:data", createCallbackListener(rhythm, { allowedUserId: telegramConfig.allowedUserId, log: (line) => console.warn(line) }));
+  rhythm = startedRhythm;
+  bot.on("callback_query:data", createCallbackListener(startedRhythm, { allowedUserId: telegramConfig.allowedUserId, log: (line) => console.warn(line) }));
 
   bot.catch((error) => {
     console.error("Unhandled Telegram bot error:", error.message);
   });
 
   const coordinator = createShutdownCoordinator({
-    stopBackground: () => rhythm.stop(),
+    stopBackground: () => startedRhythm.stop(),
     stopPolling: () => bot.stop(),
     pollingDone: () => polling,
     flushIntake: () => groupBuffer.flushAll(),

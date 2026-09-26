@@ -17,9 +17,11 @@ import { APIError } from "@anthropic-ai/sdk";
  * those cached bytes may ever be (re)submitted. The provider's echo of the persisted
  * `user.custom_tool_result` is the authoritative RESOLVED evidence.
  *
- * This is an in-process guarantee only. It does not make an external side effect crash-safe; a future
+ * This is an in-process guarantee only. It does not make an external side effect crash-safe; a
  * side-effecting custom tool additionally needs a target-enforced idempotency key or durable intent
- * record plus #31-style verification (docs/01 §13). There is no persistence or event store here. Since #53 a
+ * record plus #31-style verification (docs/01 §13). The executor therefore receives the call's id (#54: the
+ * `reminder` tool records its outcome durably under that id and verifies it by a fresh read). There is no
+ * persistence or event store here. Since #53 a
  * dropped stream is reconnected to the same Session and missed events are caught up from history; the feed
  * delivers each event id once, and this lifecycle stays idempotent per id regardless (a replayed use keeps its
  * first observation; a replayed status is a no-op for an id already executing or submitted).
@@ -47,7 +49,14 @@ export interface CustomToolResultEvent {
   content: Array<{ type: "text"; text: string }>;
 }
 
-export type CustomToolExecutor = (input: unknown) => Promise<CustomToolResult>;
+/** Which call is executing: the provider's `custom_tool_use_id` and the tool name (#54: a side-effecting tool keys
+ *  its durable idempotency on the id and routes on the name). */
+export interface CustomToolCall {
+  id: string;
+  name: string;
+}
+
+export type CustomToolExecutor = (input: unknown, call: CustomToolCall) => Promise<CustomToolResult>;
 export type CustomToolResultSender = (events: CustomToolResultEvent[]) => Promise<unknown>;
 
 /** A blocking custom-tool action this client must not (or can no longer) settle. The turn fails
@@ -201,7 +210,7 @@ export class CustomToolResolution {
     entry.execution = (async () => {
       let result: CustomToolResult;
       try {
-        const returned = await executor(entry.input);
+        const returned = await executor(entry.input, { id: entry.id, name: entry.name });
         result = { isError: returned.isError, content: returned.content };
       } catch {
         result = { isError: true, content: EXECUTOR_EXCEPTION_CONTENT };
