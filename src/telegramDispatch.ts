@@ -1,6 +1,13 @@
 import type { GroupedIntake } from "./messageGrouping.js";
 import { buildGroupingTelemetry } from "./messageGrouping.js";
-import { isProposalReply, proposalKeyboard, ProposalConfirmations, STALE_PROPOSAL_TEXT } from "./proposalConfirmation.js";
+import {
+  isAcceptanceText,
+  isProposalReply,
+  proposalKeyboard,
+  ProposalConfirmations,
+  STALE_PROPOSAL_TEXT,
+  VOICE_CONFIRMATION_REFUSED_TEXT,
+} from "./proposalConfirmation.js";
 import {
   formatGroupFailureError,
   formatUserFacingError,
@@ -8,6 +15,7 @@ import {
   type DjonikSessionManager,
   type SessionRecoveryEvent,
 } from "./telegramAdapter.js";
+import { formatVoiceFailure, VOICE_GROUP_SUFFIX, VoiceInputError } from "./voiceInput.js";
 
 /**
  * The `MessageGroupBuffer.onDispatch`/`onFailure` pair `telegramCli.ts` wires
@@ -35,7 +43,7 @@ export interface GroupDispatchDeps {
 
 export interface GroupDispatchHandlers {
   onDispatch: (chatId: number, userId: number, intake: GroupedIntake) => Promise<void>;
-  onFailure: (chatId: number, userId: number, error: unknown) => Promise<void>;
+  onFailure: (chatId: number, userId: number, error: unknown, fragmentCount?: number) => Promise<void>;
 }
 
 export function createGroupDispatchHandlers(deps: GroupDispatchDeps): GroupDispatchHandlers {
@@ -47,6 +55,17 @@ export function createGroupDispatchHandlers(deps: GroupDispatchDeps): GroupDispa
       try {
         const proposals = deps.proposals;
         if (intake.hasForwardedSource) proposals?.invalidate(chatId, userId);
+        // #49 fail-closed: speech-to-text is not trusted to authorize the #48 bound proposal. While one is
+        // pending, a confirmation-like transcript of Daniel's own voice is not sent as a human-authority turn
+        // (Claude would see it next to its proposal) and the proposal is left pending, not revised or consumed.
+        if (
+          !intake.hasForwardedSource &&
+          proposals?.has(chatId, userId) === true &&
+          intake.ownVoiceTranscripts?.some(isAcceptanceText) === true
+        ) {
+          await deps.sendMessage(chatId, intake.fragmentCount > 1 ? VOICE_CONFIRMATION_REFUSED_TEXT + VOICE_GROUP_SUFFIX : VOICE_CONFIRMATION_REFUSED_TEXT);
+          return;
+        }
         const soleText = intake.parts.length === 1 && intake.parts[0].type === "text" ? intake.parts[0].text : null;
         const typed = !intake.hasForwardedSource && soleText !== null ? proposals?.typed(soleText, chatId, userId) : undefined;
         if (typed?.kind === "stale") { await deps.sendMessage(chatId, STALE_PROPOSAL_TEXT); return; }
@@ -77,13 +96,20 @@ export function createGroupDispatchHandlers(deps: GroupDispatchDeps): GroupDispa
         await deps.sendMessage(chatId, formatUserFacingError(error));
       }
     },
-    onFailure: async (chatId, _userId, error) => {
+    onFailure: async (chatId, _userId, error, fragmentCount = 1) => {
       // Pre-send failure (#25): at least one attachment in this grouped
       // intake failed MIME/size/download/preparation, or the group exceeded
       // its fragment-count ceiling. The whole group is discarded here —
       // `session.send` is never called for it, so this path can never reach
       // Trello, matching the "fail the whole grouped intake, zero mutation"
       // requirement.
+      // #49: a failed voice/audio transcription gets one fixed line (never provider text); a forwarded voice
+      // failure likewise produces no proposal, because no turn is sent.
+      if (error instanceof VoiceInputError) {
+        logError("Djonik voice input failed before send:", `reason=${error.reason}`);
+        await deps.sendMessage(chatId, formatVoiceFailure(error, fragmentCount));
+        return;
+      }
       logError("Djonik grouped intake failed before send:", error);
       await deps.sendMessage(chatId, formatGroupFailureError(error));
     },

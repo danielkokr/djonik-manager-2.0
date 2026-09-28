@@ -15,6 +15,15 @@ export const STALE_PROPOSAL_TEXT = "Ця пропозиція вже не акт
 const TTL_MS = 30 * 60 * 1000;
 const ACCEPT_RE = /^\s*(?:внести|внось|так[,\s]+внеси|так[,\s]+внести|підтверджую[,\s]+внести)\s*[.!]?\s*$/iu;
 
+/** The one acceptance vocabulary (#48); also used to hold back a voice transcript that looks like acceptance (#49). */
+export function isAcceptanceText(text: string): boolean {
+  return ACCEPT_RE.test(text);
+}
+
+/** #49: a voice transcript never confirms a proposal; the pending proposal stays untouched. */
+export const VOICE_CONFIRMATION_REFUSED_TEXT =
+  "Голосом пропозицію не підтверджую — натисни «✅ Внести» під нею або напиши «внести» текстом.";
+
 export function isProposalReply(text: string): boolean {
   return text.length <= 3500 && /(?:^|\n)\s*✅\s*Внести\s+✏️\s*Змінити\s*$/u.test(text);
 }
@@ -79,7 +88,7 @@ export class ProposalConfirmations {
   }
 
   typed(text: string, chatId: number, userId: number): ProposalClick {
-    if (!ACCEPT_RE.test(text)) return { kind: "not_proposal" };
+    if (!isAcceptanceText(text)) return { kind: "not_proposal" };
     const proposal = this.current(chatId, userId);
     if (!proposal) return { kind: "stale" };
     this.invalidate(chatId, userId);

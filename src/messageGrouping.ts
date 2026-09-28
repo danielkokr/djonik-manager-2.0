@@ -1,5 +1,6 @@
 import type { DjonikDocumentInput, DjonikImageInput, DjonikTurnPart } from "./djonikClient.js";
 import { sourceText, type ForwardedSource } from "./forwardedSource.js";
+import { transcriptText, type VoiceTranscript } from "./voiceInput.js";
 
 /**
  * Deterministic, in-memory grouping of related Telegram fragments into one
@@ -16,7 +17,11 @@ export type GroupingReason = "single" | "adjacent_window" | "media_group_id";
 
 type MediaFragment =
   | { kind: "image"; promise: Promise<DjonikImageInput> }
-  | { kind: "document"; promise: Promise<DjonikDocumentInput> };
+  | { kind: "document"; promise: Promise<DjonikDocumentInput> }
+  /** #49: a Telegram voice/audio input whose promise resolves to its transcript, which becomes this fragment's
+   *  first text part (before its caption), in the same message-id order as any other fragment. A rejected
+   *  transcription fails the group exactly like a failed attachment: no Djonik turn. */
+  | { kind: "voice"; promise: Promise<VoiceTranscript> };
 
 /**
  * One incoming Telegram fragment. `media`'s promise must already be
@@ -65,6 +70,11 @@ export interface GroupedIntake {
   textCount: number;
   imageCount: number;
   documentCount: number;
+  /** #49 transcribed voice/audio fragments; absent when zero. */
+  voiceCount?: number;
+  /** #49: raw transcripts of Daniel's own (non-forwarded) voice/audio, in order — only so dispatch can refuse a
+   *  confirmation-like transcript while a #48 proposal is pending. Content: never passed to telemetry. */
+  ownVoiceTranscripts?: string[];
   groupingReason: GroupingReason;
   /** Elapsed ms from the group's first fragment to dispatch. */
   groupingWaitMs: number;
@@ -76,6 +86,8 @@ export interface GroupingTelemetry {
   groupedTextCount: number;
   groupedImageCount: number;
   groupedDocumentCount: number;
+  /** #49: present only when the intake contained voice/audio. */
+  groupedVoiceCount?: number;
   groupingReason: GroupingReason;
   groupingWaitMs: number;
 }
@@ -86,6 +98,7 @@ export function buildGroupingTelemetry(intake: GroupedIntake): GroupingTelemetry
     groupedTextCount: intake.textCount,
     groupedImageCount: intake.imageCount,
     groupedDocumentCount: intake.documentCount,
+    ...(intake.voiceCount ? { groupedVoiceCount: intake.voiceCount } : {}),
     groupingReason: intake.groupingReason,
     groupingWaitMs: intake.groupingWaitMs,
   };
@@ -151,8 +164,10 @@ export interface MessageGroupBufferOptions {
   scheduler?: Scheduler;
   /** Called once per settled group with a successfully resolved intake. Never called more than once per group. */
   onDispatch: (chatId: number, userId: number, intake: GroupedIntake) => void | Promise<void>;
-  /** Called once per settled group when any required attachment fails MIME/size/download/preparation, or the fragment-count ceiling is exceeded. No `onDispatch` call happens for that group. */
-  onFailure: (chatId: number, userId: number, error: unknown) => void | Promise<void>;
+  /** Called once per settled group when any required attachment fails MIME/size/download/preparation (or a voice
+   *  transcription fails, #49), or the fragment-count ceiling is exceeded. No `onDispatch` call happens for that
+   *  group. `fragmentCount` lets the reply say whether other fragments were discarded with it. */
+  onFailure: (chatId: number, userId: number, error: unknown, fragmentCount: number) => void | Promise<void>;
 }
 
 interface ActiveGroup {
@@ -410,7 +425,7 @@ export class MessageGroupBuffer {
     if (!this.settle(group)) return;
     const fail = () => {
       group.markHandedOff();
-      return this.onFailure(group.chatId, group.userId, error);
+      return this.onFailure(group.chatId, group.userId, error, group.fragments.length);
     };
     const prev = group.prev;
     this.track(group.chatId, prev === null || prev.handed ? Promise.resolve(fail()) : prev.handedOff.then(fail));
@@ -427,20 +442,33 @@ export class MessageGroupBuffer {
     const documents: DjonikDocumentInput[] = [];
     const textFragments: Array<{ order: number; text: string }> = [];
     const parts: DjonikTurnPart[] = [];
+    const voiceTexts: Array<{ order: number; text: string }> = [];
+    const ownVoiceTranscripts: string[] = [];
 
     try {
       for (const fragment of sorted) {
-        const text = fragment.forwarded ? sourceText(fragment.forwarded, fragment.text) : fragment.text;
+        // A caption-less forwarded voice needs no second provenance block: its transcript carries one (#49).
+        const captionless = fragment.media?.kind === "voice" && !fragment.text;
+        const text = fragment.forwarded && !captionless ? sourceText(fragment.forwarded, fragment.text) : fragment.text;
         if (text) textFragments.push({ order: fragment.messageId, text });
         if (fragment.media) {
           if (fragment.media.kind === "image") {
             const image = await fragment.media.promise;
             images.push(image);
             parts.push({ type: "image", image });
-          } else {
+          } else if (fragment.media.kind === "document") {
             const document = await fragment.media.promise;
             documents.push(document);
             parts.push({ type: "document", document });
+          } else {
+            // #49: the transcript is text marked as a transcript; a forwarded one also gets the #48 source
+            // wrapper. Not counted in `textCount` (typed text/captions only).
+            const transcript = await fragment.media.promise;
+            if (!fragment.forwarded) ownVoiceTranscripts.push(transcript.text);
+            const marked = transcriptText(transcript, fragment.forwarded !== undefined);
+            const voiceText = fragment.forwarded ? sourceText(fragment.forwarded, marked) : marked;
+            voiceTexts.push({ order: fragment.messageId, text: voiceText });
+            parts.push({ type: "text", text: voiceText });
           }
         }
         // Media part (if any) precedes this fragment's own text part, matching
@@ -456,7 +484,7 @@ export class MessageGroupBuffer {
       // place reporting the failure in that ordering — never a duplicate.
       if (group.prev !== null && !group.prev.handed) await group.prev.handedOff;
       group.markHandedOff();
-      await this.onFailure(group.chatId, group.userId, error);
+      await this.onFailure(group.chatId, group.userId, error, group.fragments.length);
       return;
     }
 
@@ -464,7 +492,7 @@ export class MessageGroupBuffer {
       group.mediaGroupId !== null ? "media_group_id" : sorted.length > 1 ? "adjacent_window" : "single";
 
     const intake: GroupedIntake = {
-      text: buildCombinedText(textFragments),
+      text: buildCombinedText([...voiceTexts, ...textFragments]),
       images,
       documents,
       parts,
@@ -473,6 +501,8 @@ export class MessageGroupBuffer {
       textCount: textFragments.length,
       imageCount: images.length,
       documentCount: documents.length,
+      ...(voiceTexts.length > 0 ? { voiceCount: voiceTexts.length } : {}),
+      ...(ownVoiceTranscripts.length > 0 ? { ownVoiceTranscripts } : {}),
       groupingReason: reason,
       groupingWaitMs: this.scheduler.now() - group.startedAt,
     };

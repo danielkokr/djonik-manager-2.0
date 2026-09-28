@@ -47,6 +47,15 @@ import { executeTrelloWorkHistoryFromEnvironment, TrelloWorkHistoryClient } from
 import { createReminderToolExecutor, REMINDER_TOOL_NAME } from "./reminderTool.js";
 import { trelloCardContext } from "./reminderDelivery.js";
 import type { DjonikCustomToolExecutor } from "./djonikClient.js";
+import { transcriberFromEnvironment } from "./openAiTranscription.js";
+import {
+  downloadTelegramAudio,
+  resolveVoiceAttachment,
+  transcribeVoice,
+  VoiceAdmission,
+  type VoiceKind,
+  type VoiceTranscript,
+} from "./voiceInput.js";
 
 /**
  * The one Telegram serving process (#33). Startup order, fail-closed before any update is polled:
@@ -312,6 +321,46 @@ async function main(): Promise<number> {
       media: { kind: "document", promise },
     });
   });
+
+  /**
+   * Telegram voice notes and audio files (#49), Daniel's own or forwarded. The transcript is just this fragment's
+   * text: it joins the same grouping buffer, ordering, Session FIFO and authority path as a typed message or a
+   * forward (`baseFragment` carries the forward metadata, so a forwarded voice stays `forwarded_source`).
+   * Transcription starts on arrival, overlapping the grouping window like an attachment download. Any failure
+   * rejects the fragment's promise → one fixed reply, no Djonik turn. Missing credential never stops serving.
+   */
+  const transcription = transcriberFromEnvironment(process.env);
+  if (!transcription) console.warn("[voice] DJONIK_TRANSCRIPTION_API_KEY is not set: voice messages get a 'not configured' reply");
+  const voiceAdmission = new VoiceAdmission();
+  function onVoice(ctx: Context, kind: VoiceKind): void {
+    if (!isAllowedUser(ctx.from?.id, telegramConfig.allowedUserId)) {
+      console.warn(`Ignored Telegram ${kind} from unauthorized user id ${ctx.from?.id ?? "unknown"}.`);
+      return;
+    }
+    const message = ctx.message!;
+    if (!voiceAdmission.admit(ctx.chat!.id, message.message_id)) {
+      console.log("[voice]", JSON.stringify({ kind, outcome: "duplicate_ignored" }));
+      return;
+    }
+    const fragment = baseFragment(ctx, message.caption ?? "");
+    let promise: Promise<VoiceTranscript>;
+    try {
+      const attachment = resolveVoiceAttachment(kind, kind === "voice" ? message.voice : message.audio);
+      promise = transcribeVoice(attachment, fragment.forwarded !== undefined, {
+        transcriber: transcription?.transcriber ?? null,
+        model: transcription?.model ?? null,
+        getFilePath: async (fileId) => (await ctx.api.getFile(fileId)).file_path,
+        download: (filePath) => downloadTelegramAudio(`https://api.telegram.org/file/bot${telegramConfig.botToken}/${filePath}`),
+        onTelemetry: (telemetry) => console.log("[voice]", JSON.stringify(telemetry)),
+      });
+    } catch (error) {
+      console.log("[voice]", JSON.stringify({ kind, forwarded: fragment.forwarded !== undefined, outcome: "failed", reason: (error as { reason?: string }).reason ?? "invalid_metadata" }));
+      promise = Promise.reject(error);
+    }
+    groupBuffer.addFragment({ ...fragment, media: { kind: "voice", promise } });
+  }
+  bot.on("message:voice", (ctx) => onVoice(ctx, "voice"));
+  bot.on("message:audio", (ctx) => onVoice(ctx, "audio"));
 
   /**
    * Working Rhythm (#39), after the serving Session is attested and before polling starts. Two locks:
