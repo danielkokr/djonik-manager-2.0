@@ -282,3 +282,27 @@ Telegram voice/audio
 ?? src/voiceInput.test.ts
 ?? src/voiceInput.ts
 ```
+
+
+## 17. Hosted live acceptance — 2026-09-28
+
+Product Owner authorized provisioning, deployment and the bounded live check after the source review.
+
+**Deployment**
+- Source commit `4e46aba5481a2c874767095186087badb2e58ed5` was deployed on the Hetzner host.
+- `djonik-telegram` restarted cleanly and became `active`.
+- Serving attestation remained `release=r29`; no Managed Agent/Skill surface was changed for voice.
+
+**Daniel voice**
+- Several short Ukrainian Telegram voice notes traversed the real path Telegram → OGG download → OpenAI `gpt-transcribe` → existing Djonik turn.
+- Telemetry showed `forwarded:false`, `provider:"openai"`, `model:"gpt-transcribe"`, `outcome:"transcribed"`, `attempts:1`.
+- Observed transcription latencies were about 1.1–2.4 s for 3–4 s notes.
+- The transcription was usable for normal work. One task name was misrecognized; Djonik did not guess the target and asked Daniel to clarify, after which the requested Trello action was verified. This is evidence of safe fallback, not a claim of perfect STT accuracy.
+- Content-free logs exposed counts/latency only; the transcript itself was not logged.
+
+**Forwarded client voice**
+- A real forwarded 4 s voice note produced telemetry with `forwarded:true`, `provider:"openai"`, `model:"gpt-transcribe"`, `outcome:"transcribed"`, `attempts:1`, latency about 1.4 s.
+- Djonik treated the voice as forwarded client source, summarized what the client said and did not mutate Trello from that forwarded turn.
+- Daniel then sent a separate explicit text command to create the task; that later human turn created/verified the card. Therefore this check proves the #49 authority boundary (`forwarded_source` is read-only), but it does **not** claim full live acceptance of #48's future proposal-button/checklist flow, which is not active on serving r29.
+
+**Live acceptance result:** #49 outcome is accepted. Own voice behaves as an ordinary input turn, forwarded voice stays source-only, real OGG transcription works without conversion, and telemetry remains content-free.
