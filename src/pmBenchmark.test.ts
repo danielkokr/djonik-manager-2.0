@@ -60,6 +60,15 @@ test("fixture limitation, setup failure and PM failure are distinct; no retry co
     fixture: { async reset() { return { evidenceAvailable: true }; } }, grader: fakeGrader() });
   assert.deepEqual(failed.map((run) => run.verdict), ["fail", "fail", "fail"]);
 });
+test("S3/S8/S10 require observed snapshot evidence before behavioural grading", async () => {
+  for (const id of ["S3", "S8", "S10"] as const) {
+    const runs = await runBenchmark({ mode: id, release: "offline", repetitions: 1,
+      candidate: { async open() { return { async send() { return { reply: "Some recommendation", trace }; }, close() {} }; } },
+      fixture: { async reset() { return { evidenceAvailable: true }; } }, grader: fakeGrader() });
+    assert.equal(runs[0].verdict, "not_evaluable");
+    assert.equal(runs[0].reason, "snapshot_not_observed");
+  }
+});
 test("2/3 target, deterministic and grader failures remain separately recorded", async () => {
   let count = 0;
   const candidate: CandidateFactory = { async open() { return { async send() { count++; return { reply: count === 3 ? "Пишу" : "SILENT", trace }; }, close() {} }; } };

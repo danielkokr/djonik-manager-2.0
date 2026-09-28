@@ -142,10 +142,10 @@ test("#45 / docs/77 §3: empty sections are omitted, 💭 is rare and grounded, 
   assert.match(section("What every rhythm message is"), /Up to about 10 short Telegram lines; a quiet day is one or two/);
 });
 
-test("#45 / docs/77 decision 3: waiting days only when a code hint states them (3+), never counted by the model", () => {
+test("#47 / docs/77 decision 3: waiting days only from snapshot or code hint (3+), never counted by the model", () => {
   const markers = section("Markers");
   assert.match(markers, /⏳ without day counts by default/);
-  assert.match(markers, /only when a code hint in this turn states it \(e\.g\. «у Waiting 6 дн\.»\) and it is 3 or more/);
+  assert.match(markers, /only when the current snapshot or a code hint establishes its current Waiting-list age \(e\.g\. «у Waiting 6 дн\.»\) and it is 3 or more/);
   assert.match(markers, /never count days yourself/);
   // The hint the Skill quotes is the runtime's own wording for a long Waiting stint.
   assert.match(readFileSync(join(repoRoot, "src", "rhythmSignals.ts"), "utf8"), /`у Waiting \$\{days\} дн\. \(waiting ≠ blocked\)`/);

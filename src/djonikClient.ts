@@ -25,6 +25,7 @@ import {
   type SpecialistUnverifiedReason,
 } from "./turnCorrelation.js";
 import { executeTrelloWorkHistoryFromEnvironment, type CustomToolExecutionResult } from "./trelloWorkHistory.js";
+import { executeTrelloBoardSnapshotFromEnvironment } from "./trelloBoardSnapshot.js";
 import { CustomToolResolution } from "./customToolResolution.js";
 import { isReadOnlyReminderInput, REMINDER_TOOL_NAME, reminderConfirmationOf } from "./reminderTool.js";
 import { ToolConfirmationLifecycle, type ConfirmationRecord, type ConfirmationRequest } from "./toolConfirmation.js";
@@ -45,10 +46,11 @@ import {
 
 /** Read-only work history (#36): no side-effect idempotency key is needed beyond the #40 per-id lifecycle. */
 const WORK_HISTORY_TOOL = "trello_work_history";
+const BOARD_SNAPSHOT_TOOL = "trello_board_snapshot";
 /** The custom tools this client settles. `reminder` (#54) is side-effecting; it meets the docs/01 §13 admission
  *  rule itself: its executor keys a durable outcome record on the `custom_tool_use_id` in the same atomic write as
  *  the mutation, verifies the result by a fresh read, and refuses mutations without human authority. */
-export const SUPPORTED_CLIENT_CUSTOM_TOOLS = [WORK_HISTORY_TOOL, REMINDER_TOOL_NAME] as const;
+export const SUPPORTED_CLIENT_CUSTOM_TOOLS = [WORK_HISTORY_TOOL, BOARD_SNAPSHOT_TOOL, REMINDER_TOOL_NAME] as const;
 
 /** What a custom-tool executor learns about the call besides its input (#54). */
 export interface CustomToolCallContext {
@@ -961,7 +963,9 @@ const REMINDERS_UNAVAILABLE = JSON.stringify({
 
 /** Default executor: work history from the environment; reminders unavailable (never a silent promise). */
 export const defaultCustomToolExecutor: DjonikCustomToolExecutor = async (input, context) =>
-  context.name === REMINDER_TOOL_NAME ? { isError: true, content: REMINDERS_UNAVAILABLE } : executeTrelloWorkHistoryFromEnvironment(input);
+  context.name === REMINDER_TOOL_NAME ? { isError: true, content: REMINDERS_UNAVAILABLE }
+    : context.name === BOARD_SNAPSHOT_TOOL ? executeTrelloBoardSnapshotFromEnvironment(input)
+      : executeTrelloWorkHistoryFromEnvironment(input);
 
 /** Narrow Session-creation controls for isolated validation. Production callers retain the defaults. */
 export interface DjonikSessionOptions {
@@ -1374,7 +1378,8 @@ export async function connectToDjonik(
           if (!customToolAuthority.has(event.id)) customToolAuthority.set(event.id, turnAuthority);
           if (!turnCustomToolUseIds.includes(event.id)) turnCustomToolUseIds.push(event.id);
           turnToolUses.push(
-            event.name === REMINDER_TOOL_NAME && isReadOnlyReminderInput(event.input)
+            event.name === BOARD_SNAPSHOT_TOOL ||
+              (event.name === REMINDER_TOOL_NAME && isReadOnlyReminderInput(event.input))
               ? { kind: "custom", name: event.name, readOnly: true }
               : { kind: "custom", name: event.name },
           );
@@ -1710,7 +1715,15 @@ export async function connectToDjonik(
           lateSpecialistResults: specialist.quarantinedResults,
         });
       }
-      if (decisionTrace) turnTelemetry.recordDecisionTrace(decisionTrace.finish(ledger.outcomes()));
+      if (decisionTrace) {
+        for (const id of turnCustomToolUseIds) {
+          if (customTools.name(id) !== BOARD_SNAPSHOT_TOOL) continue;
+          const state = customTools.state(id);
+          const result = customTools.result(id);
+          if (result && !result.isError && (state === "SUBMITTED" || state === "RESOLVED")) decisionTrace.snapshot(result.content);
+        }
+        turnTelemetry.recordDecisionTrace(decisionTrace.finish(ledger.outcomes()));
+      }
       decisionTrace = null;
       const completedTelemetry = turnTelemetry.summary();
       // A turn that saw no usage snapshot must not reset the cumulative baseline (that would make the

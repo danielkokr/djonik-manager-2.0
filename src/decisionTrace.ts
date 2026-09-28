@@ -1,4 +1,5 @@
 import { isTrelloReadTool, isTrelloWriteTool, TrelloMutationLedger, type MutationOutcome } from "./trelloMutationLedger.js";
+import { createHash } from "node:crypto";
 
 export interface DecisionTrace {
   sessionTurnIndex: number;
@@ -13,6 +14,8 @@ export interface DecisionTrace {
   /** Present only when a source-aware lint was run. Absent means unknown, not "none". */
   unsupportedConcrete?: Array<{ type: string; value: string }>;
   answerKind?: "planning" | "task" | "rhythm" | "project_health";
+  /** SHA-256 of the successful model-facing snapshot, never its text. */
+  snapshotDigest?: string;
 }
 
 function normalizedPath(input: unknown): { kind: "skill" | "memory"; path: string } | null {
@@ -62,6 +65,10 @@ export class DecisionTraceCollector {
   }
 
   custom(name: string): void { addUnique(this.value.toolNames, `custom:${name}`); }
+
+  snapshot(modelFacingContent: string): void {
+    this.value.snapshotDigest = createHash("sha256").update(modelFacingContent, "utf8").digest("hex");
+  }
 
   finish(outcomes: readonly MutationOutcome[]): DecisionTrace {
     this.value.mutations = outcomes.map((outcome) => ({ cardIds: [...outcome.targetCardIds], status: outcome.status }));

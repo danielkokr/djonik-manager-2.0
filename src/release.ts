@@ -513,6 +513,25 @@ export const RELEASE_R29: DjonikRelease = {
   session: RELEASE_R28.session,
 };
 
+/** #47 source intent only. The serving r29 tuple and every older reviewed release remain immutable. */
+export const RELEASE_R30_CANDIDATE: DjonikReleaseCandidate = {
+  candidateId: "r30-candidate",
+  becomes: "r30",
+  agent: { id: COORDINATOR_ID, fromVersion: 29, version: null },
+  model: RELEASE_R29.model,
+  systemSha256: RELEASE_R29.systemSha256,
+  skills: RELEASE_R29.skills.map((skill) => ["planning-and-focus", "pm-rhythm"].includes(skill.name)
+    ? { name: skill.name, skillId: null, pin: { kind: "unresolved" as const, reason: "#47 Skill source not remotely synced" } }
+    : skill),
+  specialist: RELEASE_R29.specialist,
+  builtInTools: RELEASE_R29.builtInTools,
+  customTools: [...RELEASE_R29.customTools, "trello_board_snapshot"],
+  mcpServers: RELEASE_R29.mcpServers.filter((server) => server.name !== "google-calendar-calendarmcp"),
+  mcpToolsets: RELEASE_R29.mcpToolsets.filter((toolset) => toolset.server !== "google-calendar-calendarmcp"),
+  confirmationRequired: RELEASE_R29.confirmationRequired!,
+  session: RELEASE_R29.session,
+};
+
 export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_R25, r26: RELEASE_R26, r27: RELEASE_R27, r28: RELEASE_R28, r29: RELEASE_R29 };
 
 /**

@@ -18,6 +18,18 @@ test("Skill, Memory read/write, authoritative card input and ledger status only"
   assert.deepEqual(summary.mutations, [{ cardIds: ["card_A"], status: "verified" }]);
   assert.doesNotMatch(JSON.stringify(summary), /SECRET CLIENT|\/mnt\/memory|\/workspace/);
 });
+test("snapshot trace records the tool and deterministic content-free digest", () => {
+  const trace = new DecisionTraceCollector(1);
+  trace.custom("trello_board_snapshot");
+  trace.snapshot(JSON.stringify({ board: "PRIVATE BOARD", card: "PRIVATE CARD" }));
+  const first = trace.finish([]);
+  assert.deepEqual(first.toolNames, ["custom:trello_board_snapshot"]);
+  assert.match(first.snapshotDigest ?? "", /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(JSON.stringify(first), /PRIVATE BOARD|PRIVATE CARD/);
+  const again = new DecisionTraceCollector(1);
+  again.snapshot(JSON.stringify({ board: "PRIVATE BOARD", card: "PRIVATE CARD" }));
+  assert.equal(again.finish([]).snapshotDigest, first.snapshotDigest);
+});
 test("recorded provider events explain one completed turn, ignore nudge and all prose", () => {
   const events = [
     { type: "user.message", content: [{ text: "[Годинник адаптера, не текст Daniel · Зараз: пн 28.09]" }] },

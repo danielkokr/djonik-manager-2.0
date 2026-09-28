@@ -126,6 +126,29 @@ test("traced turn: final reply, the producing Session id, and every MCP / built-
   session.close();
 });
 
+test("snapshot runtime: autonomous read, repeated idle executes once, digest contains no card text", async () => {
+  const records: DjonikTurnTelemetry[] = [];
+  let calls = 0;
+  const content = JSON.stringify({ board: "PRIVATE BOARD", lists: [{ cards: [{ name: "PRIVATE CARD" }] }] });
+  const executor: DjonikCustomToolExecutor = async (_input, context) => {
+    assert.equal(context.name, "trello_board_snapshot");
+    assert.equal(context.authority, "autonomous_read_only");
+    calls += 1;
+    return { isError: false, content };
+  };
+  const { session, push } = await open(executor, false, (record) => records.push(record));
+  push({ type: "agent.custom_tool_use", id: "snapshot-1", name: "trello_board_snapshot", input: {} },
+    requiresAction(["snapshot-1"]), requiresAction(["snapshot-1"]), msg("One focus."), IDLE_OK);
+  const turn = await session.sendTraced([{ type: "text", text: "[Робочий ритм · автоматичний хід …]" }], "rhythm_ritual");
+  assert.equal(turn.reply, "One focus.");
+  assert.deepEqual(turn.toolUses, [{ kind: "custom", name: "trello_board_snapshot", readOnly: true }]);
+  assert.equal(calls, 1);
+  assert.deepEqual(records[0].decisionTrace?.toolNames, ["custom:trello_board_snapshot"]);
+  assert.match(records[0].decisionTrace?.snapshotDigest ?? "", /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(JSON.stringify(records[0]), /PRIVATE BOARD|PRIVATE CARD/);
+  session.close();
+});
+
 test("traced turn: a Memory write/edit is listed as a built-in tool (the guard sees it)", async () => {
   const { session, push } = await open();
   push(builtIn("w", "write", { file_path: "/mnt/memory/djonik/x.md", content: "secret" }), builtIn("e", "edit", {}), msg("Ок."), IDLE_OK);

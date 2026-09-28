@@ -128,6 +128,11 @@ export async function runBenchmark(input: {
         }
       }
       if (!turn) throw new Error("candidate returned no scored turn");
+      if (scenario.requires && (!turn.trace.toolNames.includes("custom:trello_board_snapshot") ||
+          !/^[a-f0-9]{64}$/.test(turn.trace.snapshotDigest ?? ""))) {
+        runs.push({ ...identity, verdict: "not_evaluable", checkFailures: [], findings: [], reason: "snapshot_not_observed" });
+        continue;
+      }
       const findings = lintConcreteClaims(turn.reply, scenario.evidence);
       if (scenario.id === "S14" && selfCitationSeedFindings.length === 0) {
         runs.push({ ...identity, verdict: "pass", checkFailures: [], findings, seedFindings: [], reason: "self_citation_prevented_at_source",

@@ -1,7 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import { connectToDjonik, type DjonikTurnTelemetry } from "./djonikClient.js";
+import { connectToDjonik, type DjonikCustomToolExecutor, type DjonikTurnTelemetry } from "./djonikClient.js";
+import { executeTrelloBoardSnapshot } from "./trelloBoardSnapshot.js";
+import { executeTrelloWorkHistory, TrelloWorkHistoryClient } from "./trelloWorkHistory.js";
 import { EVAL_BOARD_NAME, resetEvalFixture, resetEvalMemory } from "./pmFixture.js";
 import { TrelloEvalBoardDriver } from "./pmTrelloFixture.js";
 import { FIXED_CLOCK, makeReport, renderSummary, renderTable, runBenchmark, type BenchmarkMode, type CandidateFactory } from "./pmBenchmark.js";
@@ -71,8 +73,16 @@ async function main(): Promise<void> {
   const client = new Anthropic();
   const pinnedAgent = await client.beta.agents.retrieve(agentId, { version: agentVersion });
   const snapshotAvailable = pinnedAgent.tools.some((tool) => tool.type === "custom" && tool.name === "trello_board_snapshot");
-  const board = new TrelloEvalBoardDriver({ boardId: required(process.env.TRELLO_EVAL_BOARD_ID, "TRELLO_EVAL_BOARD_ID"),
-    apiKey: required(process.env.TRELLO_EVAL_KEY, "TRELLO_EVAL_KEY"), token: required(process.env.TRELLO_EVAL_TOKEN, "TRELLO_EVAL_TOKEN") });
+  const evalBoardId = required(process.env.TRELLO_EVAL_BOARD_ID, "TRELLO_EVAL_BOARD_ID");
+  const evalKey = required(process.env.TRELLO_EVAL_KEY, "TRELLO_EVAL_KEY");
+  const board = new TrelloEvalBoardDriver({ boardId: evalBoardId,
+    apiKey: evalKey, token: required(process.env.TRELLO_EVAL_TOKEN, "TRELLO_EVAL_TOKEN") });
+  const evalReader = new TrelloWorkHistoryClient({ boardId: evalBoardId, apiKey: evalKey,
+    readToken: required(process.env.TRELLO_EVAL_READ_TOKEN, "TRELLO_EVAL_READ_TOKEN") });
+  const evalCustomTools: DjonikCustomToolExecutor = async (toolInput, context) =>
+    context.name === "trello_board_snapshot" ? executeTrelloBoardSnapshot(toolInput, evalReader, new Date(FIXED_CLOCK))
+      : context.name === "trello_work_history" ? executeTrelloWorkHistory(toolInput, evalReader, new Date(FIXED_CLOCK))
+        : { isError: true, content: JSON.stringify({ error: { message: "This custom tool is unavailable in the eval Session." } }) };
   const memoryStore = required(process.env.DJONIK_EVAL_MEMORY_STORE_ID, "DJONIK_EVAL_MEMORY_STORE_ID");
   let spent = 0;
   let graderSpent = 0;
@@ -90,7 +100,7 @@ async function main(): Promise<void> {
         if (record.usage?.listCostCurrency !== "USD" || !amount || !/^\d+$/.test(amount)) budgetUnknown = true;
         else spent += Number(amount) / 100;
       },
-      "diagnostic", undefined, { agentVersion, memoryAccess: "read_only", now: () => new Date(FIXED_CLOCK),
+      "diagnostic", evalCustomTools, { agentVersion, memoryAccess: "read_only", now: () => new Date(FIXED_CLOCK),
         maxListCostUsdCents: String(admissionCents), metadata: { source: "pm-benchmark", release, scenario: scenario.id, repetition: String(repetition) },
         attestSession: async (created) => {
           const id = (created as { id?: unknown } | null)?.id;

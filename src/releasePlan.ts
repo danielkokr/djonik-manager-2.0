@@ -4,11 +4,18 @@ import { sha256, SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
 /** What an `agents.update` body is derived from: a release's Skills and tool surface (never its Agent version). */
 type ReleaseUpdateSource = Pick<DjonikRelease, "skills" | "builtInTools" | "customTools" | "mcpToolsets" | "confirmationRequired">;
 
+function withMcpServerReplacement<T extends Record<string, unknown>>(body: T, target: DjonikRelease["mcpServers"], previous: DjonikRelease["mcpServers"]): T & { mcp_servers?: Array<{ type: "url"; name: string; url: string }> } {
+  return JSON.stringify(target) === JSON.stringify(previous) ? body : {
+    ...body, mcp_servers: target.map((server) => ({ type: "url" as const, name: server.name, url: server.url })),
+  };
+}
+
 /**
  * The exact `agents.update` body that turns the current Agent version into `release` (#33 cutover,
  * docs/52 §4). Derived from the reviewed release, never hand-typed. Only the fields a release may change
  * relative to its predecessor are sent — `skills` and `tools` (both full-replacement lists); model,
- * system, MCP servers and the specialist roster are omitted and therefore preserved. `version` is the
+ * system, MCP servers and the specialist roster are omitted here. The reviewed release wrapper adds
+ * a full `mcp_servers` replacement only when the server list changes. `version` is the
  * optimistic-concurrency precondition: the update fails unless the Agent is still at `fromVersion`.
  *
  * Permission policies (#39 Stage 3A): a tool named in `release.confirmationRequired` gets its own
@@ -72,7 +79,7 @@ export function buildReleaseUpdateBody(release: DjonikRelease, fromVersion: numb
   if (from.systemSha256 !== release.systemSha256) {
     throw new Error(`${release.id} changes the prompt relative to ${from.id}; a Skills/tools-only body would be a partial update.`);
   }
-  return buildAgentUpdateBody(release, fromVersion);
+  return withMcpServerReplacement(buildAgentUpdateBody(release, fromVersion), release.mcpServers, from.mcpServers);
 }
 
 /**
@@ -84,7 +91,8 @@ export function buildReleaseUpdateBody(release: DjonikRelease, fromVersion: numb
  * prompt differs from the reviewed release it updates (#41 + #42 → r28): the caller passes the reviewed
  * `managed-agents/djonik.md` body, and it is refused unless it hashes to the candidate's `systemSha256`. A prompt
  * change therefore always ships together with the Skills it refers to, and an unchanged prompt is never re-sent
- * (r27). Model, MCP servers and roster are preserved by omission.
+ * (r27). Model and roster are preserved by omission. MCP servers are replaced only when the
+ * candidate changes their reviewed list (the #47 Calendar removal).
  */
 export function buildCandidateUpdateBody(
   candidate: DjonikReleaseCandidate,
@@ -94,11 +102,12 @@ export function buildCandidateUpdateBody(
   const from = Object.values(RELEASES).find((release) => release.agent.id === candidate.agent.id && release.agent.version === candidate.agent.fromVersion);
   if (!from) throw new Error(`No reviewed release for Agent v${candidate.agent.fromVersion}; the candidate has nothing to update from.`);
   const body = buildAgentUpdateBody({ ...candidate, skills: resolveCandidateSkills(candidate, resolution) }, candidate.agent.fromVersion);
+  const completeBody = withMcpServerReplacement(body, candidate.mcpServers, from.mcpServers);
   if (candidate.systemSha256 === from.systemSha256) {
     if (system !== undefined) throw new Error("The candidate keeps the prompt of the version it updates; do not send `system`.");
-    return body;
+    return completeBody;
   }
   if (system === undefined) throw new Error("The candidate changes the prompt: pass the reviewed managed-agents/djonik.md body.");
   if (sha256(system) !== candidate.systemSha256) throw new Error("System prompt does not match the candidate's reviewed SHA-256.");
-  return { ...body, system };
+  return { ...completeBody, system };
 }

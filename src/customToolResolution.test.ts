@@ -26,6 +26,18 @@ import {
 
 const TOOL = "trello_work_history";
 
+test("board snapshot replay settles one read-only use id once", async () => {
+  const table = new CustomToolResolution(["trello_board_snapshot"]);
+  let calls = 0;
+  const send = async () => {};
+  table.observeUse({ id: "snap", name: "trello_board_snapshot", input: {} });
+  const execute: CustomToolExecutor = async () => { calls += 1; return { isError: false, content: '{"board":"B"}' }; };
+  await table.resolveBlocking(["snap"], execute, send);
+  await table.resolveBlocking(["snap"], execute, send);
+  assert.equal(calls, 1);
+  assert.equal(table.result("snap")?.content, '{"board":"B"}');
+});
+
 function harness(executorImpl?: CustomToolExecutor, sendErrors: unknown[] = []) {
   const table = new CustomToolResolution([TOOL]);
   const executed: unknown[] = [];

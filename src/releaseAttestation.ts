@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { BUILT_IN_TOOL_NAMES, type DjonikRelease } from "./release.js";
 import { REMINDER_TOOL } from "./reminderTool.js";
 import { TRELLO_WORK_HISTORY_TOOL } from "./trelloWorkHistory.js";
+import { TRELLO_BOARD_SNAPSHOT_TOOL } from "./trelloBoardSnapshot.js";
 
 /**
  * Startup attestation of the serving release (#33).
@@ -22,6 +23,7 @@ import { TRELLO_WORK_HISTORY_TOOL } from "./trelloWorkHistory.js";
  *  executable by this revision; no reviewed release exposes it yet (a separately authorized release adds it). */
 export const SUPPORTED_CUSTOM_TOOLS: Readonly<Record<string, { description: string; input_schema: unknown }>> = {
   [TRELLO_WORK_HISTORY_TOOL.name]: TRELLO_WORK_HISTORY_TOOL,
+  [TRELLO_BOARD_SNAPSHOT_TOOL.name]: TRELLO_BOARD_SNAPSHOT_TOOL,
   [REMINDER_TOOL.name]: REMINDER_TOOL,
 };
 

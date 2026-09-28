@@ -164,7 +164,12 @@ export function buildSignalFacts(input: FactsInput): SignalFacts {
         due: typeof card.due === "string" && card.due.length > 0 ? card.due : null,
         dueComplete: card.dueComplete === true,
         enteredListAt: enteredCurrent,
-        reopenedFromDoneAt: history?.reopenedFromDoneAt ?? null,
+        reopenedFromDoneAt:
+          latestEntry !== null && latestAt !== null && latestEntry.from &&
+          roleOf(latestEntry.from.id, latestEntry.from.name) === "done" &&
+          roleOf(latestEntry.id, latestEntry.name) !== "done"
+            ? new Date(latestAt).toISOString()
+            : history?.reopenedFromDoneAt ?? null,
       };
     });
 

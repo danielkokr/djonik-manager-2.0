@@ -55,6 +55,8 @@ export interface TrelloHistoryCard {
 /** An open card as the Working Rhythm fact collector reads it (#39). */
 export interface TrelloBoardCard extends TrelloHistoryCard {
   dueComplete?: boolean;
+  customFieldItems?: unknown;
+  idChecklists?: unknown;
 }
 
 export interface TrelloList {
@@ -596,6 +598,8 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 export interface TrelloWorkHistoryClientOptions {
   apiKey?: string;
   readToken?: string;
+  /** An explicit board for an isolated read-only validation fixture; ordinary production keeps single-board resolution. */
+  boardId?: string;
   fetch?: FetchLike;
   maxPages?: number;
 }
@@ -605,6 +609,7 @@ export class TrelloWorkHistoryClient {
   private readonly fetcher: FetchLike;
   private readonly maxPages: number;
   private readonly authorization: string;
+  private readonly boardId: string | undefined;
 
   constructor(options: TrelloWorkHistoryClientOptions = {}) {
     const apiKey = options.apiKey?.trim();
@@ -612,6 +617,8 @@ export class TrelloWorkHistoryClient {
     if (!apiKey || !readToken) throw new TrelloWorkHistoryError("credentials_missing");
     this.fetcher = options.fetch ?? fetch;
     this.maxPages = options.maxPages ?? MAX_ACTION_PAGES;
+    if (options.boardId !== undefined && !/^[0-9a-f]{24}$/i.test(options.boardId)) throw new TrelloWorkHistoryError("ambiguous_board");
+    this.boardId = options.boardId;
     // Trello's accepted OAuth header form; never serialise either credential in a URL or error.
     this.authorization = `OAuth oauth_consumer_key="${apiKey.replaceAll('"', "")}", oauth_token="${readToken.replaceAll('"', "")}"`;
   }
@@ -635,6 +642,11 @@ export class TrelloWorkHistoryClient {
   }
 
   async resolveSingleBoard(): Promise<{ id: string; name: string }> {
+    if (this.boardId) {
+      const board = await this.getJson(`/boards/${this.boardId}`, { fields: "id,name,closed" });
+      if (!isRecord(board) || board.id !== this.boardId || typeof board.name !== "string" || board.closed !== false) throw new TrelloWorkHistoryError("ambiguous_board");
+      return { id: board.id, name: board.name };
+    }
     const value = await this.getJson("/members/me/boards", { filter: "all", fields: "id,name" });
     if (!Array.isArray(value) || value.length !== 1 || !isRecord(value[0]) || typeof value[0].id !== "string" || typeof value[0].name !== "string") {
       throw new TrelloWorkHistoryError("ambiguous_board");
@@ -657,6 +669,25 @@ export class TrelloWorkHistoryClient {
       throw new TrelloWorkHistoryError("malformed");
     }
     return value as TrelloBoardCard[];
+  }
+
+  /** The snapshot requests its source fields explicitly; missing nested fields are a coverage error. */
+  async readSnapshotCards(boardId: string): Promise<TrelloBoardCard[]> {
+    const value = await this.getJson(`/boards/${encodeURIComponent(boardId)}/cards`, {
+      filter: "open", fields: "id,name,idList,closed,due,dueComplete,labels,idChecklists", customFieldItems: "true",
+    });
+    if (!Array.isArray(value) || value.some((card) => !isRecord(card) || typeof card.id !== "string" || typeof card.name !== "string")) {
+      throw new TrelloWorkHistoryError("malformed");
+    }
+    return value as TrelloBoardCard[];
+  }
+
+  async readCustomFieldDefinitions(boardId: string): Promise<unknown> {
+    return this.getJson(`/boards/${encodeURIComponent(boardId)}/customFields`);
+  }
+
+  async readCardChecklists(cardId: string): Promise<unknown> {
+    return this.getJson(`/cards/${encodeURIComponent(cardId)}/checklists`, { checkItems: "all", checkItem_fields: "state", fields: "id" });
   }
 
   /** Every list of the board, archived included, so a card in an archived list still resolves a name (#39). */
@@ -745,11 +776,20 @@ export class TrelloWorkHistoryClient {
 export interface CustomToolExecutionResult { isError: boolean; content: string }
 
 /** Safe boundary for the Session client: neither credentials nor raw Trello errors cross it. */
-export async function executeTrelloWorkHistoryFromEnvironment(input: unknown): Promise<CustomToolExecutionResult> {
+export async function executeTrelloWorkHistory(input: unknown, client: TrelloWorkHistoryClient, now = new Date()): Promise<CustomToolExecutionResult> {
   try {
     const request = parseTrelloWorkHistoryInput(input);
+    return { isError: false, content: JSON.stringify(await client.execute(request, now)) };
+  } catch (error) {
+    const message = error instanceof TrelloWorkHistoryError ? error.message : "Trello history request is unavailable because its input was invalid.";
+    return { isError: true, content: JSON.stringify({ error: { message } }) };
+  }
+}
+
+export async function executeTrelloWorkHistoryFromEnvironment(input: unknown): Promise<CustomToolExecutionResult> {
+  try {
     const client = new TrelloWorkHistoryClient({ apiKey: process.env.TRELLO_API_KEY, readToken: process.env.TRELLO_READ_TOKEN });
-    return { isError: false, content: JSON.stringify(await client.execute(request)) };
+    return executeTrelloWorkHistory(input, client);
   } catch (error) {
     const message = error instanceof TrelloWorkHistoryError ? error.message : "Trello history request is unavailable because its input was invalid.";
     return { isError: true, content: JSON.stringify({ error: { message } }) };
