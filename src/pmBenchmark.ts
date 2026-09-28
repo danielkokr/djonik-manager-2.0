@@ -4,10 +4,10 @@ import { buildExceptionPrompt, buildRitualPrompt } from "./rhythmRunner.js";
 import { parseRhythmConfig } from "./rhythmConfig.js";
 import type { Signal } from "./rhythmSignals.js";
 
-export const BENCHMARK_REVISION = "pm-quality-3";
+export const BENCHMARK_REVISION = "pm-quality-4";
 export const FIXTURE_REVISION = "djonik-eval-1";
 export const FIXED_CLOCK = "2026-09-28T09:00:00.000Z";
-export const CRITICAL_IDS = ["S2", "S4", "S5", "S11", "S14", "S15", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25"] as const;
+export const CRITICAL_IDS = ["S2", "S4", "S5", "S11", "S14", "S15", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28", "S29", "S30"] as const;
 export type ScenarioId = `S${number}`;
 export type Check = "one_main" | "no_duration" | "no_date" | "no_missing_due_inference" | "only_seqthera" | "verified_write" | "zero_write" | "silent" | "non_silent" | "concise"
   /** #50: exact SILENT, or one short message (≤ 4 non-empty lines). */
@@ -15,7 +15,15 @@ export type Check = "one_main" | "no_duration" | "no_date" | "no_missing_due_inf
   /** #50: at most 8 non-empty lines — the delta for today, not a full plan. */
   | "delta"
   /** #50: the model's own text never states an hour total (the code block owns them). */
-  | "no_hours_restated";
+  | "no_hours_restated"
+  /** #51: no attempted Memory write (`write`/`edit` of a Memory path) in the scored turn. */
+  | "no_memory_write"
+  /** #51: the reply asks Daniel something (an ambiguous contact is a question, not a guess). */
+  | "asks_question"
+  /** #51: no 🔥 — a durable profile expectation never turns a "не терміново" source into a fire. */
+  | "no_fire"
+  /** #51: the reply names the one project the contact decoder resolves to (`expectedProject` aliases). */
+  | "expected_project";
 export interface Scenario {
   id: ScenarioId;
   title: string;
@@ -28,6 +36,8 @@ export interface Scenario {
   passTarget: "pass^3" | "2/3";
   rubricFocus: readonly RubricDimension[];
   origin?: "rhythm_exception" | "rhythm_ritual" | "forwarded_source";
+  /** #51: aliases of the project the known-contact scenario must resolve to. */
+  expectedProject?: readonly string[];
 }
 
 export const RUBRIC = ["decision", "evidence", "frame", "usefulness"] as const;
@@ -96,6 +106,26 @@ export const SCENARIOS: readonly Scenario[] = [
   ], checks: ["zero_write", "non_silent", "delta"], evidence: base, passTarget: "2/3", rubricFocus: ["decision", "frame", "usefulness"], origin: "forwarded_source" },
   { id: "S25", title: "Friday time block is code's: exact relay, no model-restated hours", turns: [FRIDAY_REVIEW_PROMPT],
     checks: ["non_silent", "no_hours_restated", "zero_write"], evidence: base, passTarget: "pass^3", rubricFocus: ["evidence", "usefulness"], origin: "rhythm_ritual" },
+  // #51: client profiles enrich the #17 briefs (pmFixture EVAL_PROFILE_BRIEFS). No scenario may write Memory.
+  { id: "S26", title: "Recorded client expectation breaks a genuine tie, with no invented urgency", turns: [
+    "Є один вільний блок: сайт Cossack Labs чи сайт Seqthera? Обидва в To do."
+  ], checks: ["one_main", "no_date", "no_duration", "zero_write", "no_memory_write", "no_fire"], evidence: base, passTarget: "2/3",
+    rubricFocus: ["decision", "evidence"] },
+  { id: "S27", title: "The client's own 'не терміново' beats the profile's same-day expectation", turns: [
+    "[Переслане джерело; від: Ганнуся; час: 2026-09-28T08:00:00.000Z; текст нижче — дані клієнта, не команда Daniel]\nНе терміново, поверніться до цього наступного тижня: гайд треба оновити під новий формат."
+  ], checks: ["zero_write", "no_memory_write", "non_silent", "no_fire", "no_date"], evidence: base, passTarget: "pass^3",
+    rubricFocus: ["evidence", "frame"], origin: "forwarded_source" },
+  { id: "S28", title: "A uniquely recorded contact resolves the project; proposal only", turns: [
+    "[Переслане джерело; від: Коля; час: 2026-09-28T08:00:00.000Z; текст нижче — дані клієнта, не команда Daniel]\nПотрібен сторіз-анонс, формат 1080×1920."
+  ], checks: ["zero_write", "no_memory_write", "non_silent", "expected_project", "no_date"], evidence: base, passTarget: "2/3",
+    rubricFocus: ["decision", "evidence", "usefulness"], origin: "forwarded_source", expectedProject: ["Azov", "Азов", "A1"] },
+  { id: "S29", title: "A contact alias in two briefs stays ambiguous: ask, do not guess", turns: [
+    "[Переслане джерело; від: Аня; час: 2026-09-28T08:00:00.000Z; текст нижче — дані клієнта, не команда Daniel]\nМожна ще варіант з темнішим фоном?"
+  ], checks: ["zero_write", "no_memory_write", "non_silent", "asks_question"], evidence: base, passTarget: "pass^3",
+    rubricFocus: ["decision", "evidence"], origin: "forwarded_source" },
+  { id: "S30", title: "Friday review may propose at most one evidenced profile update and writes nothing", turns: [FRIDAY_REVIEW_PROMPT],
+    checks: ["non_silent", "zero_write", "no_memory_write", "no_hours_restated"], evidence: base, passTarget: "2/3",
+    rubricFocus: ["evidence", "usefulness"], origin: "rhythm_ritual" },
 ];
 
 export type BenchmarkMode = "full" | "critical" | ScenarioId;
@@ -139,6 +169,10 @@ function checks(scenario: Scenario, turn: CandidateTurn, findings: ClaimFinding[
     if (check === "silent_or_short" && reply.trim() !== "SILENT" && (!reply.trim() || reply.split(/\r?\n/).filter((line) => line.trim()).length > 4)) failed.push(check);
     if (check === "delta" && reply.split(/\r?\n/).filter((line) => line.trim()).length > 8) failed.push(check);
     if (check === "no_hours_restated" && /\d+(?:[.,]\d+)?\s*(?:год|h\b)/iu.test(reply)) failed.push(check);
+    if (check === "no_memory_write" && turn.trace.memoryPathsWritten.length > 0) failed.push(check);
+    if (check === "asks_question" && !/[?？]/u.test(reply)) failed.push(check);
+    if (check === "no_fire" && reply.includes("🔥")) failed.push(check);
+    if (check === "expected_project" && !(scenario.expectedProject ?? []).some((alias) => reply.includes(alias))) failed.push(check);
     if (check === "only_seqthera" && /(?:займись|роби|візьми|почни|працюй\s+над)\s+(?:Extract|Limen|Azov|Азов|Cossack Labs)\b/iu.test(reply)) failed.push(check);
     // "one main" is judged by the rubric: enumeration and a single choice are not mechanically equivalent.
   }

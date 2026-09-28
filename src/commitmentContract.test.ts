@@ -119,7 +119,10 @@ test("#34 next_check: none until Daniel accepts a date; a proposed date is not d
   assert.match(recordTemplate().join("\n"), /next_check: <check date Daniel accepted, or none>/);
   const check = rule("next_check stays none");
   assert.match(check, /next_check stays none until Daniel accepts a check date; waiting without one is fine/);
-  assert.match(check, /You may ask or propose one; yours is recorded only once he accepts, in the same file/);
+  // #51 dedupe (docs/88 §14): "yours is recorded only once he accepts" restated the first clause and the Accept rule.
+  assert.match(check, /You may ask or propose one\./);
+  assert.match(rule("Accept:"), /Your unanswered proposal is not acceptance/);
+  assert.match(rule("Correction"), /edits the same file/);
   assert.doesNotMatch(M, /default (check|next_check)|next_check (defaults|is set) to/i, "no default or derived check date");
 });
 
@@ -171,7 +174,8 @@ test("#34 G resolution: Daniel's explicit confirmation resolves it, with minimal
 test("#34 H new Session: retrieve the durable record first, fresh Trello only for current state, no transcript", () => {
   const retrieval = rule("In a new session");
   assert.match(retrieval, /when Daniel refers to an earlier outcome, search commitments\/ first/);
-  assert.match(retrieval, /read a linked card fresh if its current state matters/);
+  // #51 dedupe (docs/88 §14): the fresh-card read is the one "Never store … read them fresh by card id" rule.
+  assert.match(rule("Never store"), /read them fresh by card id/);
   assert.match(retrieval, /If nothing matches, say so; do not reconstruct it/);
   // Retrieval is cue-driven, not a Memory read on every turn (docs/04 §17 cost evidence).
   assert.doesNotMatch(M, /every turn|each turn|always read/i);
@@ -180,7 +184,9 @@ test("#34 H new Session: retrieve the durable record first, fresh Trello only fo
 test("#34 I stale Memory vs fresh Trello: current card facts are never stored and fresh Trello wins on them", () => {
   const facts = rule("Never store");
   assert.match(facts, /Never store the card's current list, status, due, labels, members or checklist/);
-  assert.match(facts, /read them fresh by card id\. Fresh Trello wins on current state but alone does not resolve a commitment/);
+  assert.match(facts, /read them fresh by card id\. Fresh Trello alone does not resolve a commitment/);
+  // #51 dedupe (docs/88 §14): "fresh Trello wins on current state" is the first paragraph's one canonical rule.
+  assert.match(M, /fresh external tool reads always outrank what is remembered here for current status/);
 });
 
 test("#34 J weak resolution evidence: a Done card does not prove the awaited outcome", () => {

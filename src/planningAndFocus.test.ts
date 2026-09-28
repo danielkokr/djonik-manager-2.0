@@ -223,7 +223,9 @@ test("the merged Skill is smaller than the two it replaces", () => {
   // #45 grew it on purpose: every case now states its premise and source, two empty-slot cases and the approved
   // docs/77 answer shape were added (7577 → ~11 KB, much of it two-byte Cyrillic). Reviewed; the next growth needs a new review.
   // #50 adds ~300 B (week stakes, the change-today delta, the next-step line on return); raised for Product Lead review.
-  assert.ok(bytes <= 12750, `review planning-and-focus growth (${bytes} B); 12750 includes #47 snapshot, #48 Size and #50 focus guidance`);
+  // #51 adds the client-profile section (~1.1 KB: schema, missing-fact question, write/provenance) and folds the profile
+  // tie-break into the existing week-frame bullet instead of a new case; raised for Product Lead review (docs/88 §13).
+  assert.ok(bytes <= 13800, `review planning-and-focus growth (${bytes} B); 13800 includes #47 snapshot, #48 Size, #50 focus and #51 profiles`);
 });
 
 // --- Memory contract (#42) -----------------------------------------------------------------------------
@@ -253,7 +255,7 @@ test("#42 Memory: the week plan lifecycle — only on acceptance; replaced by th
 
 test("#42 Memory: accepted context is never live task state — no day plans, no card fields, fresh reads win", () => {
   assert.match(places(), /No day plans/i);
-  assert.match(places(), /no card state/i);
+  // #51 dedupe (docs/88 §14): "no card state" restated the first paragraph's "Do not store live Trello/task state".
   assert.match(M, /Do not store live Trello\/task state/);
   assert.match(M, /fresh external tool reads always outrank what is remembered here for current status/);
   assert.doesNotMatch(places(), /\b(?:list|due|labels?|members?|checklists?|lastActivityAt)\b\s*:/, "no Trello field in the plan record");

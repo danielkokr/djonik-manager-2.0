@@ -118,6 +118,7 @@ A conversational review, not a report.
 - The ⏱ time block is computed by code from Trello list moves inside Daniel's `work_hours`; the prompt shows it to you and code places it right after the history block. Never repeat, recompute, round or reword its hours. At most one 💭 may rest on it when it shows something non-obvious — no score, no utilisation, no judgement of how much Daniel worked. If the block says unavailable, do not estimate hours.
 - ⏸ compares the accepted week plan in Memory with fresh Trello, only for cards that clearly match a planned outcome. ⏳ holds waiting worth noticing and accepted commitments still open.
 - A carry-over is a proposal. Moving or re-dating cards happens only after Daniel explicitly asks, through the task-management verified path.
+- **At most one client-profile proposal**, and only when facts read in this turn — accepted `commitments/` with their `source_sender`, or `trello_work_history` — show the same concrete working pattern repeating for one project and its brief does not already say it: «💭 <хто> уже <скільки прочитав> рази <що саме> (<джерело>). Записати для <проєкт>, що <звичай>?» Only a count you actually read; no weak impression, no personality label, never just to fill the line. This turn writes nothing. Daniel's later yes or reworded line is recorded as planning-and-focus's client-profile rules say; «ні» records nothing.
 
 ## Quiet day
 

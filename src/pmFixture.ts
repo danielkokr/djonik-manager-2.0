@@ -32,6 +32,8 @@ export function cardsForScenario(scenario: Scenario): readonly EvalCard[] {
   if (scenario.id === "S2") return EVAL_CARDS.map(({ size: _size, ...card }) => card);
   // #50 S22: nothing competes with the budgeted Seqthera concept — the Cossack Labs deck has no due.
   if (scenario.id === "S22") return EVAL_CARDS.map(({ due: _due, ...card }) => card);
+  // #51 S26: no due or Size separates the Cossack Labs and Seqthera sites; only the recorded expectations differ.
+  if (scenario.id === "S26") return EVAL_CARDS.map(({ due: _due, size: _size, ...card }) => card);
   return EVAL_CARDS;
 }
 export const EVAL_MEMORIES: Readonly<Record<string, string>> = {
@@ -42,8 +44,75 @@ export const EVAL_MEMORIES: Readonly<Record<string, string>> = {
   "/commitments/seqthera.md": "Eval fixture only. Accepted commitment: send the Seqthera concept for review. No date is recorded.",
 };
 
+/**
+ * #51: representative excerpts of the PO-approved #17 briefs (issue #17 comment 2026-09-17, moved to `projects/` by #37),
+ * without rates or other commercial detail. Eval-only; they stand in for "what the brief already says".
+ */
+export const ISSUE_17_BRIEF_EXCERPTS: Readonly<Record<string, string>> = {
+  "extract": "# Extract\nEval fixture only; excerpt of the approved #17 brief.\nAliases: Extract, Екстракт.\n" +
+    "Working model:\n- communication is mostly async via messages;\n- collaboration can be slowed by long approvals;\n" +
+    "- ambiguous or noncommittal client feedback is a recurring friction point.\n" +
+    "Decision-maker: Anna is an important client-side decision-maker.\n",
+  "cossack-labs": "# Cossack Labs\nEval fixture only; excerpt of the approved #17 brief.\nAliases: Cossack Labs, CL.\n" +
+    "Working model:\n- work is coordinated through calls and messages;\n- recurring sync calls: Tuesday 13:30 and Thursday 14:00.\n" +
+    "Decision-makers / important contacts: Ivan, Zhenya.\n" +
+    "Recurring friction:\n- ambiguous feedback;\n- high perfectionism from a key decision-maker can prolong iterations and approvals.\n",
+  "seqthera": "# Seqthera\nEval fixture only; excerpt of the approved #17 brief.\nAliases: Seqthera, Секютера, пептиди.\n" +
+    "Client structure:\n- Daniel works through Anastasia as an intermediary;\n- there are three end-client decision-makers.\n" +
+    "Recurring friction:\n- feedback can be indirect or difficult to interpret.\n",
+  "azov-a1": "# Азов / A1\nEval fixture only; excerpt of the approved #17 brief.\nAliases: Азов, A1.\n" +
+    "Working model:\n- tasks arrive chaotically;\n- urgency is a recurring characteristic.\n" +
+    "Decision-makers / important contacts: Ганнуся, Коля.\n",
+};
+
+/**
+ * #51: the same briefs after eval-only interview answers. Every #17 line keeps its words (a heading may be normalised
+ * into a profile section); new lines carry `(сказав Daniel, <clock date>)`. `lintProfileBrief` proves both.
+ * Aliases are chosen so that «Аня» deliberately matches Extract and Seqthera (S29) and «Коля» only Azov (S28).
+ */
+export const EVAL_PROFILE_BRIEFS: Readonly<Record<string, string>> = {
+  "extract": "# Extract\nEval fixture only; excerpt of the approved #17 brief.\nAliases: Extract, Екстракт.\n" +
+    "Working model:\n- communication is mostly async via messages;\n- collaboration can be slowed by long approvals;\n" +
+    "Contacts:\n- Decision-maker: Anna is an important client-side decision-maker.\n" +
+    "- Anna (Анна, Аня) — фінальне затвердження паковання (сказав Daniel, 28.09.2026)\n" +
+    "Typical edits / friction:\n- ambiguous or noncommittal client feedback is a recurring friction point.\n",
+  "cossack-labs": "# Cossack Labs\nEval fixture only; excerpt of the approved #17 brief.\nAliases: Cossack Labs, CL.\n" +
+    "Working model:\n- work is coordinated through calls and messages;\n- recurring sync calls: Tuesday 13:30 and Thursday 14:00.\n" +
+    "Contacts:\n- Decision-makers / important contacts: Ivan, Zhenya.\n" +
+    "Expectations:\n- Перенесення показу — зазвичай зсуває затвердження на наступний синк (сказав Daniel, 28.09.2026)\n" +
+    "Typical edits / friction:\n- ambiguous feedback;\n- high perfectionism from a key decision-maker can prolong iterations and approvals.\n",
+  "seqthera": "# Seqthera\nEval fixture only; excerpt of the approved #17 brief.\nAliases: Seqthera, Секютера, пептиди.\n" +
+    "Contacts:\n- Daniel works through Anastasia as an intermediary;\n- there are three end-client decision-makers.\n" +
+    "- Anastasia (Анастасія, Настя, Аня) — посередниця, передає фідбек трьох рішення-приймачів (сказав Daniel, 28.09.2026)\n" +
+    "Expectations:\n- Перенесення на кілька днів — зазвичай ок, якщо попередити (сказав Daniel, 28.09.2026)\n" +
+    "Typical edits / friction:\n- feedback can be indirect or difficult to interpret.\n",
+  "azov-a1": "# Азов / A1\nEval fixture only; excerpt of the approved #17 brief.\nAliases: Азов, A1.\n" +
+    "Working model:\n- tasks arrive chaotically;\n- urgency is a recurring characteristic.\n" +
+    "Contacts:\n- Decision-makers / important contacts: Ганнуся, Коля.\n" +
+    "- Ганнуся — затверджує макети збору (сказав Daniel, 28.09.2026)\n- Коля — ставить задачі на соцмережі (сказав Daniel, 28.09.2026)\n" +
+    "Expectations:\n- Ганнуся — зазвичай чекає відповідь того ж дня (сказав Daniel, 28.09.2026)\n",
+};
+
+/** #51 S30: three resolved Azov commitments whose accepted source quotes show the same short-turnaround request. */
+const S30_COMMITMENTS: Readonly<Record<string, string>> = Object.fromEntries([
+  ["banner-preview", "прев'ю банера", "Потрібно прев'ю банера сьогодні до вечора."],
+  ["stories-set", "набір сторіз", "Терміново, сторіз треба на ранок."],
+  ["poster-fix", "правки плаката", "Можна правки плаката сьогодні? Дуже горить."],
+].map(([slug, outcome, quote]) => [`/commitments/azov-a1/${slug}.md`,
+  `# ${outcome}\nproject: Азов / A1\ncard: none\nstatus: resolved\nwaiting_on: none\nnext_check: none\n` +
+  `accepted: Daniel прийняв пропозицію з пересланого\nsource_sender: Ганнуся\nsource_quote: ${quote}\nclosed: Daniel сказав, що надіслав\n`]));
+
+const PROFILE_SCENARIOS = ["S26", "S27", "S28", "S29", "S30"];
+
 export function memoriesForScenario(scenario: Scenario): Record<string, string> {
   const memories = { ...EVAL_MEMORIES };
+  if (PROFILE_SCENARIOS.includes(scenario.id)) {
+    // #51: the enriched #17 briefs replace the one-line eval briefs; no accepted commitment competes with the profile.
+    for (const [slug, brief] of Object.entries(EVAL_PROFILE_BRIEFS)) memories[`/projects/${slug}.md`] = brief;
+    delete memories["/commitments/seqthera.md"];
+    memories["/priorities.md"] = "Eval fixture only. No accepted commitments. Cossack Labs, Seqthera, Extract and Azov have comparable priority this week.";
+    if (scenario.id === "S30") Object.assign(memories, S30_COMMITMENTS);
+  }
   if (scenario.id === "S6") {
     memories["/commitments/extract.md"] = "Eval fixture only. Accepted external commitment: send Extract packaging review on Monday 28 September 2026. Daniel now says not to touch Extract today.";
   }

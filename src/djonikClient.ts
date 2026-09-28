@@ -506,6 +506,12 @@ export type DjonikTraceEvent =
  *
  * Issue #54: a commitment's `next_check` is Memory context, never a scheduled message; a reminder is the code-owned
  * `reminder` tool. The last rule keeps them apart and allows a reminder promise only after that tool saved it.
+ *
+ * Issue #51: client profiles enrich the existing #17/#37 project brief (`projects/<slug>.md`), never a second store.
+ * Only the storage boundary lives here (one brief, human-only facts); the profile semantics live in the
+ * planning-and-focus Skill. To fit the cap, four restatements of rules already present elsewhere in this text were
+ * removed (docs/88 §14): "no card state" (first paragraph), "(on someone else)" (waiting_on), the re-proposal clause
+ * of next_check (Accept), and the fresh-card clauses (Never store / first paragraph).
  */
 export const DJONIK_MEMORY_INSTRUCTIONS =
   "A suggestion is " +
@@ -520,14 +526,16 @@ export const DJONIK_MEMORY_INSTRUCTIONS =
   "it, never inferred. plans/current-week.md is the one accepted week plan: week: <its " +
   "Monday, from the clock line>, up to 3 outcomes with project and why, what he chose " +
   "to drop. A newly accepted week plan replaces it; an accepted change edits it. No day " +
-  "plans, no card state. Another week's plan is not this week's frame.\n" +
+  "plans. Another week's plan is not this week's frame. projects/<slug>.md is the one brief " +
+  "per project: extend it, never a second file; client-profile facts only from Daniel's words " +
+  "or yes, as planning-and-focus says.\n" +
   "\n" +
   "Commitments, waiting and follow-ups: one small file per accepted outcome at " +
   "commitments/<project-slug>/<outcome>.md (slug as in projects/), with only:\n" +
   "# <accepted outcome>\n" +
   "project: <project>\n" +
   "card: <id/URL from a fresh Trello read, or none>\n" +
-  "status: active | waiting (on someone else) | resolved | cancelled\n" +
+  "status: active | waiting | resolved | cancelled\n" +
   "waiting_on: <who, only if Daniel named them, or none>\n" +
   "next_check: <check date Daniel accepted, or none>\n" +
   "accepted: <a few words on how Daniel stated or accepted it; no transcript>\n" +
@@ -544,10 +552,9 @@ export const DJONIK_MEMORY_INSTRUCTIONS =
   "none. Keep only dates from Daniel or an authoritative source; write a check date as " +
   "YYYY-MM-DD (his words) only if today's date is certain, else his words, then confirm.\n" +
   "- next_check stays none until Daniel accepts a check date; waiting without one is fine. " +
-  "You may ask or propose one; yours is recorded only once he accepts, in the same file.\n" +
+  "You may ask or propose one.\n" +
   "- Never store the card's current list, status, due, labels, members or checklist; read them " +
-  "fresh by card id. Fresh Trello wins on current state but alone does not resolve a " +
-  "commitment.\n" +
+  "fresh by card id. Fresh Trello alone does not resolve a commitment.\n" +
   "- Identity: before writing, look for the same accepted outcome in commitments/ (card id first, " +
   "else project + outcome) and update it, never duplicate it. Project is part of identity: " +
   "never reuse or merge across projects. If the match or project is unclear, ask one question; " +
@@ -564,9 +571,8 @@ export const DJONIK_MEMORY_INSTRUCTIONS =
   "verified path. If he may mean the card's due, not the check, ask.\n" +
   "- Say saved only after a successful write/edit result, never before; error/unclear: not saved. " +
   "Read-back optional.\n" +
-  "- In a new session, when Daniel refers to an earlier outcome, search commitments/ first; " +
-  "read a linked card fresh if its current state matters. If nothing matches, say so; do not " +
-  "reconstruct it.\n" +
+  "- In a new session, when Daniel refers to an earlier outcome, search commitments/ first. " +
+  "If nothing matches, say so; do not reconstruct it.\n" +
   "- A next_check never means you will message first and is not a reminder. Promise a reminder " +
   "only after the reminder tool saved it.";
 

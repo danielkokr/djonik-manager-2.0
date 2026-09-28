@@ -5,13 +5,14 @@ import { fakeGrader, parseGraderResult } from "./pmGrader.js";
 import { cardsForScenario, memoriesForScenario } from "./pmFixture.js";
 
 const trace: CandidateTurn["trace"] = { sessionTurnIndex: 1, toolNames: [], skillPaths: [], memoryPathsRead: [], memoryPathsWritten: [], cardIdsRead: [], cardIdsWritten: [], mutations: [], unsupportedConcrete: [] };
-test("canonical S1–S16 retained; #48 appends S17–S21; #50 appends S22–S25", () => {
+test("canonical S1–S16 retained; #48 appends S17–S21; #50 appends S22–S25; #51 appends S26–S30", () => {
   assert.deepEqual(SCENARIOS.slice(0, 16).map((s) => s.id), Array.from({ length: 16 }, (_, i) => `S${i + 1}`));
   assert.deepEqual(SCENARIOS.slice(16, 21).map((s) => s.id), ["S17", "S18", "S19", "S20", "S21"]);
-  assert.deepEqual(SCENARIOS.slice(21).map((s) => s.id), ["S22", "S23", "S24", "S25"]);
+  assert.deepEqual(SCENARIOS.slice(21, 25).map((s) => s.id), ["S22", "S23", "S24", "S25"]);
+  assert.deepEqual(SCENARIOS.slice(25).map((s) => s.id), ["S26", "S27", "S28", "S29", "S30"]);
   assert.deepEqual(selectScenarios("critical").map((s) => s.id), [...CRITICAL_IDS]);
   assert.deepEqual(selectScenarios("S14").map((s) => s.id), ["S14"]);
-  assert.equal(selectScenarios("full").length, 25);
+  assert.equal(selectScenarios("full").length, 30);
   assert.equal(SCENARIOS.find((s) => s.id === "S14")?.turns.length, 3);
 });
 test("#48 offline fixtures preserve source attribution, exact link and two plausible card targets", () => {

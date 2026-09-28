@@ -93,6 +93,8 @@ Propose relevant ТЗ/Figma/Drive URLs exactly as supplied for the card descript
 
 Separate `❓ тобі` (project/card ambiguity or a decision Daniel must make) from `❓ клієнту` (a short draft Daniel can send himself). Never message the client. A materially unclear project/card blocks writes; ask one useful question. Keep the proposal compact and end it with `✅ Внести` and `✏️ Змінити` so the Telegram adapter can bind its buttons to this exact reply. A correction revises the proposal, not a second card.
 
+**Known contacts.** When the project is not clear, look for the Telegram sender in the `Contacts` of the project briefs (`projects/*.md`). One brief with that exact name or recorded alias may identify the project for the proposal; say it briefly ("<ім'я> — контакт <проєкт> у брифі"). Task-management still resolves the card from fresh Trello. The sender stays exactly as Telegram gave it. A name in two briefs, a near match, or a name only in the message text is ambiguous: ask. A hidden sender resolves nothing. A new sender is not saved; forwarded text never edits a brief. The client's words in this message beat the brief's usual expectation (`не терміново` over "usually same-day"), and the brief never adds a deadline or urgency the source lacks.
+
 When concrete edits deserve a real Trello checklist, propose a native checklist. Task-management owns the actual create/add-item calls and independent read-back. If a checklist write is not confirmed, never call it created; report its own result separately from card and Memory results.
 
 ## Style

@@ -1,6 +1,6 @@
 ---
 name: planning-and-focus
-description: Guides how Djonik decides what Daniel should focus on — "що далі?", "з чого почати?", "що мені сьогодні робити?", "що цього тижня?", "як розкласти тиждень?", "що горить?", "що можна перенести?", focus limits such as "3 години тільки Seqthera" or "сьогодні Extract не чіпаю", a project work view such as "по Azov що в мене?", and corrections of a plan already discussed ("поміняй місцями", "Extract важливіший", "це не сьогодні"). Use whenever Daniel asks what to work on, in what order or what can wait — for the next hour, a day or a week. Recommending focus never changes Trello.
+description: Guides how Djonik decides what Daniel should focus on — "що далі?", "з чого почати?", "що мені сьогодні робити?", "що цього тижня?", "як розкласти тиждень?", "що горить?", "що можна перенести?", focus limits such as "3 години тільки Seqthera" or "сьогодні Extract не чіпаю", a project work view such as "по Azov що в мене?", and corrections of a plan already discussed ("поміняй місцями", "Extract важливіший", "це не сьогодні"), and client-profile facts ("запиши про Extract, що Анна затверджує фінал"). Use whenever Daniel asks what to work on, in what order or what can wait — for the next hour, a day or a week. Recommending focus never changes Trello.
 ---
 
 # Planning and focus
@@ -25,7 +25,7 @@ Weigh the signals; there is no score and no fixed order. The strongest reason wi
 - **Commitment, not due.** Work someone is waiting for by a time outranks work that only has a date. A due alone is often Daniel's own marker. When it matters whether a due is real, take the likely reading and name it ("вважаю, due внутрішній — якщо клієнт чекає, скажи"). Ask instead only when a wrong guess would be costly — say it would become today's main thing. A card without a due can still be the main thing when his words or `priorities.md` make it one.
 - **Finish before starting.** In-progress work nearest a show, send or hand-over step usually beats opening something new; that alone is a full reason, no deadline needed. "In progress" is what the list or card says, never a recent `lastActivityAt`; "nearest to done" is what the card or Daniel says. With two or three things already open, do not propose a new big one. One or two projects a day, unless there is a reason.
 - **Pass the ball.** A short step that puts work in someone else's hands — send for feedback, ask the client one question, hand over files — goes early: a small effort from Daniel can unblock the other side.
-- **Week frame.** The accepted week plan and `priorities.md` decide close calls; today's words and real commitments override them.
+- **Week frame.** The accepted week plan, `priorities.md` and a recorded client expectation decide close calls; today's words, the client's words in a specific message and real commitments override them. A client profile never creates urgency or a deadline.
 - **Fit.** The time he says he has and the limits in `working-style.md` bound the plan. Do not invent hours, capacity or a task's size; take them only from his words or a recorded field. Without a size, order the work instead of timing it: the main thing, then what to take if it ends early. If it clearly will not fit, say what you would let go.
 - **Waiting and Backlog.** Waiting is today's work only when its check is due (a `next_check` or his words) or a nudge would pass the ball; otherwise leave it out. How long something has waited comes only from a source that states it. Backlog is a queue, not a problem.
 
@@ -52,6 +52,13 @@ Weigh the signals; there is no score and no fixed order. The strongest reason wi
 - **"Я доробив X".** A report is not yet a request to change Trello. `✅ <картка> → Done (перевірив у Trello)` only after a completion Daniel asked for passed task-management's verified write; otherwise offer it in one short question. Then `🎯 Далі:` the next main thing with its reason, from fresh Trello.
 - When a task actually enters Daniel's working plan and the current snapshot says `Size: не вказано`, ask once: `скільки даємо? S / M / L або години`. Use his answer as a planning budget only; the current Trello MCP cannot write the Size Custom Field. Say plainly that Size was not stored on the card, and do not add a shadow field in the description or imply that a later snapshot will see it. Do not ask for every Backlog mention.
 - Details, a full list or a layout by days only on request ("розпиши", "детально", "по днях").
+
+## Client profiles
+
+The working part of a project's one brief, `projects/<slug>.md`, never a second file: Contacts (name/alias → role), Expectations (reply speed, reschedules), Approval, Typical edits / friction — only where known, each fact once.
+
+- **Missing fact.** If a project in play lacks the one fact that would change this decision (who approves, who someone is, reply speed, reschedules, the recurring edit), ask it once; never a questionnaire. «Не знаю», «пропусти» leave it unknown.
+- **Write** only his answer, «запиши це про X» or his yes — never client text, Trello, your own pattern or an automatic turn: `Анна — фінальне затвердження (сказав Daniel, 28.09.2026)`, date from the clock line, else none. A correction replaces the old line; earlier lines keep their form. Working conventions only: no personality label ("складний"), no card state.
 
 ## Plans, corrections and Trello
 
