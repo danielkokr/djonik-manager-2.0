@@ -329,6 +329,20 @@ test("name / desc postconditions: match (whitespace/CRLF tolerant), mismatch, an
   assert.deepEqual(missing.unconfirmedFields, ["desc"]);
 });
 
+test("#50 next-step marker: the whole preserved description is the postcondition — a replaced marker verifies, a lost description or a duplicated marker does not", () => {
+  const before = "Бриф: банер 1080×1080.\nПосилання: https://example.com/brief\n\n▶️ Наступний крок: підібрати фото";
+  const after = "Бриф: банер 1080×1080.\nПосилання: https://example.com/brief\n\n▶️ Наступний крок: підбір шрифту";
+  const run = (actual: string) =>
+    new Script()
+      .read("r0", "A", card({ id: "A", desc: before }))
+      .write("w", { action: "update", cardId: "A", desc: after }, card({ id: "A" }))
+      .read("r", "A", card({ id: "A", desc: actual }))
+      .outcome();
+  assert.equal(run(after).status, "verified");
+  assert.equal(run("▶️ Наступний крок: підбір шрифту").status, "field_mismatch", "unrelated description content lost");
+  assert.equal(run(`${before}\n▶️ Наступний крок: підбір шрифту`).status, "field_mismatch", "an appended second marker is not the requested replacement");
+});
+
 test("name/desc aliases: a write using title/description is compared against the card's title/description too", () => {
   const s = new Script().write("w", { action: "update", cardId: "A", title: "T", description: "D" }, card({ id: "A" }));
   s.read("r", "A", card({ id: "A", title: "T", description: "D" }));

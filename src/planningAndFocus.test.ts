@@ -222,7 +222,8 @@ test("the merged Skill is smaller than the two it replaces", () => {
   assert.ok(bytes < 5558 + 8307, `planning-and-focus is ${bytes} B; daily + weekly were 13 865 B`);
   // #45 grew it on purpose: every case now states its premise and source, two empty-slot cases and the approved
   // docs/77 answer shape were added (7577 → ~11 KB, much of it two-byte Cyrillic). Reviewed; the next growth needs a new review.
-  assert.ok(bytes <= 12500, `review planning-and-focus growth (${bytes} B); 12500 includes #47 snapshot and #48 Size guidance`);
+  // #50 adds ~300 B (week stakes, the change-today delta, the next-step line on return); raised for Product Lead review.
+  assert.ok(bytes <= 12750, `review planning-and-focus growth (${bytes} B); 12750 includes #47 snapshot, #48 Size and #50 focus guidance`);
 });
 
 // --- Memory contract (#42) -----------------------------------------------------------------------------

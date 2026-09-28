@@ -30,6 +30,8 @@ export function cardsForScenario(scenario: Scenario): readonly EvalCard[] {
   if (scenario.id === "S1") return EVAL_CARDS.map((card) =>
     card.key === "az-banner-a" || card.key === "cl-deck" ? { ...card, list: "To do" } : card);
   if (scenario.id === "S2") return EVAL_CARDS.map(({ size: _size, ...card }) => card);
+  // #50 S22: nothing competes with the budgeted Seqthera concept — the Cossack Labs deck has no due.
+  if (scenario.id === "S22") return EVAL_CARDS.map(({ due: _due, ...card }) => card);
   return EVAL_CARDS;
 }
 export const EVAL_MEMORIES: Readonly<Record<string, string>> = {
@@ -44,6 +46,9 @@ export function memoriesForScenario(scenario: Scenario): Record<string, string> 
   const memories = { ...EVAL_MEMORIES };
   if (scenario.id === "S6") {
     memories["/commitments/extract.md"] = "Eval fixture only. Accepted external commitment: send Extract packaging review on Monday 28 September 2026. Daniel now says not to touch Extract today.";
+  }
+  if (scenario.id === "S23") {
+    memories["/commitments/cossack-labs.md"] = "Eval fixture only. Accepted external commitment: send the Cossack Labs deck to the client by Tuesday 29 September 2026, 15:00 Kyiv. Status: active.";
   }
   if (scenario.id === "S13") {
     delete memories["/commitments/seqthera.md"];

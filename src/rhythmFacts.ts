@@ -30,6 +30,9 @@ export interface RhythmTrelloReader {
 /** At most this many per-card history reads per collection (one per card currently in Waiting). */
 export const MAX_WAITING_ENTRY_READS = 20;
 
+/** At most this many per-card entry reads for cards currently In progress (#50 focus: when did the stint start). */
+export const MAX_IN_PROGRESS_ENTRY_READS = 10;
+
 /**
  * The board's lists (docs/45 §LISTS: `Inbox · Backlog · This week · In progress · Waiting · Done`) mapped to
  * the Stage 1 roles. Exact names only (case and spacing aside); anything else is `other` — never guessed.
@@ -93,7 +96,7 @@ function actionDate(action: TrelloAction): number | null {
 }
 
 /** Where an action put the card, if it did: a move between lists, or the list a card was created in. */
-function listEntry(action: TrelloAction): { id: string | null; name: string | undefined; from?: { id: string | null; name: string | undefined } } | null {
+export function listEntry(action: TrelloAction): { id: string | null; name: string | undefined; from?: { id: string | null; name: string | undefined } } | null {
   const data = action.data;
   if (!data) return null;
   const before = data.listBefore;
@@ -214,14 +217,21 @@ export function createRhythmFactCollector(options: RhythmFactCollectorOptions): 
       log("[rhythm] history_unavailable");
     }
     const listsById = new Map(lists.map((list) => [list.id, list]));
-    const waiting = cards.filter((card) => card.closed !== true && listRoleFor(listsById.get(card.idList ?? "")?.name) === "waiting");
+    const inRole = (role: ListRole) => cards.filter((card) => card.closed !== true && listRoleFor(listsById.get(card.idList ?? "")?.name) === role);
+    const waiting = inRole("waiting");
     if (waiting.length > MAX_WAITING_ENTRY_READS) log("[rhythm] waiting_entries_capped");
+    // #50: an In-progress stint's start is its latest authoritative list entry, however old (focus is code-owned).
+    const inProgress = inRole("in_progress");
+    if (inProgress.length > MAX_IN_PROGRESS_ENTRY_READS) log("[rhythm] in_progress_entries_capped");
     const latestEntries = new Map<string, TrelloAction | null>();
-    for (const card of waiting.slice(0, MAX_WAITING_ENTRY_READS)) {
+    for (const [card, label] of [
+      ...waiting.slice(0, MAX_WAITING_ENTRY_READS).map((card) => [card, "waiting"] as const),
+      ...inProgress.slice(0, MAX_IN_PROGRESS_ENTRY_READS).map((card) => [card, "in_progress"] as const),
+    ]) {
       try {
         latestEntries.set(card.id, await options.reader.readLatestListEntry(card.id));
       } catch {
-        log("[rhythm] waiting_entry_unavailable");
+        log(`[rhythm] ${label}_entry_unavailable`);
       }
     }
     return buildSignalFacts({ cards, lists, history, latestEntries, projectPriorities: options.projectPriorities });

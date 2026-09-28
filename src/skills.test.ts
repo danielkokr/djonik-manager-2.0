@@ -737,3 +737,24 @@ test("studio-intake Skill does not contradict the new task-management project-id
 // Issue #29 (Wave C2): the work-review Skill contract, behavioral rubric and fixtures A-K
 // live in src/workReviewContract.test.ts (the simplified current-state contract replaced the
 // earlier slice-2 wording tests, which asserted text that no longer exists).
+
+// #50: focus start and the one next-step line belong to task-management's verified write path.
+test("#50 task-management: «беру X» moves to In progress with a verified write; a timer only from Daniel's own duration", () => {
+  const content = readSkill("task-management");
+  const start = content.indexOf("## Starting work and the next step");
+  assert.ok(start >= 0);
+  const section = content.slice(start, content.indexOf("\n## ", start + 1));
+  assert.match(section, /Never keep a copy of the focus, a timer or a next step in Memory/);
+  assert.match(section, /two plausible cards → one question, zero writes/);
+  assert.match(section, /`move` it there and verify with a direct card read/);
+  assert.match(section, /Only when Daniel himself gave a duration, call `focus_budget` `set`/);
+  assert.match(section, /No duration → no timer; a Size \(S\/M\/L\/XL\) is never a duration/);
+});
+
+test("#50 task-management: «зупинився на X» writes exactly one canonical marker, replacing the old one, verified in full", () => {
+  const content = readSkill("task-management");
+  assert.match(content, /exactly one line `▶️ Наступний крок: <X>` — replacing an existing `▶️ Наступний крок:` line, otherwise appended at the end — and every other character unchanged/);
+  assert.match(content, /ambiguous → one question, zero writes/);
+  assert.match(content, /Verify the full resulting description with a same-card read before confirming/);
+  assert.match(readSkill("planning-and-focus"), /its `▶️ Наступний крок:` line if any/, "the step is surfaced on return from the card, not Memory");
+});

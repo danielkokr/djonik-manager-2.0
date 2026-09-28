@@ -43,10 +43,12 @@ import {
 import { createFileRhythmStateStore, type RhythmStateStore } from "./rhythmState.js";
 import { createTelegramProactiveSender, enqueueClickAfterPendingText } from "./rhythmTelegram.js";
 import { createFormattedTextSender, sendFormattedMessage } from "./telegramFormat.js";
-import { executeTrelloWorkHistoryFromEnvironment, TrelloWorkHistoryClient } from "./trelloWorkHistory.js";
+import { TrelloWorkHistoryClient } from "./trelloWorkHistory.js";
 import { createReminderToolExecutor, REMINDER_TOOL_NAME } from "./reminderTool.js";
+import { createFocusBudgetExecutor, FOCUS_BUDGET_TOOL_NAME } from "./focusBudgetTool.js";
+import { createWeeklyTimeReporter } from "./weeklyTime.js";
 import { trelloCardContext } from "./reminderDelivery.js";
-import type { DjonikCustomToolExecutor } from "./djonikClient.js";
+import { createCustomToolRouter, type DjonikCustomToolExecutor } from "./djonikClient.js";
 import { transcriberFromEnvironment } from "./openAiTranscription.js";
 import {
   downloadTelegramAudio,
@@ -131,11 +133,18 @@ async function main(): Promise<number> {
     ritualsRunning: () => rhythm?.status === "running",
     log: (line) => console.log(line),
   });
-  const customToolExecutor: DjonikCustomToolExecutor = (input, context) =>
-    context.name === REMINDER_TOOL_NAME
-      ? reminderExecutor(input, { toolUseId: context.toolUseId, authority: context.authority })
-      : executeTrelloWorkHistoryFromEnvironment(input);
   const trelloReader = config.trello ? new TrelloWorkHistoryClient({ apiKey: config.trello.apiKey, readToken: config.trello.readToken }) : null;
+  /** #50 focus budgets: only when the served release exposes the tool (the unresolved r30 candidate does; r29 does not). */
+  const focusBudgetEnabled = release.customTools.includes(FOCUS_BUDGET_TOOL_NAME);
+  const focusBudgetExecutor = createFocusBudgetExecutor({
+    store: focusBudgetEnabled && statePath !== null ? stateStore(statePath) : null,
+    reader: trelloReader,
+    now: () => new Date(),
+    readConfig: reminderConfigReader(rhythmConfigSource),
+    log: (line) => console.log(line),
+  });
+  // Every custom tool goes to its own executor by exact name; an unknown name fails closed (#50 regression fix).
+  const customToolExecutor: DjonikCustomToolExecutor = createCustomToolRouter({ reminder: reminderExecutor, focusBudget: focusBudgetExecutor });
 
   const djonikSession = createSessionManager(async () => {
     try {
@@ -386,6 +395,7 @@ async function main(): Promise<number> {
             log: (line) => console.log(line),
           })
       : undefined,
+    createWeeklyTimeReporter: trelloReader ? () => createWeeklyTimeReporter({ reader: trelloReader, log: (line) => console.log(line) }) : undefined,
     runTurn: createSessionTurnRunner(djonikSession, logSessionLifecycle),
     send: createTelegramProactiveSender(bot.api, Number(telegramConfig.allowedUserId)),
     currentSessionId: () => djonikSession.currentSessionId(),

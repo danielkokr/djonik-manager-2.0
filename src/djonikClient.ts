@@ -28,6 +28,7 @@ import { executeTrelloWorkHistoryFromEnvironment, type CustomToolExecutionResult
 import { executeTrelloBoardSnapshotFromEnvironment } from "./trelloBoardSnapshot.js";
 import { CustomToolResolution } from "./customToolResolution.js";
 import { isReadOnlyReminderInput, REMINDER_TOOL_NAME, reminderConfirmationOf } from "./reminderTool.js";
+import { FOCUS_BUDGET_TOOL_NAME } from "./focusBudgetTool.js";
 import { ToolConfirmationLifecycle, type ConfirmationRecord, type ConfirmationRequest } from "./toolConfirmation.js";
 import { mutationAuthorityFor, type MutationAuthority, type TurnOrigin } from "./turnAuthority.js";
 import { buildClockHeader } from "./turnClock.js";
@@ -49,8 +50,9 @@ const WORK_HISTORY_TOOL = "trello_work_history";
 const BOARD_SNAPSHOT_TOOL = "trello_board_snapshot";
 /** The custom tools this client settles. `reminder` (#54) is side-effecting; it meets the docs/01 §13 admission
  *  rule itself: its executor keys a durable outcome record on the `custom_tool_use_id` in the same atomic write as
- *  the mutation, verifies the result by a fresh read, and refuses mutations without human authority. */
-export const SUPPORTED_CLIENT_CUSTOM_TOOLS = [WORK_HISTORY_TOOL, BOARD_SNAPSHOT_TOOL, REMINDER_TOOL_NAME] as const;
+ *  the mutation, verifies the result by a fresh read, and refuses mutations without human authority. `focus_budget`
+ *  (#50) follows the same rule for its code-owned focus budget. */
+export const SUPPORTED_CLIENT_CUSTOM_TOOLS = [WORK_HISTORY_TOOL, BOARD_SNAPSHOT_TOOL, REMINDER_TOOL_NAME, FOCUS_BUDGET_TOOL_NAME] as const;
 
 /** What a custom-tool executor learns about the call besides its input (#54). */
 export interface CustomToolCallContext {
@@ -192,6 +194,8 @@ export interface DjonikTracedTurn {
   /** An autonomous turn requested a gated (mutating) tool. The request was denied before execution, but
    *  the attempt itself is a Working Rhythm safety violation (the runner blocks the delivery). */
   autonomousMutationAttempt: boolean;
+  /** The verified #36 `answer_text` that `reply` starts with, when the exact relay composed it (#50). */
+  workHistoryAnswerText?: string;
 }
 
 /** A traced turn that failed: the original error plus what the turn did before failing. */
@@ -455,6 +459,8 @@ export type DjonikTraceEvent =
   /** Content-free (#54): this turn's successful reminder change(s) reached the reply — quoted by the model, or
    *  (`prepended`) placed first by code because the model's text did not carry the code-resolved line. */
   | { type: "reminder_confirmation_composed"; mode: "model_quoted" | "prepended"; count: number }
+  /** Content-free (#50): a `focus_budget` change's code-owned confirmation line was ensured in the reply. */
+  | { type: "focus_budget_confirmation_composed"; mode: "model_quoted" | "prepended"; count: number }
   /** Content-free (#39 Stage 3A): a tool confirmation was submitted and accepted by the API. Permission to
    *  attempt, never verification — an allowed Trello write is still verified by #31. */
   | { type: "tool_confirmation_sent"; toolName: string; decision: ConfirmationRecord["decision"]; reason: ConfirmationRecord["reason"] }
@@ -962,11 +968,50 @@ const REMINDERS_UNAVAILABLE = JSON.stringify({
   error: { code: "unavailable", message: "Reminders are unavailable in this process; nothing was saved. Tell Daniel it is not saved." },
 });
 
-/** Default executor: work history from the environment; reminders unavailable (never a silent promise). */
-export const defaultCustomToolExecutor: DjonikCustomToolExecutor = async (input, context) =>
-  context.name === REMINDER_TOOL_NAME ? { isError: true, content: REMINDERS_UNAVAILABLE }
-    : context.name === BOARD_SNAPSHOT_TOOL ? executeTrelloBoardSnapshotFromEnvironment(input)
-      : executeTrelloWorkHistoryFromEnvironment(input);
+const FOCUS_BUDGET_UNAVAILABLE = JSON.stringify({
+  ok: false,
+  error: { code: "unavailable", message: "Focus budgets are unavailable in this process; nothing was saved. Tell Daniel the timer is not set." },
+});
+
+/** A side-effecting executor bound by the serving adapter; it receives the call's id and observed authority. */
+export type SideEffectingToolExecutor = (input: unknown, context: { toolUseId: string; authority: MutationAuthority }) => Promise<CustomToolExecutionResult>;
+
+/**
+ * Routes each custom tool to its OWN executor by exact name (#50 regression fix: the adapter used to send every
+ * non-reminder call to work history, so `trello_board_snapshot` would have run the wrong tool). The two read-only
+ * Trello tools use their environment-backed executors; a side-effecting tool without a bound executor answers
+ * "unavailable" (never a silent promise); an unknown name fails closed and executes nothing.
+ */
+export function createCustomToolRouter(
+  bound: {
+    reminder?: SideEffectingToolExecutor;
+    focusBudget?: SideEffectingToolExecutor;
+    /** Test seams; production uses the environment-backed read-only executors. */
+    workHistory?: (input: unknown) => Promise<CustomToolExecutionResult>;
+    boardSnapshot?: (input: unknown) => Promise<CustomToolExecutionResult>;
+  } = {},
+): DjonikCustomToolExecutor {
+  const workHistory = bound.workHistory ?? executeTrelloWorkHistoryFromEnvironment;
+  const boardSnapshot = bound.boardSnapshot ?? executeTrelloBoardSnapshotFromEnvironment;
+  return async (input, context) => {
+    const call = { toolUseId: context.toolUseId, authority: context.authority };
+    switch (context.name) {
+      case WORK_HISTORY_TOOL:
+        return workHistory(input);
+      case BOARD_SNAPSHOT_TOOL:
+        return boardSnapshot(input);
+      case REMINDER_TOOL_NAME:
+        return bound.reminder ? bound.reminder(input, call) : { isError: true, content: REMINDERS_UNAVAILABLE };
+      case FOCUS_BUDGET_TOOL_NAME:
+        return bound.focusBudget ? bound.focusBudget(input, call) : { isError: true, content: FOCUS_BUDGET_UNAVAILABLE };
+      default:
+        return { isError: true, content: JSON.stringify({ ok: false, error: { code: "unknown_tool", message: "This custom tool is not executable by this application; nothing was done." } }) };
+    }
+  };
+}
+
+/** Default executor: the read-only Trello tools from the environment; side-effecting tools unavailable. */
+export const defaultCustomToolExecutor: DjonikCustomToolExecutor = createCustomToolRouter();
 
 /** Narrow Session-creation controls for isolated validation. Production callers retain the defaults. */
 export interface DjonikSessionOptions {
@@ -1141,6 +1186,9 @@ export async function connectToDjonik(
   /** Content-free tool uses of the CURRENT visible turn (#39), including a verification-nudge rerun.
    *  Reset once per visible turn in `sendPartsSerial`, like `turnCustomToolUseIds`. */
   let turnToolUses: DjonikToolUse[] = [];
+  /** The verified #36 `answer_text` the CURRENT visible turn's reply leads with, if any (#50: the Friday review's
+   *  code-owned time block is placed right after it). Reset once per visible turn in `sendPartsSerial`. */
+  let turnWorkHistoryAnswer: string | null = null;
   let sessionTurnIndex = 0;
   let decisionTrace: DecisionTraceCollector | null = null;
   /** Session-scoped tool-confirmation lifecycle keyed by the gated tool-use event id (#39 Stage 3A). Like
@@ -1195,12 +1243,12 @@ export async function connectToDjonik(
     return answerText === null ? { status: "unverified" } : { status: "verified", answerText };
   }
 
-  /** The `confirmation` lines of this turn's successful reminder changes (#54), in call order: one per distinct
+  /** The `confirmation` lines of this turn's successful reminder (#54) or focus-budget (#50) changes, in call order: one per distinct
    *  `custom_tool_use_id` whose one cached result the provider accepted. Errors and `list` carry none. */
-  function reminderConfirmations(): string[] {
+  function codeConfirmations(toolName: string = REMINDER_TOOL_NAME): string[] {
     const lines: string[] = [];
     for (const id of turnCustomToolUseIds) {
-      if (customTools.name(id) !== REMINDER_TOOL_NAME) continue;
+      if (customTools.name(id) !== toolName) continue;
       const state = customTools.state(id);
       const result = customTools.result(id);
       if (result === undefined || result.isError || (state !== "SUBMITTED" && state !== "RESOLVED")) continue;
@@ -1487,7 +1535,7 @@ export async function connectToDjonik(
           // the coordinator may legitimately have nothing to add after it.
           const workHistoryVerified = workHistoryVerdict().status === "verified";
           // #54: so is a successful reminder change — its code-resolved confirmation is the answer.
-          const reminderConfirmed = reminderConfirmations().length > 0;
+          const reminderConfirmed = codeConfirmations().length > 0 || codeConfirmations(FOCUS_BUDGET_TOOL_NAME).length > 0;
           if (
             !reply &&
             idleVerdict !== "unverified" &&
@@ -1557,6 +1605,7 @@ export async function connectToDjonik(
     specialist.beginTurn();
     turnCustomToolUseIds = [];
     turnToolUses = [];
+    turnWorkHistoryAnswer = null;
     preAnchorEventsQuarantined = 0;
     mcpToolCallsById.clear();
     turnTelemetry = createTurnTelemetryCollector(turnSource, session.id, previousSessionUsage);
@@ -1688,11 +1737,18 @@ export async function connectToDjonik(
 
       // Issue #54: a reminder change this turn is a code-owned fact. Its code-resolved `confirmation` line must reach
       // Daniel exactly; when the model's text does not quote it, code places it first (never re-dated by the model).
-      const reminderLines = reminderConfirmations();
+      const reminderLines = codeConfirmations();
       if (reminderLines.length > 0) {
         const composedReminders = composeReminderConfirmations(commentary, reminderLines);
         onTrace?.({ type: "reminder_confirmation_composed", mode: composedReminders.mode, count: reminderLines.length });
         commentary = composedReminders.text;
+      }
+      // Issue #50: a focus budget change is the same kind of code-owned fact (its start/check time come from code).
+      const focusLines = codeConfirmations(FOCUS_BUDGET_TOOL_NAME);
+      if (focusLines.length > 0) {
+        const composedFocus = composeReminderConfirmations(commentary, focusLines);
+        onTrace?.({ type: "focus_budget_confirmation_composed", mode: composedFocus.mode, count: focusLines.length });
+        commentary = composedFocus.text;
       }
 
       // Issue #36: a verified `trello_work_history` result is the authoritative factual block and
@@ -1704,6 +1760,7 @@ export async function connectToDjonik(
       if (workHistory.status === "verified") {
         const composedHistory = composeWorkHistoryReply(commentary, workHistory.answerText);
         onTrace?.({ type: "work_history_relay_composed", mode: composedHistory.mode });
+        turnWorkHistoryAnswer = workHistory.answerText;
         return composedHistory.text;
       }
 
@@ -1805,6 +1862,7 @@ export async function connectToDjonik(
           toolUses: [...turnToolUses],
           confirmations: confirmationsOfTurn(),
           autonomousMutationAttempt: autonomousMutationAttempted(),
+          ...(turnWorkHistoryAnswer !== null ? { workHistoryAnswerText: turnWorkHistoryAnswer } : {}),
         };
         return reply;
       } catch (error) {

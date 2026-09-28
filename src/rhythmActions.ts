@@ -17,7 +17,7 @@ import type { RitualKind } from "./rhythmSchedule.js";
 /** Every message kind that may carry buttons. */
 export type ProactiveKind = RitualKind | "exception";
 
-export type RhythmActionId = "ack" | "accept_plan" | "modify" | "reorder" | "details" | "carry_over" | "not_now" | "raise" | "later" | "suppress";
+export type RhythmActionId = "ack" | "accept_plan" | "modify" | "reorder" | "details" | "carry_over" | "not_now" | "raise" | "later" | "suppress" | "start";
 
 interface ActionSpec {
   /** Short wire code used inside `callback_data`. */
@@ -36,12 +36,14 @@ export const RHYTHM_ACTIONS: Record<RhythmActionId, ActionSpec> = {
   raise: { code: "up", label: "⬆️ Підняти" },
   later: { code: "lat", label: "⏰ Пізніше" },
   suppress: { code: "mute", label: "🔕 Не нагадувати" },
+  /** #50 chat fallback for focus: Daniel starts the brief's main thing; Djonik moves it to In progress (verified write). */
+  start: { code: "go", label: "▶️ Почав" },
 };
 
 /** Contextual, small (≤ 3) button sets. A kind absent here (or an empty list) gets no keyboard. */
 export const BUTTON_SETS: Record<ProactiveKind, readonly RhythmActionId[]> = {
   "monday-plan": ["accept_plan", "modify", "details"],
-  morning: ["ack", "reorder", "details"],
+  morning: ["ack", "start", "details"],
   "friday-morning": ["ack", "reorder"],
   "friday-review": ["carry_over", "modify", "not_now"],
   evening: ["carry_over", "not_now"],
@@ -90,6 +92,8 @@ export function utteranceFor(action: RhythmActionId, kind: ProactiveKind, when: 
       return `Нагадай про це пізніше (${about}).`;
     case "suppress":
       return `Не нагадуй мені більше про це (${about}).`;
+    case "start":
+      return `▶️ Почав головне (${about}).`;
   }
 }
 

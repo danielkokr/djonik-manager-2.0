@@ -70,6 +70,8 @@ export interface TrelloCardState {
   closed: boolean;
   dueComplete: boolean;
   listName: string | null;
+  /** The card's current list id (#50 focus budget binds to the current In-progress stint). */
+  listId?: string | null;
 }
 
 export interface HistoryCoverage {
@@ -195,6 +197,12 @@ function kyivLocalToUtc(year: number, month: number, day: number, hour = 0, minu
     candidate = corrected;
   }
   return candidate;
+}
+
+/** The instant of a Kyiv wall-clock minute on a Kyiv calendar date (`YYYY-MM-DD`), DST-correct (#50 work hours). */
+export function kyivLocalInstant(date: string, minutes: number): Date {
+  const [year, month, day] = date.split("-").map(Number);
+  return kyivLocalToUtc(year, month, day, Math.floor(minutes / 60), minutes % 60);
 }
 
 function kyivCalendarStart(date: Date): Date {
@@ -704,7 +712,8 @@ export class TrelloWorkHistoryClient {
     const value = await this.getJson(`/cards/${encodeURIComponent(cardId)}`, { fields: "name,closed,dueComplete,idList", list: "true" });
     if (!isRecord(value) || typeof value.name !== "string") throw new TrelloWorkHistoryError("malformed");
     const list = isRecord(value.list) && typeof value.list.name === "string" ? value.list.name : null;
-    return { name: value.name, closed: value.closed === true, dueComplete: value.dueComplete === true, listName: list };
+    const listId = typeof value.idList === "string" ? value.idList : null;
+    return { name: value.name, closed: value.closed === true, dueComplete: value.dueComplete === true, listName: list, listId };
   }
 
   /** The card's most recent list-changing action (a move, or its creation), however old, or null (#39). */

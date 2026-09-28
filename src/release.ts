@@ -513,7 +513,9 @@ export const RELEASE_R29: DjonikRelease = {
   session: RELEASE_R28.session,
 };
 
-/** #47 source intent only. The serving r29 tuple and every older reviewed release remain immutable. */
+/** #47/#48/#50 source intent only. The serving r29 tuple and every older reviewed release remain immutable. #50 adds the
+ * side-effecting `focus_budget` custom tool (code-owned focus budget, docs/01 §13) and its changed Skills, which
+ * #47/#48 already mark unresolved (planning-and-focus, pm-rhythm, task-management). `reminder` stays dormant. */
 export const RELEASE_R30_CANDIDATE: DjonikReleaseCandidate = {
   candidateId: "r30-candidate",
   becomes: "r30",
@@ -521,11 +523,11 @@ export const RELEASE_R30_CANDIDATE: DjonikReleaseCandidate = {
   model: RELEASE_R29.model,
   systemSha256: RELEASE_R29.systemSha256,
   skills: RELEASE_R29.skills.map((skill) => ["planning-and-focus", "pm-rhythm", "task-management", "studio-intake"].includes(skill.name)
-    ? { name: skill.name, skillId: null, pin: { kind: "unresolved" as const, reason: "#47/#48 Skill source not remotely synced" } }
+    ? { name: skill.name, skillId: null, pin: { kind: "unresolved" as const, reason: "#47/#48/#50 Skill source not remotely synced" } }
     : skill),
   specialist: RELEASE_R29.specialist,
   builtInTools: RELEASE_R29.builtInTools,
-  customTools: [...RELEASE_R29.customTools, "trello_board_snapshot"],
+  customTools: [...RELEASE_R29.customTools, "trello_board_snapshot", "focus_budget"],
   mcpServers: RELEASE_R29.mcpServers.filter((server) => server.name !== "google-calendar-calendarmcp"),
   mcpToolsets: RELEASE_R29.mcpToolsets.filter((toolset) => toolset.server !== "google-calendar-calendarmcp")
     .map((toolset) => toolset.server === "trello" ? {

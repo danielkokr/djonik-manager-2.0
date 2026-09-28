@@ -262,7 +262,7 @@ test("date-only: included exactly once in that morning's ritual — code-owned l
   assert.match(w.turns[0].prompt, /- банер Azov \(Azov\)/);
   assert.equal(w.sends.length, 1, "no second, direct message");
   assert.equal(w.sends[0].message.text, "🔔 Ти просив нагадати: банер Azov (Azov)\n\n🎯 Головне: концепт Seqthera.");
-  assert.deepEqual(w.sends[0].message.actions, ["ack", "reorder", "details"]);
+  assert.deepEqual(w.sends[0].message.actions, ["ack", "start", "details"]);
   const [reminder] = await w.reminders();
   assert.deepEqual([reminder.status, reminder.via, reminder.ritualKey], ["delivered", "ritual", "morning:2026-09-29"]);
 });

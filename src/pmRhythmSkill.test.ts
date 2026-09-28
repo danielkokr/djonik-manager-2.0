@@ -209,3 +209,39 @@ test("#45 keeps #39: read-only automatic turns, SILENT, quiet hours and verified
   assert.match(section("Friday afternoon — weekly review"), /only after Daniel explicitly asks, through the task-management verified path/);
   assert.match(skill, /"не пиши мені після 19" \| `quiet_hours: 19:00-<current end>`/);
 });
+
+// --- #50: week stakes, timebox, Friday time block, work_hours --------------------------------------------------------
+
+test("#50: Monday answers 'what must be true by Friday' — week stakes, not a schedule", () => {
+  const monday = section("Monday — week-plan proposal");
+  assert.match(monday, /\*\*what must be true by Friday\?\*\*/);
+  assert.match(monday, /No day-by-day schedule and no weekday for an outcome unless a recorded promise carries it/);
+  assert.ok(monday.includes("🎯 1. <що має бути правдою до кінця тижня> — <чому>"));
+});
+
+test("#50: a timebox asks whether to change action; SILENT when the current work stays best; never 'stop'", () => {
+  const exceptions = section("Exceptions — interrupt only when waiting would hurt");
+  assert.match(exceptions, /should Daniel change what he is doing now/);
+  assert.match(exceptions, /Read fresh `trello_board_snapshot` and the relevant `commitments\/` first/);
+  assert.match(exceptions, /answer `SILENT` — the budget alone never means "stop"/);
+  assert.match(exceptions, /when an accepted commitment says the Cossack Labs deck is promised for tomorrow/, "the example names its source");
+});
+
+test("#50: the Friday ⏱ time block is code's; Claude never repeats or recomputes it and never estimates when unavailable", () => {
+  const review = section("Friday afternoon — weekly review");
+  assert.match(review, /<⏱ time per project «≈ за переміщеннями в Trello» — delivered by code>/);
+  assert.match(review, /Never repeat, recompute, round or reword its hours/);
+  assert.match(review, /If the block says unavailable, do not estimate hours/);
+  assert.match(review, /no score, no utilisation/);
+  const template = /```\n([\s\S]*?)```/.exec(review)?.[1] ?? "";
+  assert.ok(template.indexOf("<📊") < template.indexOf("<⏱") && template.indexOf("<⏱") < template.indexOf("⏸"), "history → time block → commentary");
+});
+
+test("#50: work_hours is taught only from Daniel's words and never derived from quiet hours or ritual times", () => {
+  const tuning = section("Tuning the rhythm by conversation — `/rhythm.md`");
+  assert.match(tuning, /"я працюю з 10 до 19" \| `work_hours: 10:00-19:00`/);
+  assert.match(tuning, /`daily_time_cap: 7h`/);
+  assert.match(tuning, /it is not the opposite of quiet hours/);
+  assert.match(tuning, /never infer it from ritual times or quiet hours/);
+  assert.ok(section("Buttons are shortcuts, text is first-class").includes(RHYTHM_ACTIONS.start.label));
+});

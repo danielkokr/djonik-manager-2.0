@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import type { ProactiveKind, RhythmActionId } from "./rhythmActions.js";
 import type { SignalLedger, SignalSeverity } from "./rhythmSignals.js";
 import { emptyReminderLedger, recoverReminders, ReminderLedgerError, validateReminderLedger, type ReminderLedger } from "./reminders.js";
+import { emptyFocusLedger, FocusLedgerError, isEmptyFocusLedger, validateFocusLedger, type FocusLedger } from "./rhythmFocus.js";
 
 /**
  * Host-side durable state for the Working Rhythm (#39): one small JSON file, replaced atomically.
@@ -27,6 +28,11 @@ import { emptyReminderLedger, recoverReminders, ReminderLedgerError, validateRem
  * `reminders.ts`): a morning ritual claims a date-only reminder in the same atomic write as its own record. The
  * field is optional and absent until the first reminder, so a rhythm-only state file is unchanged, and an older
  * revision that does not know it keeps it untouched (every writer spreads the current state).
+ *
+ * Since #50 the file may also hold `focus` (`rhythmFocus.ts`): which cards are In progress per Trello's own history,
+ * their entry times, how recent stints ended, Daniel's explicit focus budgets and the idempotency records of the
+ * `focus_budget` tool — ids, project slugs, timestamps and minutes only. It follows the reminder rules: optional,
+ * absent until first needed, validated on load, and preserved untouched by an older revision.
  */
 
 export type DeliveryStatus = "claimed" | "sending" | "sent" | "ambiguous" | "failed" | "silent" | "blocked";
@@ -67,6 +73,8 @@ export interface RhythmState {
   configNotice?: { digest: string; notedAt: string };
   /** Daniel's code-owned reminders (#54); absent = none yet. Validated on every load. */
   reminders?: ReminderLedger;
+  /** Code-owned focus from Trello moves and explicit focus budgets (#50); absent = never needed yet. */
+  focus?: FocusLedger;
 }
 
 export function emptyRhythmState(): RhythmState {
@@ -84,6 +92,17 @@ export function remindersOf(state: RhythmState): ReminderLedger {
 export function withReminders(state: RhythmState, ledger: ReminderLedger): RhythmState {
   if (state.reminders === undefined && Object.keys(ledger.items).length === 0 && Object.keys(ledger.toolCalls).length === 0) return state;
   return { ...state, reminders: ledger };
+}
+
+/** The focus ledger of a state (empty when none was ever written). */
+export function focusOf(state: RhythmState): FocusLedger {
+  return state.focus ?? emptyFocusLedger();
+}
+
+/** `state` with `ledger`; a still-empty ledger is not written into a state that never had one. */
+export function withFocus(state: RhythmState, ledger: FocusLedger): RhythmState {
+  if (state.focus === undefined && isEmptyFocusLedger(ledger)) return state;
+  return { ...state, focus: ledger };
 }
 
 /**
@@ -121,12 +140,13 @@ function isState(value: unknown): value is RhythmState {
     candidate.deliveries !== null &&
     typeof candidate.signals === "object" &&
     candidate.signals !== null;
-  if (!base || candidate.reminders === undefined) return base;
+  if (!base) return false;
   try {
-    validateReminderLedger(candidate.reminders);
+    if (candidate.reminders !== undefined) validateReminderLedger(candidate.reminders);
+    if (candidate.focus !== undefined) validateFocusLedger(candidate.focus);
     return true;
   } catch (error) {
-    if (error instanceof ReminderLedgerError) return false;
+    if (error instanceof ReminderLedgerError || error instanceof FocusLedgerError) return false;
     throw error;
   }
 }

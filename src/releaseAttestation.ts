@@ -3,6 +3,7 @@ import { BUILT_IN_TOOL_NAMES, type DjonikRelease } from "./release.js";
 import { REMINDER_TOOL } from "./reminderTool.js";
 import { TRELLO_WORK_HISTORY_TOOL } from "./trelloWorkHistory.js";
 import { TRELLO_BOARD_SNAPSHOT_TOOL } from "./trelloBoardSnapshot.js";
+import { FOCUS_BUDGET_TOOL } from "./focusBudgetTool.js";
 
 /**
  * Startup attestation of the serving release (#33).
@@ -25,6 +26,7 @@ export const SUPPORTED_CUSTOM_TOOLS: Readonly<Record<string, { description: stri
   [TRELLO_WORK_HISTORY_TOOL.name]: TRELLO_WORK_HISTORY_TOOL,
   [TRELLO_BOARD_SNAPSHOT_TOOL.name]: TRELLO_BOARD_SNAPSHOT_TOOL,
   [REMINDER_TOOL.name]: REMINDER_TOOL,
+  [FOCUS_BUDGET_TOOL.name]: FOCUS_BUDGET_TOOL,
 };
 
 export class ReleaseAttestationError extends Error {

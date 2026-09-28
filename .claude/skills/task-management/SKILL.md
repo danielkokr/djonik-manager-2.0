@@ -1,6 +1,6 @@
 ---
 name: task-management
-description: Guides how Djonik creates, changes and completes Trello tasks — telling a real request to create, change, move, re-date or complete a card apart from advice-seeking about it, resolving the card's target/project/deadline from context, handling corrections and follow-ups to a card just handled, and never claiming a write or a field-level fact (due date, list/status, or any other card detail) before an authoritative direct read confirms it. Use when Daniel asks to create, change or complete a task or card, corrects one just handled, asks a bare factual question about one card's due date, status or other field, or when a name matches more than one candidate card. Deciding what to work on, in what order or what can wait is planning-and-focus's, not this Skill's.
+description: Guides how Djonik creates, changes and completes Trello tasks — telling a real request to create, change, move, re-date or complete a card apart from advice-seeking about it, resolving the card's target/project/deadline from context, handling corrections and follow-ups to a card just handled, and never claiming a write or a field-level fact (due date, list/status, or any other card detail) before an authoritative direct read confirms it. Use when Daniel asks to create, change or complete a task or card, starts one ("беру X", "беру X на 2 години", "▶️ Почав"), records where he stopped ("зупинився на …"), corrects one just handled, asks a bare factual question about one card's due date, status or other field, or when a name matches more than one candidate card. Deciding what to work on, in what order or what can wait is planning-and-focus's, not this Skill's.
 ---
 
 # Task management
@@ -119,6 +119,13 @@ Native checklist writes are limited to `trelloWriteChecklist` `create` (card ARI
 For a proposed link, read the existing card description first; append only the exact URL that is absent, preserving useful existing content. Verify the full resulting description with a same-card read. Do not claim to have read the linked document.
 
 For status reports such as `я доробив`, `відправив на фідбек`, or `клієнт переніс`, resolve the exact card and propose the safe change before writing unless Daniel explicitly asks for that change. End a status-change proposal with `✅ Внести  ✏️ Змінити` so Daniel can confirm that exact proposal in Telegram or by typed acceptance. `Done` uses a verified list move only after confirmation; do not use `mark_done`, whose completion flag has no exposed reversal. A wrong move can be moved back and verified when the intended prior list is known from a fresh read or Daniel; otherwise ask, zero recovery writes. After a verified status change, hand off the next PM step to planning-and-focus. A date in a client report is evidence for a proposed commitment, not an automatic card due.
+
+## Starting work and the next step
+
+Current focus is tracked by code from Trello: a card in **In progress** is what Daniel is working on. Never keep a copy of the focus, a timer or a next step in Memory.
+
+- **«беру X», «беру X на 2 години», «▶️ Почав»** (the button under a brief means its 🎯 main thing) are Daniel's explicit start of that card. Resolve the exact card from fresh evidence; two plausible cards → one question, zero writes. If it is not In progress yet, `move` it there and verify with a direct card read. Only when Daniel himself gave a duration, call `focus_budget` `set` with those minutes for that verified card, and give its `confirmation` line exactly. No duration → no timer; a Size (S/M/L/XL) is never a duration. «без таймера» → `focus_budget` `clear`.
+- **«зупинився на X», «наступний крок — X»** record one next step on the card itself. Resolve the exact card (usually the one In progress in that project); ambiguous → one question, zero writes. Read its description, then write it back with exactly one line `▶️ Наступний крок: <X>` — replacing an existing `▶️ Наступний крок:` line, otherwise appended at the end — and every other character unchanged. Verify the full resulting description with a same-card read before confirming. When Daniel returns to that card, the line is where his next step comes from.
 
 ## Due-date wording after a verified write
 

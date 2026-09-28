@@ -384,6 +384,8 @@ test("a scheduled turn that edited Memory (e.g. 'accepted' the plan itself) is b
 const REVIEWED_RHYTHM_IMPORTS: Record<string, RegExp> = {
   "rhythmFacts.ts": /^\.\/(rhythmConfig|rhythmSignals|trelloWorkHistory)\.js$/, // type-only use of the GET-only client
   "rhythmMemoryConfig.ts": /^\.\/rhythmConfig\.js$/,
+  // #50: pure focus ledger. From trelloWorkHistory it uses only the pure Kyiv formatter (asserted below), never the client.
+  "rhythmFocus.ts": /^\.\/(rhythmConfig|rhythmSignals|trelloWorkHistory|workingTime)\.js$/,
   // #39 Stage 3A: the reviewed release (to derive the serving boundary) and the reviewed confirmation surface.
   // #54: the deterministic reminder delivery it co-schedules (no model turn, no Trello write; guarded in reminders.test.ts).
   "rhythmRuntime.ts": /^\.\/(djonikClient|release|rhythmConfig|rhythmRunner|rhythmState|rhythmTelegram|telegramAdapter|toolConfirmation|reminders|reminderDelivery)\.js$/,
@@ -407,6 +409,8 @@ test("the rhythm runtime has no deterministic path to Trello writes, the Session
   // The fact collector only ever sees the GET-only reader interface.
   const facts = readFileSync(join(repoRoot, "src", "rhythmFacts.ts"), "utf8");
   assert.match(facts, /import type \{[^}]*\} from "\.\/trelloWorkHistory\.js"/);
+  const focus = readFileSync(join(repoRoot, "src", "rhythmFocus.ts"), "utf8");
+  assert.match(focus, /import \{ formatKyivDateTime \} from "\.\/trelloWorkHistory\.js"/, "focus uses only the pure formatter");
   // The runtime's only Session call is the traced send through the shared queue.
   const runtime = readFileSync(join(repoRoot, "src", "rhythmRuntime.ts"), "utf8");
   assert.deepEqual([...runtime.matchAll(/session\.(\w+)\(/g)].map((m) => m[1]), ["sendTraced"]);

@@ -58,6 +58,14 @@ export interface RhythmConfig {
     inProgressMax: number;
   };
   mutes: RhythmMute[];
+  /**
+   * Daniel's working-hours window (#50), Europe/Kyiv wall clock, on `workdays` only. Deliberately no default: it is
+   * not the complement of quiet hours and is never inferred from ritual times. Null → the weekly time report and
+   * timeboxes are unavailable (fail safe) instead of being computed against an invented schedule.
+   */
+  workHours: { start: LocalMinutes; end: LocalMinutes } | null;
+  /** Upper bound on accounted In-progress time per Kyiv day in the weekly time report (#50); default 8 h. */
+  dailyTimeCapMinutes: number;
 }
 
 /** Product ceiling (Product Owner 2026-09-24): never more than two unsolicited messages per day. */
@@ -78,6 +86,8 @@ export const DEFAULT_RHYTHM_CONFIG: RhythmConfig = Object.freeze({
   exceptions: { enabled: true, preferredPerDay: 1, maxPerDay: 2, spacingMinutes: 120, weekends: false },
   thresholds: { dueSoonWorkdays: 2, waitingDays: 5, staleProjectDays: 10, inProgressMax: 3 },
   mutes: [] as RhythmMute[],
+  workHours: null,
+  dailyTimeCapMinutes: hm(8, 0),
 }) as RhythmConfig;
 
 export interface ParsedRhythmConfig {
@@ -99,6 +109,7 @@ function cloneDefaults(): RhythmConfig {
     exceptions: { ...d.exceptions },
     thresholds: { ...d.thresholds },
     mutes: [],
+    workHours: null,
   };
 }
 
@@ -181,6 +192,28 @@ function parseSpacing(raw: string): number | null {
   return minutes >= 60 && minutes <= 480 ? minutes : null;
 }
 
+/** `HH:MM-HH:MM` inside one Kyiv day (no midnight wrap), at least 30 minutes long; `off` removes it. */
+function parseWorkHours(raw: string): { ok: true; value: RhythmConfig["workHours"] } | { ok: false } {
+  const value = raw.trim().toLowerCase();
+  if (OFF.has(value)) return { ok: true, value: null };
+  const match = /^(\S+)\s*[-–]\s*(\S+)$/.exec(value);
+  const start = match ? parseLocalTime(match[1]) : null;
+  const end = match ? parseLocalTime(match[2]) : null;
+  if (start === null || end === null || end - start < 30) return { ok: false };
+  return { ok: true, value: { start, end } };
+}
+
+/** `8h`, `7.5h`, `7,5 год`, `450m`, `450` (minutes). Bounded to 1–16 hours. */
+function parseDailyCap(raw: string): number | null {
+  const match = /^(\d+(?:[.,]\d+)?)\s*(h|m|год|хв)?$/.exec(raw.trim().toLowerCase());
+  if (!match) return null;
+  const amount = Number(match[1].replace(",", "."));
+  const hours = match[2] === "h" || match[2] === "год";
+  if (!hours && !Number.isInteger(amount)) return null;
+  const minutes = Math.round(hours ? amount * 60 : amount);
+  return minutes >= 60 && minutes <= 16 * 60 ? minutes : null;
+}
+
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function isRealDate(value: string): boolean {
@@ -220,6 +253,8 @@ export const KNOWN_RHYTHM_KEYS = [
   "stale_project_days",
   "in_progress_max",
   "mute",
+  "work_hours",
+  "daily_time_cap",
 ] as const;
 
 /**
@@ -384,6 +419,18 @@ export function parseRhythmConfig(text: string | null): ParsedRhythmConfig {
         else config.thresholds.inProgressMax = parsed;
         break;
       }
+      case "work_hours": {
+        const parsed = parseWorkHours(value);
+        if (!parsed.ok) invalid(key);
+        else config.workHours = parsed.value;
+        break;
+      }
+      case "daily_time_cap": {
+        const parsed = parseDailyCap(value);
+        if (parsed === null) invalid(key);
+        else config.dailyTimeCapMinutes = parsed;
+        break;
+      }
       case "mute": {
         const parsed = parseMute(value);
         if (parsed === null) warnings.push("invalid mute entry ignored");
@@ -446,5 +493,6 @@ export function describeRhythmConfig(config: RhythmConfig): string {
     `пт зранку: ${t(config.fridayMorning)}`,
     `огляд тижня (пт): ${t(config.fridayReview)}`,
     `тиха зона: ${formatLocalTime(config.quietHours.start)}–${formatLocalTime(config.quietHours.end)}`,
+    `робочі години: ${config.workHours ? `${formatLocalTime(config.workHours.start)}–${formatLocalTime(config.workHours.end)}` : "не задано"}`,
   ].join("; ");
 }

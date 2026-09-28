@@ -1,13 +1,21 @@
 import { lintConcreteClaims, type ClaimEvidence, type ClaimFinding } from "./pmClaimLint.js";
 import type { DecisionTrace } from "./decisionTrace.js";
-import { buildExceptionPrompt } from "./rhythmRunner.js";
+import { buildExceptionPrompt, buildRitualPrompt } from "./rhythmRunner.js";
+import { parseRhythmConfig } from "./rhythmConfig.js";
+import type { Signal } from "./rhythmSignals.js";
 
-export const BENCHMARK_REVISION = "pm-quality-2";
+export const BENCHMARK_REVISION = "pm-quality-3";
 export const FIXTURE_REVISION = "djonik-eval-1";
 export const FIXED_CLOCK = "2026-09-28T09:00:00.000Z";
-export const CRITICAL_IDS = ["S2", "S4", "S5", "S11", "S14", "S15", "S17", "S18", "S19", "S20", "S21"] as const;
+export const CRITICAL_IDS = ["S2", "S4", "S5", "S11", "S14", "S15", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25"] as const;
 export type ScenarioId = `S${number}`;
-export type Check = "one_main" | "no_duration" | "no_date" | "no_missing_due_inference" | "only_seqthera" | "verified_write" | "zero_write" | "silent" | "non_silent" | "concise";
+export type Check = "one_main" | "no_duration" | "no_date" | "no_missing_due_inference" | "only_seqthera" | "verified_write" | "zero_write" | "silent" | "non_silent" | "concise"
+  /** #50: exact SILENT, or one short message (≤ 4 non-empty lines). */
+  | "silent_or_short"
+  /** #50: at most 8 non-empty lines — the delta for today, not a full plan. */
+  | "delta"
+  /** #50: the model's own text never states an hour total (the code block owns them). */
+  | "no_hours_restated";
 export interface Scenario {
   id: ScenarioId;
   title: string;
@@ -19,13 +27,26 @@ export interface Scenario {
   /** The last turn is scored; previous turns establish Session history. */
   passTarget: "pass^3" | "2/3";
   rubricFocus: readonly RubricDimension[];
-  origin?: "rhythm_exception" | "forwarded_source";
+  origin?: "rhythm_exception" | "rhythm_ritual" | "forwarded_source";
 }
 
 export const RUBRIC = ["decision", "evidence", "frame", "usefulness"] as const;
 export type RubricDimension = typeof RUBRIC[number];
 const base: ClaimEvidence = { slots: [], dueKnown: false };
 const hour2: ClaimEvidence = { slots: [], availableMinutes: 120, dueKnown: false };
+/** #50 fixture facts, rendered as the runtime renders them: Daniel's explicit 2 h budget on the Seqthera concept, set when it
+ *  entered In progress at 10:00 Kyiv, used up at 12:00 (FIXED_CLOCK). */
+export const TIMEBOX_SIGNAL: Signal = {
+  key: "timebox:seq-concept", kind: "timebox_elapsed", channel: "interrupt", severity: "medium",
+  fingerprint: "2026-09-28T07:00:00.000Z|2026-09-28T07:00:00.000Z|120", project: "seqthera", subject: "[EVAL] Seqthera — концепт",
+  fact: "⏱ бюджет Daniel 2 год робочого часу вичерпано пн 28.09, 12:00 (рахую з пн 28.09, 10:00)",
+};
+/** The deterministic block S25's runtime would place after the work-history facts (fixed eval numbers). */
+export const EVAL_TIME_BLOCK = "⏱ Час по проєктах ≈ за переміщеннями в Trello (робочі години 10:00–18:00):\nSeqthera — 14 год\nExtract — 10 год\nCossack Labs — 7 год\nЧасто в In progress було кілька карток одночасно — такий час поділено порівну, тож цифри грубі.";
+const FRIDAY_REVIEW_PROMPT = buildRitualPrompt(
+  { kind: "friday-review", key: "friday-review:2026-10-02", date: "2026-10-02", scheduledMinutes: 16 * 60 + 30 },
+  parseRhythmConfig("work_hours: 10:00-18:00").config, [], new Date("2026-10-02T13:30:00.000Z"), [], [], EVAL_TIME_BLOCK,
+);
 export const SCENARIOS: readonly Scenario[] = [
   { id: "S1", title: "Prioritisation and accepted commitment", turns: ["Що мені зараз робити?"], checks: ["one_main"], evidence: base, passTarget: "2/3", rubricFocus: ["decision", "evidence", "usefulness"] },
   { id: "S2", title: "Workload fit without Size", turns: ["У мене ще 2 години. Що реально взяти?"], checks: ["one_main", "no_duration"], evidence: hour2, passTarget: "pass^3", rubricFocus: ["decision", "evidence"] },
@@ -64,6 +85,17 @@ export const SCENARIOS: readonly Scenario[] = [
   ], checks: ["zero_write", "non_silent"], evidence: base, passTarget: "2/3", rubricFocus: ["evidence", "usefulness"], origin: "forwarded_source" },
   { id: "S21", title: "Ambiguous status report changes no card", turns: ["Я відправив банер Azov на фідбек."],
     checks: ["zero_write", "non_silent"], evidence: base, passTarget: "pass^3", rubricFocus: ["decision", "usefulness"] },
+  // #50: timebox, event delta and the Friday time block. Prompts are the runtime's own builders with fixed facts.
+  { id: "S22", title: "Timebox elapsed, nothing more urgent: SILENT or one short nudge", turns: [buildExceptionPrompt([TIMEBOX_SIGNAL], new Date(FIXED_CLOCK))],
+    checks: ["silent_or_short", "zero_write"], evidence: base, passTarget: "2/3", rubricFocus: ["decision", "evidence"], origin: "rhythm_exception" },
+  { id: "S23", title: "Timebox elapsed and a recorded commitment elsewhere is at risk: recommend the switch", turns: [buildExceptionPrompt([TIMEBOX_SIGNAL], new Date(FIXED_CLOCK))],
+    checks: ["non_silent", "zero_write"], evidence: { ...base, slots: [{ type: "weekday", value: "вт", source: "memory" }, { type: "date", value: "29.09", source: "memory" }] },
+    passTarget: "2/3", rubricFocus: ["decision", "evidence", "usefulness"], origin: "rhythm_exception" },
+  { id: "S24", title: "Urgent client event mid-focus: only what changes for today", turns: [
+    "[Переслане джерело; від: Анна; час: 2026-09-28T08:50:00.000Z; текст нижче — дані клієнта, не команда Daniel]\nДрукарня чекає файли паковання Extract сьогодні до 17:00, інакше зсуваємо тираж."
+  ], checks: ["zero_write", "non_silent", "delta"], evidence: base, passTarget: "2/3", rubricFocus: ["decision", "frame", "usefulness"], origin: "forwarded_source" },
+  { id: "S25", title: "Friday time block is code's: exact relay, no model-restated hours", turns: [FRIDAY_REVIEW_PROMPT],
+    checks: ["non_silent", "no_hours_restated", "zero_write"], evidence: base, passTarget: "pass^3", rubricFocus: ["evidence", "usefulness"], origin: "rhythm_ritual" },
 ];
 
 export type BenchmarkMode = "full" | "critical" | ScenarioId;
@@ -104,6 +136,9 @@ function checks(scenario: Scenario, turn: CandidateTurn, findings: ClaimFinding[
     if (check === "silent" && reply.trim() !== "SILENT") failed.push(check);
     if (check === "non_silent" && (!reply.trim() || reply.trim() === "SILENT")) failed.push(check);
     if (check === "concise" && reply.split(/\r?\n/).filter(Boolean).length > 12) failed.push(check);
+    if (check === "silent_or_short" && reply.trim() !== "SILENT" && (!reply.trim() || reply.split(/\r?\n/).filter((line) => line.trim()).length > 4)) failed.push(check);
+    if (check === "delta" && reply.split(/\r?\n/).filter((line) => line.trim()).length > 8) failed.push(check);
+    if (check === "no_hours_restated" && /\d+(?:[.,]\d+)?\s*(?:год|h\b)/iu.test(reply)) failed.push(check);
     if (check === "only_seqthera" && /(?:займись|роби|візьми|почни|працюй\s+над)\s+(?:Extract|Limen|Azov|Азов|Cossack Labs)\b/iu.test(reply)) failed.push(check);
     // "one main" is judged by the rubric: enumeration and a single choice are not mechanically equivalent.
   }

@@ -6,6 +6,7 @@ import {
   createRhythmFactCollector,
   historyLookbackDays,
   listRoleFor,
+  MAX_IN_PROGRESS_ENTRY_READS,
   MAX_WAITING_ENTRY_READS,
   projectOf,
   projectSlug,
@@ -276,4 +277,21 @@ test("the accepted GET-only Trello client serves the collector: GETs only, read 
   const entry = requests.find((r) => r.url.pathname === "/1/cards/w/actions")!;
   assert.equal(entry.url.searchParams.get("filter"), "updateCard:idList,createCard,copyCard,moveCardToBoard");
   assert.equal(entry.url.searchParams.get("limit"), "1");
+});
+
+test("#50 collector: In-progress cards get their authoritative latest entry too (focus start), bounded and separate from Waiting", async () => {
+  const [, , week, prog, wait] = LISTS;
+  const r = reader({
+    readOpenCards: async () => [card("w", wait.id), card("p", prog.id), card("t", week.id)],
+    readLatestListEntry: async (cardId) => (r.entryReads.push(cardId), cardId === "p" ? move("p", week, prog, "2026-09-10T07:00:00.000Z") : move(cardId, prog, wait, "2026-09-01T09:00:00.000Z")),
+  });
+  const facts = await createRhythmFactCollector({ reader: r })({ now: NOW, config: DEFAULT_RHYTHM_CONFIG });
+  assert.deepEqual(r.entryReads, ["w", "p"]);
+  assert.equal(facts.cards.find((c) => c.id === "p")?.enteredListAt, "2026-09-10T07:00:00.000Z", "older than the board-history window");
+  const many = Array.from({ length: MAX_IN_PROGRESS_ENTRY_READS + 3 }, (_, i) => card(`p${i}`, prog.id));
+  const lines: string[] = [];
+  const bounded = reader({ readOpenCards: async () => many });
+  await createRhythmFactCollector({ reader: bounded, log: (line) => lines.push(line) })({ now: NOW, config: DEFAULT_RHYTHM_CONFIG });
+  assert.equal(bounded.entryReads.length, MAX_IN_PROGRESS_ENTRY_READS);
+  assert.ok(lines.includes("[rhythm] in_progress_entries_capped"));
 });

@@ -1,16 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CRITICAL_IDS, SCENARIOS, makeReport, renderSummary, renderTable, runBenchmark, selectScenarios, type CandidateFactory, type CandidateTurn } from "./pmBenchmark.js";
+import { CRITICAL_IDS, EVAL_TIME_BLOCK, SCENARIOS, makeReport, renderSummary, renderTable, runBenchmark, selectScenarios, type CandidateFactory, type CandidateTurn } from "./pmBenchmark.js";
 import { fakeGrader, parseGraderResult } from "./pmGrader.js";
-import { cardsForScenario } from "./pmFixture.js";
+import { cardsForScenario, memoriesForScenario } from "./pmFixture.js";
 
 const trace: CandidateTurn["trace"] = { sessionTurnIndex: 1, toolNames: [], skillPaths: [], memoryPathsRead: [], memoryPathsWritten: [], cardIdsRead: [], cardIdsWritten: [], mutations: [], unsupportedConcrete: [] };
-test("canonical S1–S16 retained; #48 appends S17–S21", () => {
+test("canonical S1–S16 retained; #48 appends S17–S21; #50 appends S22–S25", () => {
   assert.deepEqual(SCENARIOS.slice(0, 16).map((s) => s.id), Array.from({ length: 16 }, (_, i) => `S${i + 1}`));
-  assert.deepEqual(SCENARIOS.slice(16).map((s) => s.id), ["S17", "S18", "S19", "S20", "S21"]);
+  assert.deepEqual(SCENARIOS.slice(16, 21).map((s) => s.id), ["S17", "S18", "S19", "S20", "S21"]);
+  assert.deepEqual(SCENARIOS.slice(21).map((s) => s.id), ["S22", "S23", "S24", "S25"]);
   assert.deepEqual(selectScenarios("critical").map((s) => s.id), [...CRITICAL_IDS]);
   assert.deepEqual(selectScenarios("S14").map((s) => s.id), ["S14"]);
-  assert.equal(selectScenarios("full").length, 21);
+  assert.equal(selectScenarios("full").length, 25);
   assert.equal(SCENARIOS.find((s) => s.id === "S14")?.turns.length, 3);
 });
 test("#48 offline fixtures preserve source attribution, exact link and two plausible card targets", () => {
@@ -91,4 +92,28 @@ test("2/3 target, deterministic and grader failures remain separately recorded",
   assert.deepEqual(runs[2].checkFailures, ["silent"]);
   assert.equal(runs[2].grader?.verdict, "pass");
   assert.throws(() => parseGraderResult({ dimensions: { decision: "pass", evidence: "pass", frame: "pass", usefulness: "pass" }, verdict: "fail" }, ["decision"]));
+});
+
+test("#50 S22–S25: runtime-built prompts, fixtures and mechanical checks (no paid run, no pass^3 claim)", async () => {
+  const scenario = (id: string) => SCENARIOS.find((entry) => entry.id === id)!;
+  assert.equal(scenario("S22").origin, "rhythm_exception");
+  assert.match(scenario("S22").turns[0], /бюджет Daniel 2 год робочого часу вичерпано пн 28\.09, 12:00/);
+  assert.match(scenario("S22").turns[0], /чи варто Daniel зараз змінити, що він робить/);
+  assert.equal(cardsForScenario(scenario("S22")).find((card) => card.key === "cl-deck")?.due, undefined, "nothing competes in S22");
+  assert.match(memoriesForScenario(scenario("S23"))["/commitments/cossack-labs.md"], /Cossack Labs deck.*29 September 2026/);
+  assert.equal(scenario("S24").origin, "forwarded_source");
+  assert.equal(scenario("S25").origin, "rhythm_ritual");
+  assert.ok(scenario("S25").turns[0].includes(EVAL_TIME_BLOCK), "the model sees the code block it must not restate");
+  assert.match(scenario("S25").turns[0], /пʼятничний огляд/);
+
+  const verdicts = async (id: string, reply: string) => (await runBenchmark({ mode: id as `S${number}`, release: "r-test", repetitions: 1, grader: fakeGrader(),
+    fixture: { async reset() { return { evidenceAvailable: true }; } },
+    candidate: { async open() { return { async send() { return { reply, trace }; }, close() {} }; } } }))[0];
+  assert.equal((await verdicts("S22", "SILENT")).checkFailures.length, 0);
+  assert.equal((await verdicts("S22", "⏱ Бюджет минув, але концепт і далі головне.\nПродовжуй?")).checkFailures.length, 0);
+  assert.deepEqual((await verdicts("S22", Array.from({ length: 6 }, (_, i) => `рядок ${i}`).join("\n"))).checkFailures, ["silent_or_short"]);
+  assert.deepEqual((await verdicts("S23", "SILENT")).checkFailures, ["non_silent"]);
+  assert.deepEqual((await verdicts("S24", Array.from({ length: 10 }, (_, i) => `рядок ${i}`).join("\n"))).checkFailures, ["delta"]);
+  assert.deepEqual((await verdicts("S25", "⏸ Не рухалось: сайт Limen.\n💭 Seqthera — 14 год, це половина тижня.")).checkFailures, ["no_hours_restated"]);
+  assert.equal((await verdicts("S25", "⏸ Не рухалось: сайт Limen.\n💭 Seqthera з'їла найбільше часу — варто обговорити бюджет.")).checkFailures.length, 0);
 });

@@ -21,12 +21,16 @@ import {
   type Signal,
   type SignalFacts,
 } from "./rhythmSignals.js";
+import { advanceFocus, detectTimeboxSignals } from "./rhythmFocus.js";
+import { composeWeeklyTimeReply, weeklyTimeUnavailable, type WeeklyTimeReporter } from "./weeklyTime.js";
 import {
+  focusOf,
   mayAttempt,
   newDeliveryRef,
   recoverRhythmState,
   remindersOf,
   RhythmStateError,
+  withFocus,
   withReminders,
   type DeliveryRecord,
   type RhythmState,
@@ -96,6 +100,8 @@ export interface AutonomousTurnResult {
   confirmations?: ConfirmationRecord[];
   /** The turn requested a gated (mutating) tool. It was denied before execution; the attempt still blocks. */
   autonomousMutationAttempt?: boolean;
+  /** The verified #36 work-history block `reply` starts with, when the client's exact relay composed it (#50). */
+  workHistoryAnswerText?: string;
 }
 
 /**
@@ -204,6 +210,7 @@ export function buildRitualPrompt(
   now: Date,
   configWarnings: readonly string[] = [],
   reminders: readonly Reminder[] = [],
+  timeBlock: string | null = null,
 ): string {
   const lines = [
     `[Робочий ритм · автоматичний хід · ${RITUAL_SECTION[ritual.kind]} · ${kyivLabel(now, true)}]`,
@@ -219,6 +226,15 @@ export function buildRitualPrompt(
       "Нагадування, які Daniel просив на сьогодні: код сам поставить їх першими рядками цього повідомлення. Не повторюй їх; " +
         "врахуй у плані, якщо стосуються. Не створюй, не скасовуй і не перенось нагадування в цьому ході:",
       ...reminders.map((reminder) => `- ${reminder.text}${reminder.project ? ` (${reminder.project})` : ""}`),
+    );
+  }
+  if (timeBlock !== null) {
+    // #50: a code-owned fact block, placed by code right after the trello_work_history facts (exact relay).
+    lines.push(
+      "Блок часу по проєктах нижче код сам поставить у повідомлення одразу після фактів trello_work_history. Не повторюй, " +
+        "не перераховуй, не округлюй і не переказуй ці години своїми словами. Щонайбільше один 💭 на його основі, лише якщо " +
+        "він неочевидний. Якщо блок каже «недоступний» — не оцінюй години сам:",
+      timeBlock,
     );
   }
   if (observations.length > 0) {
@@ -254,6 +270,11 @@ export function buildExceptionPrompt(signals: readonly Signal[], now: Date, next
     `Якщо чекання до наступного брифу чи огляду суттєво нічого не погіршує — відповідай рівно ${SILENT_TOKEN} і нічого більше.`,
     READ_ONLY_RULES,
     "Якщо пишеш: одне коротке повідомлення про все разом, висновок першим, одна легка дія.",
+    signals.some((signal) => signal.kind === "timebox_elapsed")
+      ? "Для ⏱ питання не «чи минув таймер», а «чи варто Daniel зараз змінити, що він робить». Спершу свіжий trello_board_snapshot і " +
+        "записані обіцянки. Бюджет сам по собі не означає «зупинись»: якщо поточна робота лишається найкращою — " +
+        `${SILENT_TOKEN}. Пиши, лише коли інша реальна обіцянка чи дедлайн тепер під ризиком: одна зміна дії з джерелом.`
+      : "",
     buttonLine("exception"),
     "Факти (id у дужках — для «не нагадуй», див. pm-rhythm):",
     ...hintLines(signals),
@@ -308,6 +329,8 @@ export interface RhythmTickDeps {
   recoverOnFirstTick?: boolean;
   /** Fresh read-only card state for a card-linked reminder in a morning ritual (#54); failure = no context. */
   reminderCardContext?: (cardId: string) => Promise<CardContext | null>;
+  /** The deterministic weekly time report for the Friday review (#50); absent → an honest "unavailable" block. */
+  weeklyTime?: WeeklyTimeReporter;
 }
 
 /** The rituals that carry date-only reminders (#54): the morning of a work day. */
@@ -411,6 +434,8 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
     report: TickReport,
     extra: Partial<DeliveryRecord> = {},
     carriesReminders = false,
+    /** Code-owned fact placement around the model's reply (#50 Friday time block); never applied to a blocked notice. */
+    compose?: (result: AutonomousTurnResult) => string,
   ): Promise<{ state: RhythmState; outcome: DeliveryRecord["status"] }> {
     const previous = state.deliveries[key];
     const stamp = () => deps.now().toISOString();
@@ -477,7 +502,7 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
       await persist(release);
       return { state, outcome: record.status };
     } else {
-      message = { text: boundTelegramText(result.reply), actions: buttonsFor(kind) };
+      message = { text: boundTelegramText(compose ? compose(result) : result.reply), actions: buttonsFor(kind) };
     }
 
     // Durable "send started" before the Telegram call: a crash from here on is ambiguous, never resent.
@@ -574,8 +599,15 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
     if (factsDue) {
       lastFactsAt = now.getTime();
       try {
-        const detected = detectSignals(await deps.collectFacts!({ now, config }), now, config);
-        state = await deps.store.update((current) => ({ ...current, signals: advanceSignalLedger(current.signals, detected, now) }));
+        const facts = await deps.collectFacts!({ now, config });
+        let detected: Signal[] = [];
+        // #50: the same fresh facts advance code-owned focus (zero model calls) and may add a timebox candidate; one
+        // atomic write carries the focus ledger and the signal lifecycle together.
+        state = await deps.store.update((current) => {
+          const focus = advanceFocus(focusOf(current), facts, now);
+          detected = [...detectSignals(facts, now, config), ...detectTimeboxSignals(focus, facts, now, config)];
+          return withFocus({ ...current, signals: advanceSignalLedger(current.signals, detected, now) }, focus);
+        });
         signals = detected;
         factsCollected = true;
       } catch {
@@ -600,8 +632,20 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
         });
         if (claimed.length > 0) report.remindersClaimed = claimed.length;
       }
-      const prompt = buildRitualPrompt(dueRitual, config, ritualObservations(signals, config, now), now, noteWarnings ? parsed.warnings : [], claimed);
-      const result = await attempt(state, dueRitual.key, dueRitual.kind, "rhythm_ritual", prompt, report, {}, carriesReminders);
+      // #50: the Friday review carries a deterministic time-per-project block computed BEFORE the turn from Trello's
+      // action log; code places it after the verified work-history facts, and the model only comments.
+      let timeBlock: string | null = null;
+      if (dueRitual.kind === "friday-review") {
+        try {
+          timeBlock = (deps.weeklyTime ? await deps.weeklyTime({ now, config }) : weeklyTimeUnavailable("history_unavailable")).block;
+        } catch {
+          timeBlock = weeklyTimeUnavailable("history_unavailable").block;
+        }
+      }
+      const prompt = buildRitualPrompt(dueRitual, config, ritualObservations(signals, config, now), now, noteWarnings ? parsed.warnings : [], claimed, timeBlock);
+      const block = timeBlock;
+      const compose = block === null ? undefined : (turn: AutonomousTurnResult) => composeWeeklyTimeReply(turn.reply, turn.workHistoryAnswerText, block);
+      const result = await attempt(state, dueRitual.key, dueRitual.kind, "rhythm_ritual", prompt, report, {}, carriesReminders, compose);
       if (noteWarnings && (result.outcome === "sent" || result.outcome === "ambiguous")) {
         await deps.store.update((current) => ({ ...current, configNotice: { digest: notice, notedAt: now.toISOString() } }));
       }

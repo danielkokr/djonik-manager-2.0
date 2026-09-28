@@ -276,6 +276,8 @@ export interface WorkingRhythmDeps {
   createConfigSource: () => RhythmConfigSource;
   createStateStore: (path: string) => RhythmStateStore;
   createFactCollector?: () => NonNullable<RhythmTickDeps["collectFacts"]>;
+  /** #50 Friday time-per-project report over the same Trello read client; absent → "unavailable" block. */
+  createWeeklyTimeReporter?: () => NonNullable<RhythmTickDeps["weeklyTime"]>;
   runTurn: AutonomousTurnRunner;
   send: ProactiveSender;
   currentSessionId(): string | null;
@@ -344,6 +346,7 @@ export function startWorkingRhythm(deps: WorkingRhythmDeps): WorkingRhythmRuntim
           runTurn: deps.runTurn,
           send: deps.send,
           ...(deps.createFactCollector ? { collectFacts: deps.createFactCollector() } : {}),
+          ...(deps.createWeeklyTimeReporter ? { weeklyTime: deps.createWeeklyTimeReporter() } : {}),
           log,
           // The runtime recovers the shared file once, before either scheduler acts.
           recoverOnFirstTick: false,

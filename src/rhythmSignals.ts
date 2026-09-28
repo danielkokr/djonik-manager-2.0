@@ -64,7 +64,9 @@ export type SignalKind =
   | "in_progress_over"
   | "deadline_collision"
   | "follow_up_due"
-  | "reopened_from_done";
+  | "reopened_from_done"
+  /** #50: Daniel's explicit budget for the current In-progress stint has elapsed (`rhythmFocus.ts`). */
+  | "timebox_elapsed";
 
 /** `ritual`: collected for the next brief/review only. `interrupt`: may be considered for an exception. */
 export type SignalChannel = "ritual" | "interrupt";
@@ -481,7 +483,9 @@ export function selectException(input: ExceptionSelectionInput): ExceptionDecisi
   }
   const toRitual = input.minutesToNextRitual ?? null;
   if (toRitual !== null && toRitual >= 0) {
-    const urgent = eligible.some((signal) => signal.severity === "high");
+    // A timebox (#50) asks "should Daniel change what he is doing NOW": a ritual hours later cannot answer it, so it
+    // waits for a later ritual only when that ritual is within the exception spacing — like a high-severity fact.
+    const urgent = eligible.some((signal) => signal.severity === "high" || signal.kind === "timebox_elapsed");
     if (!urgent || toRitual <= exceptions.spacingMinutes) return { decision: "defer", reason: "next_ritual" };
   }
 

@@ -25,8 +25,8 @@ test("Monday plan buttons: Приймаю · Змінити · Детальні�
   assert.deepEqual(labels("monday-plan"), ["✅ Приймаю", "✏️ Змінити", "📋 Детальніше"]);
 });
 
-test("normal morning buttons: Ок · Переставити · Детальніше", () => {
-  assert.deepEqual(labels("morning"), ["✅ Ок", "🔄 Переставити", "📋 Детальніше"]);
+test("normal morning buttons: Ок · Почав · Детальніше (#50 ▶️ Почав focus fallback)", () => {
+  assert.deepEqual(labels("morning"), ["✅ Ок", "▶️ Почав", "📋 Детальніше"]);
 });
 
 test("Friday review buttons: Перенести · Змінити · Не зараз", () => {
