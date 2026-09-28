@@ -46,11 +46,14 @@ test("source parses as frontmatter + system body and declares the Sonnet 5 mediu
   // #33 invariant: no accidental `latest` — every Skill reference is an explicit, immutable version.
   for (const entry of skills) assert.match(entry[2], /^skver_\w+$/, `${entry[1]} must pin an explicit skver_`);
   assert.doesNotMatch(frontmatter, /version: latest/);
-  // `project-health` is owned exclusively by the specialist (#28); the coordinator must not re-attach it.
+  // `project-health` belonged exclusively to the specialist (#28) and is not re-attached to the coordinator by #44
+  // either: the project view lives in planning-and-focus, not in a revived Project Health Skill.
   assert.doesNotMatch(frontmatter, /skill_01Treson5zdU1TgxXDaREwnY/);
 });
 
-test("source pins the Project Health specialist through the native coordinator roster, at an explicit version", () => {
+test("frontmatter still declares serving r29: specialist v4 pinned through the native roster, at an explicit version", () => {
+  // #44 retires the specialist from the r30 CANDIDATE only (`RELEASE_R30_CANDIDATE.specialist === null`, cleared by the
+  // candidate update body). The frontmatter stays the serving r29 declaration, which is also r30's rollback.
   assert.match(frontmatter, /multiagent:\n\s+type: coordinator/);
   const roster = [...frontmatter.matchAll(/- type: agent\n\s+id: (\S+)\n\s+version: (\d+)/g)];
   assert.equal(roster.length, 1, "exactly one pinned specialist");
@@ -377,36 +380,35 @@ test("prompt shares no long verbatim block with any coordinator Skill", () => {
   }
 });
 
-test("prompt keeps Project Health delegation to the coordinator-level rule that code cannot enforce", () => {
-  // Still required: Claude decides delegation natively, and nothing in code stops the coordinator
-  // from answering Project Health itself or from colouring the delegated task.
-  assert.match(system, /Djonik Project Health Specialist/);
-  assert.match(system, /Specialist, not to you/i);
-  assert.match(system, /adding nothing of your own/i);
-  // Dropped: the transport/correlation detail #28/#32 and SpecialistTurnProvenance already guarantee.
-  assert.doesNotMatch(system, /wait silently/i);
-  assert.doesNotMatch(system, /thread/i);
+// #44 (docs/90, docs/91): the Project Health specialist is retired from r30. Project state, stuck work, blockers and
+// risk are the coordinator's own work through planning-and-focus; the prompt carries no delegation contract and no
+// replacement routing section. The global factual semantics above keep holding for these questions.
+
+test("#44: the coordinator prompt no longer delegates Project Health, risks, blockers or stuck work to a specialist", () => {
+  assert.doesNotMatch(system, /^# Project Health$/m, "the delegation section is gone");
+  assert.doesNotMatch(system, /Project Health/i);
+  assert.doesNotMatch(system, /specialist/i);
+  assert.doesNotMatch(system, /exactly as received|adding nothing of your own|before or after it/i, "no relay-exactly contract");
+  assert.doesNotMatch(system, /not to you/i, "no question type is someone else's");
 });
 
-test("prompt requires the coordinator to return the specialist's answer exactly, with nothing added or changed", () => {
-  // Not a duplicate of code. #32 guarantees the specialist's AUTHORITY: the verified string is always
-  // shown byte for byte, and any different coordinator text is withheld behind a fixed notice
-  // (`composeWithSpecialist`). Only the coordinator can make that notice unnecessary, by replying with
-  // the specialist's string itself. Live gate docs/36 (B, C): without this rule Haiku reworded 2/2.
-  const projectHealthSection = system.slice(system.indexOf("# Project Health"));
-  assert.match(projectHealthSection, /specialist's answer exactly as received/i);
-  for (const change of ["add", "remove", "reword", "reformat", "acknowledge"]) {
-    assert.match(projectHealthSection, new RegExp(`\\b${change}\\b[^.]*nothing`, "i"), `must forbid: ${change}`);
-  }
-  assert.match(projectHealthSection, /before or after it/i);
+test("#44: no replacement advisor, handoff, router or second agent in the coordinator prompt", () => {
+  assert.doesNotMatch(system, /advisor|hand-?off|rout(?:e|er|ing)|sub-?agent|second (?:agent|model)|thread/i);
+  assert.doesNotMatch(system, /delegatw* (?:it |this |that |them )?to (?:the|a|an)/i, "nothing is delegated to another agent");
+  // Project questions are simply the coordinator's: the owning Skill carries the domain detail.
+  assert.match(system, /Use the Skill that owns the request/i);
+  assert.doesNotMatch(system, /зависло|what is stuck|health review/i, "project-view detail stays in planning-and-focus");
 });
 
-test("Project Health stays a small part of the coordinator prompt", () => {
-  const projectHealthSection = system.slice(system.indexOf("# Project Health"));
-  assert.ok(
-    projectHealthSection.length < system.length / 4,
-    "Project Health must no longer occupy about a third of the coordinator prompt (docs/25 §4.1)",
-  );
+test("#44: the global factual semantics that project questions rely on stay in the coordinator", () => {
+  const facts = factsSection();
+  assert.match(facts, /missing field is unknown/i);
+  assert.match(facts, /Waiting alone does not prove that/i);
+  assert.match(facts, /`Backlog` is a queue/);
+  assert.match(factSentence(/Trello `due`/), /not by itself a client commitment[^.]*risk/i);
+  assert.match(factSentence(/lastActivityAt/), /not Daniel's work, progress, completion or staleness/i);
+  assert.match(facts, /Never infer an actor or work history/i);
+  assert.match(system, /Fresh reads are the truth about current state and outrank Memory/i);
 });
 
 test("prompt stays a role/voice/boundaries document rather than growing into a policy manual", () => {
@@ -494,8 +496,11 @@ test("#42 PM core: short decisions — one main thing, ≤ two secondary, the re
   assert.doesNotMatch(core, /name (?:everything|all|each)[^.]*defer|never (?:silently )?drop/i, "no requirement to enumerate deferred work");
 });
 
-test("#42: Project Health keeps health reviews; 'по X що в мене?' is focus planning", () => {
-  const projectHealthSection = system.slice(system.indexOf("# Project Health"));
-  assert.match(projectHealthSection, /health review[^.;]*risks, blockers[^.;]*Project Health Specialist/i);
-  assert.match(projectHealthSection, /"по X що в мене\?"[^.]*focus planning/i);
+test("#42 → #44: 'по X що в мене?', what is stuck and project risk are the coordinator's own project view", () => {
+  // #42 kept "по X що в мене?" with the coordinator; #44 adds state, stuck work, blockers and risk. The planning-and-focus
+  // trigger names them, so no coordinator section has to route them.
+  const planning = skillSources[1];
+  const description = /^description: (.+)$/m.exec(planning)?.[1] ?? "";
+  for (const phrase of ["по Azov що в мене", "що зависло", "ризики", "що тут чекає"]) assert.ok(description.includes(phrase), phrase);
+  assert.doesNotMatch(planning, /Project Health specialist/i);
 });

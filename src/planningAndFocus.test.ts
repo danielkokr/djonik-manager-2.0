@@ -52,7 +52,7 @@ test("its trigger covers the everyday focus phrases, for any horizon, and claims
 test("it is the single planning owner: no other coordinator Skill claims plan or focus questions", () => {
   const cues = /що мені робити|з чого почати|як розкласти|що далі|що горить|plan\/order of work|daily work plan|weekly work plan/i;
   for (const name of readdirSync(skillsDir)) {
-    // pm-rhythm owns only the automatic-turn format (#39); project-health belongs to the specialist, not the coordinator.
+    // pm-rhythm owns only the automatic-turn format (#39); project-health is the retired specialist's (r29 rollback only, #44).
     if (name === "planning-and-focus" || name === "pm-rhythm" || name === "project-health") continue;
     const other = read(".claude", "skills", name, "SKILL.md");
     const otherDescription = /^description: (.+)$/m.exec(other)?.[1] ?? "";
@@ -156,12 +156,89 @@ test("'що горить?' names only real fires, and says so when there is none
   assert.match(fire, /If nothing is, say so/i);
 });
 
-test("project view: in progress, next step, waiting, one risk — and a full health review stays with the specialist", () => {
-  const view = bullet("Answer", /Project view/);
-  for (const part of [/in progress/i, /next step/i, /waiting on whom/i, /one risk/i, /not the card list/i]) assert.match(view, part);
-  assert.match(view, /health review[^.]*Project Health specialist/i);
-  // The coordinator states the same boundary, so delegation and the Skill agree.
-  assert.match(coordinator, /"по X що в мене\?"[^.]*focus planning/);
+// --- #44: the project view owns state, stuck work, Waiting, blockers and risk (Project Health specialist retired) ---
+
+/** The project-view bullet plus its indented sub-bullets. */
+const projectView = () => {
+  const answer = section("Answer");
+  const start = answer.indexOf("- **Project view");
+  assert.ok(start >= 0, "expected the project-view bullet");
+  const rest = answer.slice(start).split("\n");
+  const lines = [rest[0]];
+  for (const line of rest.slice(1)) {
+    if (!line.startsWith("  ")) break;
+    lines.push(line);
+  }
+  return lines.join("\n");
+};
+const viewPart = (label: RegExp) => {
+  const line = projectView().split("\n").find((candidate) => candidate.startsWith("  - ") && label.test(candidate));
+  assert.ok(line, `expected a project-view rule about ${label}`);
+  return line;
+};
+
+test("#44 project view: active, next step, waiting, stuck, blocker, one risk, next action — concise, no score or report", () => {
+  const view = projectView().split("\n")[0];
+  for (const part of [/in progress/i, /next step/i, /waits on whom/i, /stuck/i, /concrete blocker/i, /one risk/i, /smallest next action/i]) assert.match(view, part);
+  for (const phrase of ["по X що в мене?", "що зависло?", "які ризики?", "що тут чекає?"]) assert.ok(view.includes(phrase), phrase);
+  assert.match(view, /not a health report/i);
+  assert.match(view, /not the card list, no score or status label/i);
+  assert.match(view, /only the parts asked and filled by facts/i);
+  // The trigger claims the project-view questions, so no coordinator routing is needed.
+  for (const phrase of ["що зависло по Extract", "які ризики по Seqthera", "що тут чекає", "по Azov що в мене"]) assert.ok(description.includes(phrase), phrase);
+});
+
+test("#44: no specialist, no project-health dependency, no health score or stored health state", () => {
+  assert.doesNotMatch(skill, /specialist|project-health|health review/i);
+  assert.doesNotMatch(coordinator.split(/\n---\n/).slice(1).join("\n---\n"), /Project Health/i, "the coordinator prompt no longer routes project questions elsewhere");
+  assert.doesNotMatch(skill, /health (?:score|check|status)|\bscore\s*[:=]|\/10\b/i);
+  assert.match(viewPart(/\*\*Risk/), /never a stored field/i);
+});
+
+test("#44 stuck: supported by current list and days in it; unknown age stays unknown; no fixed threshold", () => {
+  const stuck = viewPart(/\*\*Stuck/);
+  assert.match(stuck, /current list, days in it/i);
+  for (const notEvidence of [/no due/i, /old `lastActivityAt`/, /Backlog/, /Waiting alone/i]) assert.match(stuck, notEvidence);
+  assert.match(stuck, /never from/i);
+  assert.match(stuck, /`невідомо` age is unknown, not stuck/);
+  assert.match(stuck, /No fixed threshold/i);
+  assert.doesNotMatch(stuck, /\d+\s*(?:days?|днів|дні)/i, "no invented day threshold");
+  // The snapshot is the evidence surface for stuck work and risk.
+  assert.match(bullet("Evidence", /trello_board_snapshot/), /stuck work, risk or a project view/);
+});
+
+test("#44 Waiting ≠ Blocked: Waiting needs list or card words; Blocked needs a named dependency or problem", () => {
+  const waiting = viewPart(/Waiting ≠ Blocked/);
+  assert.match(waiting, /Waiting is paused on someone or something/i);
+  assert.match(waiting, /on whom only when written/i);
+  assert.match(waiting, /Blocked needs a named dependency or problem that stops the work/i);
+  assert.match(waiting, /long wait is a nudge question, not a blocker/i);
+});
+
+test("#44 risk: a threatened thing AND current evidence; due alone, Waiting, age or a profile never make risk", () => {
+  const risk = viewPart(/\*\*Risk/);
+  assert.match(risk, /needs both a concrete thing that may be harmed/i);
+  for (const threatened of [/accepted commitment/i, /client window/i, /deliverable someone waits for/i]) assert.match(risk, threatened);
+  assert.match(risk, /current evidence why/i);
+  for (const evidence of [/required work unfinished/i, /concrete blocker/i, /workload conflict/i, /timing consequence the client stated/i]) assert.match(risk, evidence);
+  assert.match(risk, /A due, many cards, age, no size, Waiting or a profile expectation alone is not risk/i);
+  assert.match(risk, /what is at risk and why/i);
+  assert.match(risk, /with none, say so briefly or omit it/i);
+  const item = caseItems().find((line) => /Project risk/.test(line));
+  assert.ok(item, "a worked risk case");
+  const [premise = "", decision = ""] = item.split("→");
+  assert.match(premise, /`commitments\/`/, "the threatened thing has a Memory source");
+  assert.match(decision, /One risk/i);
+  assert.match(decision, /waiting, not blocked/i);
+  assert.match(decision, /due alone is no risk/i);
+  assert.match(decision, /any date said is the recorded one/i);
+});
+
+test("#44 mixed request: the project view and an explicit card change are one answer through task-management's verified write", () => {
+  const plan = bullet("Plans, corrections and Trello", /A plan is conversation/);
+  assert.match(plan, /task-management Skill and its verified write/i);
+  assert.match(plan, /same single answer/i);
+  assert.doesNotMatch(skill, /окремим повідомленням|separate message|hand ?off/i);
 });
 
 // --- Evidence, plans and Trello ----------------------------------------------------------------------
@@ -220,14 +297,17 @@ test("a small set of canonical cases teaches decisions, covering the situations 
 test("#42 merged Skill baseline stays bounded; #52 feedback section has a reviewed growth cap", () => {
   const bytes = Buffer.byteLength(skill, "utf8");
   const beforeFeedback = skill.replace(/\n## Feedback and working style\n[\s\S]*?\n## Evidence\n/, "\n## Evidence\n");
-  assert.ok(Buffer.byteLength(beforeFeedback, "utf8") < 5558 + 8307, "the earlier merged Skill remains smaller than daily + weekly");
+  // #44 folds the retired project-health Skill (10775 B) into the project view: the Skill now replaces three.
+  assert.ok(Buffer.byteLength(beforeFeedback, "utf8") < 5558 + 8307 + 10775, "the merged Skill remains smaller than daily + weekly + project-health");
   // #45 grew it on purpose: every case now states its premise and source, two empty-slot cases and the approved
   // docs/77 answer shape were added (7577 → ~11 KB, much of it two-byte Cyrillic). Reviewed; the next growth needs a new review.
   // #50 adds ~300 B (week stakes, the change-today delta, the next-step line on return); raised for Product Lead review.
   // #51 adds the client-profile section (~1.1 KB: schema, missing-fact question, write/provenance) and folds the profile
   // tie-break into the existing week-frame bullet instead of a new case; raised for Product Lead review (docs/88 §13).
-  assert.ok(Buffer.byteLength(beforeFeedback, "utf8") <= 13800, "#51 baseline remains within its reviewed cap");
-  assert.ok(bytes <= 16100, `review #52 planning-and-focus growth (${bytes} B)`);
+  // #44 adds the project view's stuck / Waiting ≠ Blocked / risk rules and one risk case (~1.9 KB) in place of a 10.8 KB
+  // specialist Skill; raised for Product Lead review (docs/91 §4). The next growth needs a new review.
+  assert.ok(Buffer.byteLength(beforeFeedback, "utf8") <= 15600, "#44 baseline remains within its reviewed cap");
+  assert.ok(bytes <= 18000, `review #44 planning-and-focus growth (${bytes} B)`);
 });
 
 // --- Memory contract (#42) -----------------------------------------------------------------------------

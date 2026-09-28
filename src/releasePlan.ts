@@ -4,6 +4,20 @@ import { sha256, SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
 /** What an `agents.update` body is derived from: a release's Skills and tool surface (never its Agent version). */
 type ReleaseUpdateSource = Pick<DjonikRelease, "skills" | "builtInTools" | "customTools" | "mcpToolsets" | "confirmationRequired">;
 
+const sameSpecialist = (a: DjonikRelease["specialist"], b: DjonikRelease["specialist"]) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * The roster half of an update (#44). A body that omits `multiagent` preserves the roster, so a transition that
+ * retires the specialist must send `multiagent: null` — the documented way to clear a coordinator roster entirely
+ * (Managed Agents multiagent docs, read 2026-09-28). Any other roster change (a new specialist or pin) is not a
+ * reviewed transition here and is refused rather than silently preserved.
+ */
+function withRosterChange<T extends Record<string, unknown>>(body: T, target: DjonikRelease["specialist"], previous: DjonikRelease["specialist"]): T & { multiagent?: null } {
+  if (sameSpecialist(target, previous)) return body;
+  if (target === null) return { ...body, multiagent: null };
+  throw new Error("The transition changes the specialist roster to a new member or pin; no reviewed update body exists for that.");
+}
+
 function withMcpServerReplacement<T extends Record<string, unknown>>(body: T, target: DjonikRelease["mcpServers"], previous: DjonikRelease["mcpServers"]): T & { mcp_servers?: Array<{ type: "url"; name: string; url: string }> } {
   return JSON.stringify(target) === JSON.stringify(previous) ? body : {
     ...body, mcp_servers: target.map((server) => ({ type: "url" as const, name: server.name, url: server.url })),
@@ -79,6 +93,10 @@ export function buildReleaseUpdateBody(release: DjonikRelease, fromVersion: numb
   if (from.systemSha256 !== release.systemSha256) {
     throw new Error(`${release.id} changes the prompt relative to ${from.id}; a Skills/tools-only body would be a partial update.`);
   }
+  if (!sameSpecialist(from.specialist, release.specialist)) {
+    // A roster change (#44 retires the specialist in r30) is part of a prompt change; it goes through the candidate body.
+    throw new Error(`${release.id} changes the specialist roster relative to ${from.id}; a Skills/tools-only body would be a partial update.`);
+  }
   return withMcpServerReplacement(buildAgentUpdateBody(release, fromVersion), release.mcpServers, from.mcpServers);
 }
 
@@ -91,8 +109,9 @@ export function buildReleaseUpdateBody(release: DjonikRelease, fromVersion: numb
  * prompt differs from the reviewed release it updates (#41 + #42 → r28): the caller passes the reviewed
  * `managed-agents/djonik.md` body, and it is refused unless it hashes to the candidate's `systemSha256`. A prompt
  * change therefore always ships together with the Skills it refers to, and an unchanged prompt is never re-sent
- * (r27). Model and roster are preserved by omission. MCP servers are replaced only when the
- * candidate changes their reviewed list (the #47 Calendar removal).
+ * (r27). The model is preserved by omission, and so is the roster unless the candidate retires the specialist
+ * (#44 → r30: `multiagent: null`). MCP servers are replaced only when the candidate changes their reviewed list
+ * (the #47 Calendar removal).
  */
 export function buildCandidateUpdateBody(
   candidate: DjonikReleaseCandidate,
@@ -102,7 +121,7 @@ export function buildCandidateUpdateBody(
   const from = Object.values(RELEASES).find((release) => release.agent.id === candidate.agent.id && release.agent.version === candidate.agent.fromVersion);
   if (!from) throw new Error(`No reviewed release for Agent v${candidate.agent.fromVersion}; the candidate has nothing to update from.`);
   const body = buildAgentUpdateBody({ ...candidate, skills: resolveCandidateSkills(candidate, resolution) }, candidate.agent.fromVersion);
-  const completeBody = withMcpServerReplacement(body, candidate.mcpServers, from.mcpServers);
+  const completeBody = withRosterChange(withMcpServerReplacement(body, candidate.mcpServers, from.mcpServers), candidate.specialist, from.specialist);
   if (candidate.systemSha256 === from.systemSha256) {
     if (system !== undefined) throw new Error("The candidate keeps the prompt of the version it updates; do not send `system`.");
     return completeBody;

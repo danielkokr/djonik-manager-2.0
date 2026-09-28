@@ -15,6 +15,8 @@ import {
   type DjonikTurnTelemetry,
 } from "./djonikClient.js";
 import { EXECUTOR_EXCEPTION_CONTENT } from "./customToolResolution.js";
+import { RELEASE_R29, RELEASE_R30_CANDIDATE, resolveReleaseCandidate } from "./release.js";
+import { servingSessionFixture } from "./releaseFixtures.test-helpers.js";
 
 // ---------------------------------------------------------------------------------------------
 // Issue #32: turn completion, event correlation and specialist-result preservation.
@@ -1454,5 +1456,112 @@ test("#40 10: a canonical specialist thread that paused with requires_action and
   const { session, push } = await open(roster());
   push(created(), sentTo(), childIdle("requires_action"), childResult(S), childIdle("end_turn"), msg(S), IDLE_OK);
   assert.strictEqual(await session.send("Що по Extract?"), S);
+  session.close();
+});
+
+// ---------------------------------------------------------------------------------------------
+// #44: the specialist path is release topology, not phrasing. The Session a release attests to carries its roster:
+// r29 (specialist v4) keeps every #28/#32 specialist guarantee above for rollback; an r30-shaped Session has no
+// roster, so specialist provenance stays disabled (`resolveProjectHealthSpecialistName` → null) and every turn is an
+// ordinary coordinator turn. The GENERIC #32 guarantees (end_turn authority, correlation, incomplete turns, #31
+// verified writes) hold for both. No user text is ever inspected to decide any of this.
+// ---------------------------------------------------------------------------------------------
+
+const r29SessionAgent = () => (servingSessionFixture(RELEASE_R29) as { agent: unknown }).agent;
+const r30SessionAgent = () => (servingSessionFixture(resolveReleaseCandidate(RELEASE_R30_CANDIDATE, {
+  skills: Object.fromEntries(["planning-and-focus", "pm-rhythm", "task-management", "studio-intake"]
+    .map((name, index) => [name, { skillId: `skill_TEST44${index}`, version: `skver_TEST44${index}` }])),
+  agentVersion: 30,
+})) as { agent: unknown }).agent;
+const specialistTraces = (traces: DjonikTraceEvent[]) =>
+  traces.filter((t) => t.type === "specialist_reply_composed" || t.type === "specialist_result_unverified");
+
+test("#44 topology switch: the same child events compose on an r29 Session and are inert on an r30 Session", async () => {
+  const events = () => [created(), sentTo(), childResult(S), msg("COORDINATOR PROJECT VIEW"), IDLE_OK];
+  const r29 = await open(r29SessionAgent());
+  r29.push(...events());
+  assert.strictEqual(await r29.session.send("Які ризики по Seqthera?"), `${S}\n\n———\n${WITHHELD_CUE}`, "r29 rollback keeps #28/#32 composition");
+  assert.deepEqual(specialistTraces(r29.traces), [{ type: "specialist_reply_composed", mode: "coordinator_withheld" }]);
+  r29.session.close();
+
+  const r30 = await open(r30SessionAgent());
+  r30.push(...events());
+  const reply = await r30.session.send("Які ризики по Seqthera?");
+  assert.strictEqual(reply, "COORDINATOR PROJECT VIEW", "one coordinator answer; no specialist block, label or cue");
+  assert.ok(!reply.includes(WITHHELD_CUE) && !reply.includes("Висновок Project Health"));
+  assert.deepEqual(specialistTraces(r30.traces), [], "no specialist provenance is tracked or traced");
+  r30.session.close();
+});
+
+test("#44: on an r30 Session a same-named stray child can never fail a turn as 'specialist unverified'", async () => {
+  const { session, push, traces } = await open(r30SessionAgent());
+  // Would be `missing_result` / `duplicate_results` on r29; on r30 there is no canonical specialist to verify.
+  push(created(), sentTo(), msg("Відповідь 1"), IDLE_OK);
+  assert.strictEqual(await session.send("Що зависло по Extract?"), "Відповідь 1");
+  push(created("sthr_2"), sentTo("sthr_2"), childResult("A", "sthr_2"), childResult("B", "sthr_2"), msg("Відповідь 2"), IDLE_OK);
+  assert.strictEqual(await session.send("Що тут чекає?"), "Відповідь 2");
+  assert.deepEqual(specialistTraces(traces), []);
+  assert.ok(!traces.some((t) => t.type === "late_events_quarantined" && t.lateSpecialistResults > 0));
+  session.close();
+});
+
+test("#44 mixed read + verified write on r30: one coordinator answer, #31 verification kept, no PH label, not replayed", async () => {
+  const { session, push, sendCalls, traces } = await open(r30SessionAgent());
+  push(
+    toolUse("w", "trelloWriteCard", { action: "update", cardId: "card_A", title: "Card A" }),
+    toolResult("w", false, CARD),
+    toolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "card_A" }),
+    toolResult("r", false, CARD),
+    msg("По Seqthera: концепт у роботі, фідбек чекає клієнта. Card A перейменував, перевірив у Trello."),
+    IDLE_OK,
+  );
+  const reply = await session.send("Що по Seqthera і перейменуй картку A");
+  assert.strictEqual(reply, "По Seqthera: концепт у роботі, фідбек чекає клієнта. Card A перейменував, перевірив у Trello.");
+  assert.ok(!reply.includes(WITHHELD_CUE) && !reply.includes("Висновок Project Health"));
+  assert.equal(sendCalls.length, 1, "no second message, no nudge: the write was verified");
+  assert.equal(traces.filter((t) => t.type === "mcp_tool_use" && t.toolName === "trelloWriteCard").length, 1, "not replayed");
+  assert.deepEqual(specialistTraces(traces), []);
+  session.close();
+});
+
+test("#44 mixed read + due write on r30: the #23 deterministic due sentence still owns the reply (open finding, docs/91 §13)", async () => {
+  // Pre-existing #23 behaviour, unchanged by #44: a verified due write replaces the model's text with the deterministic
+  // Kyiv due sentence. On r29 the specialist block rode beside it; on r30 the coordinator's project-view half of a mixed
+  // S11-style turn is therefore not shown. Recorded as an open finding for r30 validation, not fixed inside #44.
+  const due = "2026-09-21T21:30:00.000Z";
+  const card = { id: "card_A", name: "Card A", due };
+  const { session, push, sendCalls } = await open(r30SessionAgent());
+  push(
+    toolUse("w", "trelloWriteCard", { action: "update", cardId: "card_A", due }),
+    toolResult("w", false, card),
+    toolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "card_A" }),
+    toolResult("r", false, card),
+    msg("По Seqthera: концепт у роботі. Дедлайн поставив."),
+    IDLE_OK,
+  );
+  const reply = await session.send("Що по Seqthera і постав дедлайн");
+  assert.ok(reply.startsWith("Готово. Trello підтвердив дедлайн: вівторок, 22 вересня 2026, 00:30 за Києвом."));
+  assert.ok(!reply.includes(WITHHELD_CUE) && !reply.includes("Висновок Project Health"));
+  assert.ok(!reply.includes("По Seqthera"), "the project-view half is dropped by the #23 finalizer (finding)");
+  assert.equal(sendCalls.length, 1);
+  session.close();
+});
+
+test("#44: generic #32 guarantees hold on an r30 Session — incomplete stops, unverified writes, FIFO", async () => {
+  const { session, push, sendCalls } = await open(r30SessionAgent());
+  push(msg("часткова відповідь"), idleWith("budget_reached"));
+  await assert.rejects(session.send("Які ризики?"), DjonikTurnIncompleteError, "partial text before a budget stop is never a reply");
+  push(msg("Звичайна відповідь."), IDLE_OK);
+  assert.strictEqual(await session.send("Дякую"), "Звичайна відповідь.", "an incomplete turn does not poison the next");
+  push(
+    toolUse("w2", "trelloWriteCard", { action: "update", cardId: "card_A", title: "Card A" }),
+    toolResult("w2", false, CARD),
+    msg("Готово."),
+    IDLE_OK,
+    msg("Все ще не перевірив."),
+    IDLE_OK,
+  );
+  await assert.rejects(session.send("Перейменуй A"), DjonikUnverifiedMutationError, "#31: an unverified write fails closed after one nudge");
+  assert.equal(sendCalls.length, 4, "three turns plus exactly one verification nudge");
   session.close();
 });

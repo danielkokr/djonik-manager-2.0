@@ -56,6 +56,13 @@ export interface ReleaseConfirmationPolicy {
   mcp: Record<string, string[]>;
 }
 
+/** The Project Health specialist a release pins through the coordinator's native roster (#28). */
+export interface ReleaseSpecialist {
+  id: string;
+  version: number;
+  skills: Array<{ skillId: string; version: string }>;
+}
+
 export interface DjonikRelease {
   /** Stable release label, recorded on every serving Session's metadata. */
   id: string;
@@ -64,7 +71,10 @@ export interface DjonikRelease {
   /** SHA-256 of the Agent `system` prompt (UTF-8), i.e. of the `managed-agents/djonik.md` body. */
   systemSha256: string;
   skills: ReleaseSkill[];
-  specialist: { id: string; version: number; skills: Array<{ skillId: string; version: string }> };
+  /** The coordinator roster (#44). r25–r29 pin Project Health specialist v4. `null` is a reviewed topology, not an
+   *  unknown: the release has NO roster (no `multiagent` block), and attestation fails closed on any roster member,
+   *  the retired specialist included (`releaseAttestation.ts`). */
+  specialist: ReleaseSpecialist | null;
   /** Effective enabled set of `agent_toolset_20260401`, order-insensitive. */
   builtInTools: BuiltInToolName[];
   /** Custom tools the Agent must expose — each must be one this application executes (#36/#40). */
@@ -82,7 +92,7 @@ export interface DjonikRelease {
 }
 
 const COORDINATOR_ID = "agent_01WGRHDBjQa3eMhoGJMmQ1dh";
-const SPECIALIST = {
+const SPECIALIST: ReleaseSpecialist = {
   id: "agent_01KNiQDzzPjaMU6LLF4mU6uM",
   version: 4,
   skills: [{ skillId: "skill_01Treson5zdU1TgxXDaREwnY", version: "skver_01JLTtMvUgfEqdcBBGj4WGVm" }],
@@ -519,17 +529,21 @@ export const RELEASE_R29: DjonikRelease = {
  * #51 (client profiles) changes only planning-and-focus, studio-intake and pm-rhythm — all already unresolved here — plus
  * the Memory instructions, which ship with the app deploy (not a tuple field): no new tool, permission or pin.
  * #52 extends the same unresolved planning-and-focus/pm-rhythm Skills and Memory instructions; the app revision
- * depends on those r30-only Skill semantics and must not be deployed under serving r29. */
+ * depends on those r30-only Skill semantics and must not be deployed under serving r29.
+ * #44 retires the Project Health specialist from r30: the coordinator prompt drops its `# Project Health` delegation
+ * (hence a new `systemSha256`, the reviewed `managed-agents/djonik.md` body) and the candidate has NO roster
+ * (`specialist: null`); its update body clears it with `multiagent: null` (`releasePlan.ts`). Project state, stuck work,
+ * blockers and risk are the coordinator's `planning-and-focus` project view. r29 keeps specialist v4 for rollback. */
 export const RELEASE_R30_CANDIDATE: DjonikReleaseCandidate = {
   candidateId: "r30-candidate",
   becomes: "r30",
   agent: { id: COORDINATOR_ID, fromVersion: 29, version: null },
   model: RELEASE_R29.model,
-  systemSha256: RELEASE_R29.systemSha256,
+  systemSha256: "0296d62462ecc4262bf32b7aa2b8472b2a4c72d77bb063049aa360ab3e1e33d1",
   skills: RELEASE_R29.skills.map((skill) => ["planning-and-focus", "pm-rhythm", "task-management", "studio-intake"].includes(skill.name)
-    ? { name: skill.name, skillId: null, pin: { kind: "unresolved" as const, reason: "#47/#48/#50/#51/#52 Skill source not remotely synced" } }
+    ? { name: skill.name, skillId: null, pin: { kind: "unresolved" as const, reason: "#47/#48/#50/#51/#52/#44 Skill source not remotely synced" } }
     : skill),
-  specialist: RELEASE_R29.specialist,
+  specialist: null,
   builtInTools: RELEASE_R29.builtInTools,
   customTools: [...RELEASE_R29.customTools, "trello_board_snapshot", "focus_budget"],
   mcpServers: RELEASE_R29.mcpServers.filter((server) => server.name !== "google-calendar-calendarmcp"),

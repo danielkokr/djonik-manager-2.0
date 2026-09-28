@@ -7,7 +7,7 @@ import type { Signal } from "./rhythmSignals.js";
 export const BENCHMARK_REVISION = "pm-quality-5";
 export const FIXTURE_REVISION = "djonik-eval-1";
 export const FIXED_CLOCK = "2026-09-28T09:00:00.000Z";
-export const CRITICAL_IDS = ["S2", "S4", "S5", "S11", "S14", "S15", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28", "S29", "S30", "S31", "S32", "S33", "S34", "S35", "S36", "S37", "S38", "S39", "S40"] as const;
+export const CRITICAL_IDS = ["S2", "S4", "S5", "S11", "S14", "S15", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28", "S29", "S30", "S31", "S32", "S33", "S34", "S35", "S36", "S37", "S38", "S39", "S40", "S41"] as const;
 export type ScenarioId = `S${number}`;
 export type Check = "one_main" | "no_duration" | "no_date" | "no_missing_due_inference" | "only_seqthera" | "verified_write" | "zero_write" | "silent" | "non_silent" | "concise"
   /** #50: exact SILENT, or one short message (≤ 4 non-empty lines). */
@@ -163,6 +163,17 @@ export const SCENARIOS: readonly Scenario[] = [
     firstTurnChecks: ["remember_offer", "no_memory_write"], checks: ["no_memory_write"], evidence: base, passTarget: "pass^3", rubricFocus: ["frame"] },
   { id: "S40", title: "Daniel's rewording supersedes the proposed wording", turns: ["Мені краще коротші відповіді.", "Запамʼятай точніше: коротко для плану дня, детально для концептів."],
     firstTurnChecks: ["remember_offer", "no_memory_write"], checks: ["working_style_only", "no_remember_offer"], evidence: base, passTarget: "2/3", rubricFocus: ["frame", "usefulness"] },
+  // #44: the Project Health specialist is retired; project risk is the coordinator's planning-and-focus project view.
+  // Fixture (pmFixture S41): one real risk — the accepted concept review (Memory) while the concept card is still In
+  // progress with most checklist items open — beside distractors that are NOT risk: a Waiting feedback card with no
+  // blocker named, a To do site card whose due has no commitment behind it, an XL card in To do. Absolute rubric only;
+  // no comparison with the retired specialist's prose. Dates: only the recorded commitment, the site due and the clock.
+  { id: "S41", title: "Project risk names one evidenced threatened commitment; Waiting is not Blocked; due alone is not risk; nothing invented", turns: ["Які ризики по Seqthera?"],
+    checks: ["no_date", "zero_write", "no_memory_write", "concise"], evidence: { ...base, slots: [
+      { type: "weekday", value: "ср", source: "memory" }, { type: "date", value: "30.09", source: "memory" },
+      { type: "weekday", value: "вт", source: "trello" }, { type: "date", value: "29.09", source: "trello" },
+      { type: "weekday", value: "пн", source: "clock" }, { type: "date", value: "28.09", source: "clock" },
+    ] }, passTarget: "pass^3", rubricFocus: ["evidence", "usefulness"] },
 ];
 
 export type BenchmarkMode = "full" | "critical" | ScenarioId;

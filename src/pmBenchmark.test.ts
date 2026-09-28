@@ -5,15 +5,16 @@ import { fakeGrader, parseGraderResult } from "./pmGrader.js";
 import { cardsForScenario, memoriesForScenario } from "./pmFixture.js";
 
 const trace: CandidateTurn["trace"] = { sessionTurnIndex: 1, toolNames: [], skillPaths: [], memoryPathsRead: [], memoryPathsWritten: [], cardIdsRead: [], cardIdsWritten: [], mutations: [], unsupportedConcrete: [] };
-test("canonical S1–S16 retained; #48 appends S17–S21; #50 appends S22–S25; #51 appends S26–S30", () => {
+test("canonical S1–S16 retained; #48 appends S17–S21; #50 appends S22–S25; #51 appends S26–S30; #52 S31–S40; #44 S41", () => {
   assert.deepEqual(SCENARIOS.slice(0, 16).map((s) => s.id), Array.from({ length: 16 }, (_, i) => `S${i + 1}`));
   assert.deepEqual(SCENARIOS.slice(16, 21).map((s) => s.id), ["S17", "S18", "S19", "S20", "S21"]);
   assert.deepEqual(SCENARIOS.slice(21, 25).map((s) => s.id), ["S22", "S23", "S24", "S25"]);
   assert.deepEqual(SCENARIOS.slice(25, 30).map((s) => s.id), ["S26", "S27", "S28", "S29", "S30"]);
-  assert.deepEqual(SCENARIOS.slice(30).map((s) => s.id), Array.from({ length: 10 }, (_, i) => `S${i + 31}`));
+  assert.deepEqual(SCENARIOS.slice(30, 40).map((s) => s.id), Array.from({ length: 10 }, (_, i) => `S${i + 31}`));
+  assert.deepEqual(SCENARIOS.slice(40).map((s) => s.id), ["S41"]);
   assert.deepEqual(selectScenarios("critical").map((s) => s.id), [...CRITICAL_IDS]);
   assert.deepEqual(selectScenarios("S14").map((s) => s.id), ["S14"]);
-  assert.equal(selectScenarios("full").length, 40);
+  assert.equal(selectScenarios("full").length, 41);
   assert.equal(SCENARIOS.find((s) => s.id === "S14")?.turns.length, 3);
 });
 test("#48 offline fixtures preserve source attribution, exact link and two plausible card targets", () => {
@@ -142,4 +143,61 @@ test("#50 S22–S25: runtime-built prompts, fixtures and mechanical checks (no p
   assert.deepEqual((await verdicts("S24", Array.from({ length: 10 }, (_, i) => `рядок ${i}`).join("\n"))).checkFailures, ["delta"]);
   assert.deepEqual((await verdicts("S25", "⏸ Не рухалось: сайт Limen.\n💭 Seqthera — 14 год, це половина тижня.")).checkFailures, ["no_hours_restated"]);
   assert.equal((await verdicts("S25", "⏸ Не рухалось: сайт Limen.\n💭 Seqthera з'їла найбільше часу — варто обговорити бюджет.")).checkFailures.length, 0);
+});
+
+test("#44 S41: project risk fixture has one evidenced threatened commitment and non-risk distractors", () => {
+  const s41 = SCENARIOS.find((entry) => entry.id === "S41")!;
+  assert.deepEqual(s41.turns, ["Які ризики по Seqthera?"]);
+  assert.equal(s41.passTarget, "pass^3", "factual invariants use the benchmark's pass^3 standard");
+  assert.deepEqual([...s41.checks].sort(), ["concise", "no_date", "no_memory_write", "zero_write"]);
+  assert.deepEqual(s41.rubricFocus, ["evidence", "usefulness"]);
+  assert.equal(s41.requires, undefined, "judged on its facts whatever read path the coordinator takes");
+  assert.equal(s41.origin, undefined, "Daniel's own turn");
+  assert.doesNotMatch(s41.title, /specialist/i, "absolute rubric; never compared with the retired specialist");
+  assert.ok((CRITICAL_IDS as readonly string[]).includes("S41"));
+  const cards = cardsForScenario(s41).filter((card) => card.project === "Seqthera");
+  const card = (key: string) => cards.find((entry) => entry.key === key)!;
+  // The threatened thing and its evidence: accepted dated review (Memory) + an unfinished concept (Trello).
+  assert.match(memoriesForScenario(s41)["/commitments/seqthera.md"], /Accepted external commitment: send the Seqthera concept[^.]*by Wednesday 30 September 2026/);
+  assert.deepEqual([card("seq-concept").list, card("seq-concept").checklist], ["In progress", { done: 1, total: 4 }]);
+  // Distractors that are NOT risk: Waiting without a blocker, a due without a commitment, an XL card queued.
+  assert.equal(card("seq-followup").list, "Waiting");
+  assert.equal(card("seq-site").due, "2026-09-29T12:00:00.000Z");
+  assert.equal(card("seq-site").list, "To do");
+  assert.doesNotMatch(memoriesForScenario(s41)["/commitments/seqthera.md"], /site|сайт|feedback|фідбек/i, "nothing is promised for the distractors");
+  assert.deepEqual([card("seq-pack").list, card("seq-pack").size], ["To do", "XL"]);
+  // Other scenarios keep their fixtures.
+  assert.equal(cardsForScenario(SCENARIOS.find((entry) => entry.id === "S9")!).find((entry) => entry.key === "seq-site")?.due, undefined);
+  assert.match(memoriesForScenario(SCENARIOS.find((entry) => entry.id === "S4")!)["/commitments/seqthera.md"], /No date is recorded/);
+});
+
+test("#44 S41 mechanical checks: invented dates, writes, Memory writes and a card dump fail; the recorded facts pass", async () => {
+  const run = async (reply: string, turnTrace: CandidateTurn["trace"] = trace) => (await runBenchmark({ mode: "S41", release: "offline", repetitions: 1,
+    grader: fakeGrader(), fixture: { async reset() { return { evidenceAvailable: true }; } },
+    candidate: { async open() { return { async send() { return { reply, trace: turnTrace }; }, close() {} }; } } }))[0];
+  const grounded = [
+    "Один ризик: огляд концепту Seqthera, обіцяний клієнту до ср 30.09, а концепт ще в роботі (1/4 чекліста).",
+    "Фідбек клієнта в Waiting — це очікування, не блокер.",
+    "Дедлайн сайту (вт 29.09) сам по собі не ризик: обіцянки по ньому немає.",
+    "🎯 Далі: концепт.",
+  ].join("\n");
+  const ok = await run(grounded);
+  assert.deepEqual(ok.checkFailures, []);
+  assert.equal(ok.verdict, "pass");
+  assert.deepEqual((await run("Ризик: концепт треба показати в пт 2.10.")).checkFailures, ["no_date"], "an invented date fails");
+  const mutation: CandidateTurn["trace"]["mutations"][number] = { cardIds: ["card_seq_site"], status: "verified" };
+  assert.deepEqual((await run(grounded, { ...trace, mutations: [mutation] })).checkFailures, ["zero_write"], "a risk question writes nothing");
+  assert.deepEqual((await run(grounded, { ...trace, memoryPathsWritten: ["/projects/seqthera.md"] })).checkFailures, ["no_memory_write"], "no stored health/risk state");
+  assert.deepEqual((await run(Array.from({ length: 14 }, (_, i) => `картка ${i}`).join("\n"))).checkFailures, ["concise"], "no card dump");
+});
+
+test("#44: offline critical simulation includes S41 with no paid inference (fake candidate, fake grader)", async () => {
+  const runs = await runBenchmark({ mode: "critical", release: "offline", repetitions: 1, grader: fakeGrader(),
+    fixture: { async reset() { return { evidenceAvailable: true }; } },
+    candidate: { async open() { return { async send() { return { reply: "SILENT", trace }; }, close() {} }; } } });
+  const s41 = runs.filter((run) => run.scenarioId === "S41");
+  assert.equal(s41.length, 1);
+  assert.notEqual(s41[0].verdict, "infra_error");
+  assert.ok(runs.every((run) => run.usageCostUsd === undefined), "no paid usage recorded");
+  for (const id of ["S9", "S10", "S11"]) assert.ok(SCENARIOS.some((entry) => entry.id === id), `${id} is retained`);
 });

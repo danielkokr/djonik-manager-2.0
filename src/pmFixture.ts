@@ -34,6 +34,10 @@ export function cardsForScenario(scenario: Scenario): readonly EvalCard[] {
   if (scenario.id === "S22") return EVAL_CARDS.map(({ due: _due, ...card }) => card);
   // #51 S26: no due or Size separates the Cossack Labs and Seqthera sites; only the recorded expectations differ.
   if (scenario.id === "S26") return EVAL_CARDS.map(({ due: _due, size: _size, ...card }) => card);
+  // #44 S41: the concept (under an accepted review commitment) is unfinished; the site has a due and no commitment.
+  if (scenario.id === "S41") return EVAL_CARDS.map((card) =>
+    card.key === "seq-concept" ? { ...card, checklist: { done: 1, total: 4 } }
+      : card.key === "seq-site" ? { ...card, due: "2026-09-29T12:00:00.000Z" } : card);
   return EVAL_CARDS;
 }
 export const EVAL_MEMORIES: Readonly<Record<string, string>> = {
@@ -122,6 +126,10 @@ export function memoriesForScenario(scenario: Scenario): Record<string, string> 
   }
   if (scenario.id === "S23") {
     memories["/commitments/cossack-labs.md"] = "Eval fixture only. Accepted external commitment: send the Cossack Labs deck to the client by Tuesday 29 September 2026, 15:00 Kyiv. Status: active.";
+  }
+  if (scenario.id === "S41") {
+    // #44: the one threatened thing is this accepted, dated review; nothing is recorded for the site or the feedback card.
+    memories["/commitments/seqthera.md"] = "Eval fixture only. Accepted external commitment: send the Seqthera concept to the client for review by Wednesday 30 September 2026, 18:00 Kyiv. Status: active. Nothing else is promised for Seqthera.";
   }
   if (scenario.id === "S13") {
     delete memories["/commitments/seqthera.md"];

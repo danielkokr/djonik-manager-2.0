@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { RELEASE_R28, RELEASE_R29, RELEASES, SERVING_RELEASE, type DjonikReleaseCandidate, type ReleaseSkill } from "./release.js";
 import { attestAgentVersion, attestServingSession, compareWithRelease, normalizeAgentConfig, sha256 } from "./releaseAttestation.js";
 import { buildCandidateUpdateBody, buildReleaseUpdateBody } from "./releasePlan.js";
-import { SOURCE_SYSTEM_PROMPT, agentVersionFixture, servingSessionFixture } from "./releaseFixtures.test-helpers.js";
+import { R29_SYSTEM_PROMPT, agentVersionFixture, servingSessionFixture } from "./releaseFixtures.test-helpers.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const changed = ["task-management", "planning-and-focus", "pm-rhythm"];
@@ -27,7 +27,7 @@ test("r29 serves the accepted #45 prompt and only the three changed coordinator 
   assert.equal(RELEASE_R29.agent.id, RELEASE_R28.agent.id);
   assert.equal(RELEASE_R29.agent.version, 29);
   assert.equal(RELEASE_R28.agent.version, 28);
-  assert.equal(RELEASE_R29.systemSha256, sha256(SOURCE_SYSTEM_PROMPT));
+  assert.equal(RELEASE_R29.systemSha256, sha256(R29_SYSTEM_PROMPT));
   assert.notEqual(RELEASE_R29.systemSha256, RELEASE_R28.systemSha256);
   const { id, agent, systemSha256, skills, ...rest } = RELEASE_R29;
   const { id: oldId, agent: oldAgent, systemSha256: oldSystem, skills: oldSkills, ...oldRest } = RELEASE_R28;
@@ -61,7 +61,7 @@ test("the v28 → v29 update body regenerates with version 28 and only prompt + 
     confirmationRequired: RELEASE_R28.confirmationRequired!,
   };
   const resolution = { skills: Object.fromEntries(RELEASE_R29.skills.filter((skill) => changed.includes(skill.name)).map((skill) => [skill.name, { skillId: skill.skillId, version: (skill.pin as Extract<ReleaseSkill["pin"], { kind: "explicit" }>).version }])) };
-  const body = buildCandidateUpdateBody(candidate, resolution, SOURCE_SYSTEM_PROMPT);
+  const body = buildCandidateUpdateBody(candidate, resolution, R29_SYSTEM_PROMPT);
   assert.equal(body.version, 28);
   assert.deepEqual(Object.keys(body).sort(), ["skills", "system", "tools", "version"]);
   assert.equal(sha256(JSON.stringify(body)), "0fd8d90860e59dfa9808cc35c67cb71ab90fb7afa126815b8a36042ff2e7e9c3");

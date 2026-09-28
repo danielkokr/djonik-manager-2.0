@@ -248,17 +248,25 @@ export function compareWithRelease(release: DjonikRelease, observed: ObservedCon
   const expectedSkillIds = new Set<string>(release.skills.map((skill) => skill.skillId));
   for (const skillId of observedSkills.keys()) expect(expectedSkillIds.has(skillId), `unexpected skill ${skillId}`);
 
-  // Specialist roster: exactly one member, the canonical specialist at its pinned version.
-  expect(observed.roster.length === 1, `roster has ${observed.roster.length} members, expected 1`);
-  const member = observed.roster.find((entry) => entry.id === release.specialist.id);
-  if (!member) {
-    mismatches.push(`specialist ${release.specialist.id} missing from roster`);
+  // Roster topology is release-specific (#44). A release that pins a specialist (r25–r29) needs exactly one member,
+  // the canonical specialist at its pinned version. A release without one (r30) needs an empty roster: any member —
+  // the retired specialist above all — is drift, never an "unverified" extra.
+  const specialist = release.specialist;
+  if (specialist === null) {
+    expect(observed.roster.length === 0, `roster has ${observed.roster.length} members, expected none (release has no specialist)`);
+    for (const entry of observed.roster) mismatches.push(`unexpected roster member ${entry.id}@${entry.version ?? "?"}`);
   } else {
-    expect(member.version === release.specialist.version, `specialist version ${member.version} != ${release.specialist.version}`);
-    if (member.skills !== null) {
-      const expected = release.specialist.skills.map((skill) => `${skill.skillId}@${skill.version}`);
-      const actual = member.skills.map((skill) => `${skill.skillId}@${skill.version}`);
-      expect(sortedJoin(actual) === sortedJoin(expected), `specialist skills ${sortedJoin(actual)} != ${sortedJoin(expected)}`);
+    expect(observed.roster.length === 1, `roster has ${observed.roster.length} members, expected 1`);
+    const member = observed.roster.find((entry) => entry.id === specialist.id);
+    if (!member) {
+      mismatches.push(`specialist ${specialist.id} missing from roster`);
+    } else {
+      expect(member.version === specialist.version, `specialist version ${member.version} != ${specialist.version}`);
+      if (member.skills !== null) {
+        const expected = specialist.skills.map((skill) => `${skill.skillId}@${skill.version}`);
+        const actual = member.skills.map((skill) => `${skill.skillId}@${skill.version}`);
+        expect(sortedJoin(actual) === sortedJoin(expected), `specialist skills ${sortedJoin(actual)} != ${sortedJoin(expected)}`);
+      }
     }
   }
 
@@ -398,7 +406,7 @@ export function formatServingTuple(input: ServingTupleInput): string {
     `system=${short(observed.systemSha256)}`,
     `skill_pins=${skillPins}`,
     `skills=${skills}`,
-    `specialist=${release.specialist.id}@${release.specialist.version}`,
+    `specialist=${release.specialist === null ? "none" : `${release.specialist.id}@${release.specialist.version}`}`,
     `builtin=${sortedJoin(observed.builtIn?.enabled ?? [])}`,
     `custom_tools=${observed.customTools.map((tool) => `${tool.name}#${short(tool.schemaSha256)}`).join(",") || "none"}`,
     `memory=${release.session.memoryAccess}`,

@@ -4,11 +4,11 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28_CANDIDATE, RELEASE_R29, RELEASES, RETIRED_BY_R28, SERVING_RELEASE, type DjonikRelease } from "./release.js";
+import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28_CANDIDATE, RELEASE_R29, RELEASE_R30_CANDIDATE, RELEASES, RETIRED_BY_R28, SERVING_RELEASE, type DjonikRelease } from "./release.js";
 import { SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
 import { buildAgentUpdateBody } from "./releasePlan.js";
 import { PROJECT_HEALTH_SPECIALIST_AGENT_ID } from "./djonikClient.js";
-import { PRE_41_SYSTEM_PROMPT, R28_SYSTEM_PROMPT, SOURCE_SYSTEM_PROMPT } from "./releaseFixtures.test-helpers.js";
+import { ISSUE_44_PROMPT_EDITS, PRE_41_SYSTEM_PROMPT, R28_SYSTEM_PROMPT, R29_SYSTEM_PROMPT, SOURCE_SYSTEM_PROMPT } from "./releaseFixtures.test-helpers.js";
 
 // #33 release definitions: one reviewed expectation per release, kept in lockstep with the declarative
 // Agent source (`managed-agents/*.md`) and the repo Skills, so a release can never silently diverge from
@@ -86,11 +86,17 @@ const surfaceOf = (release: DjonikRelease) => {
   return { skills, tools: (tools as Array<Record<string, unknown>>).map(omitEmpty) };
 };
 
-test("the serving release (r29) equals the declarative coordinator source managed-agents/djonik.md", () => {
+test("the serving release (r29) equals the declarative coordinator source managed-agents/djonik.md, except the unsynced #44 prompt edit", () => {
+  // #44 (r30 candidate) changes only the body, not yet synced: the body minus exactly ISSUE_44_PROMPT_EDITS is the
+  // served r29 prompt, so nothing else can hide behind #44. The frontmatter — the specialist v4 roster included — stays r29.
   const release = SERVING_RELEASE;
-  assert.equal(release.systemSha256, sha(SOURCE_SYSTEM_PROMPT), "serving prompt SHA = current djonik.md body");
+  assert.equal(release.systemSha256, sha(R29_SYSTEM_PROMPT), "serving prompt SHA = djonik.md body minus the #44 edit");
+  assert.notEqual(sha(SOURCE_SYSTEM_PROMPT), release.systemSha256, "#44 is source-only until r30 syncs it");
+  assert.equal(RELEASE_R30_CANDIDATE.systemSha256, sha(SOURCE_SYSTEM_PROMPT), "the r30 candidate pins the reviewed source body");
+  assert.equal(ISSUE_44_PROMPT_EDITS.length, 1);
   assert.equal(RELEASE_R28_CANDIDATE.systemSha256, sha(R28_SYSTEM_PROMPT));
   assert.deepEqual(declared.model, { id: release.model.id, effort: release.model.effort, speed: release.model.speed });
+  assert.ok(release.specialist, "r29 pins the specialist");
   assert.deepEqual(declared.multiagent, { type: "coordinator", agents: [{ type: "agent", id: release.specialist.id, version: release.specialist.version }] });
   assert.deepEqual(declared.mcp_servers, release.mcpServers.map((server) => ({ type: "url", name: server.name, url: server.url })));
   // Skills (with explicit pins) and every tool — enabled flags AND permission policies — exactly as the
@@ -161,13 +167,15 @@ test("every custom tool a release exposes is one this application executes", () 
 });
 
 test("the specialist pin matches the reviewed specialist source and the client's canonical id", () => {
+  // #44: every reviewed release r25–r29 still pins specialist v4 (r29 is r30's rollback); only the r30 candidate has none.
   for (const release of Object.values(RELEASES)) {
+    assert.ok(release.specialist, `${release.id} keeps its specialist`);
     assert.equal(release.specialist.id, PROJECT_HEALTH_SPECIALIST_AGENT_ID);
     const [pin] = release.specialist.skills;
     assert.match(specialistFrontmatter, new RegExp(`skill_id: ${pin.skillId}\\n\\s+version: ${pin.version}`));
   }
   const lock = JSON.parse(read("claude-lock.json"));
-  assert.equal(lock.resources["./managed-agents/project-health-specialist.md"].version, String(RELEASE_R26.specialist.version));
+  assert.equal(lock.resources["./managed-agents/project-health-specialist.md"].version, String(RELEASE_R26.specialist!.version));
 });
 
 test("pinned Skill versions are the accepted repo Skills (recorded hashes in docs/42 and docs/32)", () => {

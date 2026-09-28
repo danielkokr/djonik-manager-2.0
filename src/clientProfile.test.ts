@@ -11,6 +11,8 @@ import { EVAL_CARDS, EVAL_MEMORIES, EVAL_PROFILE_BRIEFS, ISSUE_17_BRIEF_EXCERPTS
 import { BENCHMARK_REVISION, CRITICAL_IDS, SCENARIOS, runBenchmark, type CandidateTurn, type ScenarioId } from "./pmBenchmark.js";
 import { fakeGrader } from "./pmGrader.js";
 import { RELEASES, RELEASE_R29, RELEASE_R30_CANDIDATE, SERVING_RELEASE } from "./release.js";
+import { sha256 } from "./releaseAttestation.js";
+import { R29_SYSTEM_PROMPT } from "./releaseFixtures.test-helpers.js";
 
 // Issue #51 (docs/88): client profiles enrich the existing #17/#37 project brief. These are OFFLINE contract fixtures:
 // they prove where the rules live, the deterministic write boundary, the eval oracle and the benchmark wiring. They do
@@ -279,5 +281,7 @@ test("#51 release: the same unresolved r30 candidate; r29 still serves; no new r
     assert.match(entry.pin.kind === "unresolved" ? entry.pin.reason : "", /#51/);
   }
   assert.deepEqual(RELEASE_R30_CANDIDATE.customTools, ["trello_work_history", "trello_board_snapshot", "focus_budget"], "#51 adds no tool");
-  assert.equal(RELEASE_R30_CANDIDATE.systemSha256, RELEASE_R29.systemSha256, "#51 does not touch the coordinator prompt");
+  // #51 does not touch the coordinator prompt; the only r30 prompt change is #44's Project Health removal: reverting it
+  // reproduces r29 exactly (release.test.ts pins both hashes).
+  assert.equal(sha256(R29_SYSTEM_PROMPT), RELEASE_R29.systemSha256, "#51 does not touch the coordinator prompt");
 });

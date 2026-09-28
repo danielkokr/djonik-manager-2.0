@@ -1151,7 +1151,10 @@ export async function connectToDjonik(
   });
 
   /** Callable-agent name of the canonical Project Health specialist, proven from the resolved
-   *  Session's coordinator roster at creation (#28/#32); null disables the specialist safeguard. */
+   *  Session's coordinator roster at creation (#28/#32); null disables the specialist safeguard.
+   *  #44: this roster IS the release topology — attestation has already proven it equals the serving release's
+   *  (`attestSession` above). r29 pins specialist v4, so its rollback path keeps the full #28/#32 composition; r30
+   *  has no roster, so the provenance below stays inert and every turn is an ordinary coordinator turn. */
   const projectHealthSpecialistName = resolveProjectHealthSpecialistName(session.agent);
   /** Specialist thread/result provenance (#32). Thread identity is Session-lifetime (threads are
    *  persistent); which results belong to a turn is decided per turn from that turn's own events. */

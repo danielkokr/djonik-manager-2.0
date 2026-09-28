@@ -16,8 +16,35 @@ const djonikSource = readFileSync(join(repoRoot, "managed-agents", "djonik.md"),
 /** The reviewed source prompt: the `managed-agents/djonik.md` body, as an Agent would store it (docs/42). */
 export const SOURCE_SYSTEM_PROMPT = /^---\n[\s\S]*?\n---\n\n([\s\S]*)$/.exec(djonikSource)![1].replace(/\n$/, "");
 
+/** The #44 coordinator-prompt edit (Project Health specialist retired in r30), exact text before → after, applied on
+ *  top of r29. Not synced: serving r29 (Agent v29) stores the source minus this edit. The whole `# Project Health`
+ *  delegation section goes, with no replacement routing section (docs/90 §18, docs/91). */
+export const ISSUE_44_PROMPT_EDITS: ReadonlyArray<{ before: string; after: string }> = [
+  {
+    before:
+      "present a judgement as an external fact.\n\n# Project Health\n\n" +
+      "A health review of a project — its current condition, risks, blockers, what is stuck — goes to the Djonik Project Health " +
+      "Specialist, not to you; what Daniel has to do on a project (\"по X що в мене?\") is focus planning, yours. Pass Daniel's " +
+      "project and question as he put them, adding nothing of your own. Reply with the specialist's answer exactly as received: " +
+      "add, remove, reword, reformat or acknowledge nothing, before or after it.",
+    after: "present a judgement as an external fact.",
+  },
+];
+
+/** `prompt` with each edit reverted; every `after` must occur exactly once. */
+function revertEdits(prompt: string, edits: ReadonlyArray<{ before: string; after: string }>, issue: string): string {
+  return edits.reduce((text, edit) => {
+    const count = text.split(edit.after).length - 1;
+    if (count !== 1) throw new Error(`${issue} prompt edit found ${count} times in managed-agents/djonik.md`);
+    return text.replace(edit.after, () => edit.before);
+  }, prompt);
+}
+
+/** The prompt serving r29 (Agent v29) stores: the r30 source minus the unsynced #44 edit. */
+export const R29_SYSTEM_PROMPT = revertEdits(SOURCE_SYSTEM_PROMPT, ISSUE_44_PROMPT_EDITS, "#44");
+
 /** The #45 coordinator-prompt edits (factual grounding), exact text before → after, applied on top of r28.
- *  r29 serves the source; reversing these still reconstructs the immutable r28 prompt. */
+ *  r29 serves them; reversing these still reconstructs the immutable r28 prompt. */
 export const ISSUE_45_PROMPT_EDITS: ReadonlyArray<{ before: string; after: string }> = [
   {
     // Fit is the time Daniel states, not a capacity Djonik estimates.
@@ -46,21 +73,12 @@ export const ISSUE_45_PROMPT_EDITS: ReadonlyArray<{ before: string; after: strin
       "established external fact. Do not infer an actor or work history from raw metadata. Derive relative timing, weekday or local " +
       "time only from accepted authoritative evidence or a formatter, never your own arithmetic or a guess; for today and the next 14 " +
       "days, that is the \"[Годинник адаптера …]\" line opening Daniel's messages — system context, not his words or intake source.\n",
-    after: /\n# Where facts come from\n[\s\S]*?\n(?=\n# Project Health\n)/.exec(SOURCE_SYSTEM_PROMPT)?.[0] ?? "<missing #45 facts section>",
+    after: /\n# Where facts come from\n[\s\S]*?\n(?=\n# Project Health\n)/.exec(R29_SYSTEM_PROMPT)?.[0] ?? "<missing #45 facts section>",
   },
 ];
 
-/** `prompt` with each edit reverted; every `after` must occur exactly once. */
-function revertEdits(prompt: string, edits: ReadonlyArray<{ before: string; after: string }>, issue: string): string {
-  return edits.reduce((text, edit) => {
-    const count = text.split(edit.after).length - 1;
-    if (count !== 1) throw new Error(`${issue} prompt edit found ${count} times in managed-agents/djonik.md`);
-    return text.replace(edit.after, () => edit.before);
-  }, prompt);
-}
-
-/** The prompt served r28 (Agent v28) stores: the current r29 source minus the #45 edits. */
-export const R28_SYSTEM_PROMPT = revertEdits(SOURCE_SYSTEM_PROMPT, ISSUE_45_PROMPT_EDITS, "#45");
+/** The prompt served r28 (Agent v28) stores: the r29 prompt minus the #45 edits. */
+export const R28_SYSTEM_PROMPT = revertEdits(R29_SYSTEM_PROMPT, ISSUE_45_PROMPT_EDITS, "#45");
 
 /** The two #41 coordinator-prompt edits (r27 → r28 candidate), exact text before → after. */
 export const ISSUE_41_PROMPT_EDITS: ReadonlyArray<{ before: string; after: string }> = [
@@ -116,7 +134,7 @@ export const PRE_41_SYSTEM_PROMPT = revertEdits(PRE_42_SYSTEM_PROMPT, ISSUE_41_P
 /** The prompt text whose SHA-256 a release pins. */
 export function systemPromptFor(release: Pick<DjonikRelease, "systemSha256">): string {
   const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
-  const match = [SOURCE_SYSTEM_PROMPT, R28_SYSTEM_PROMPT, PRE_41_SYSTEM_PROMPT].find((prompt) => sha(prompt) === release.systemSha256);
+  const match = [SOURCE_SYSTEM_PROMPT, R29_SYSTEM_PROMPT, R28_SYSTEM_PROMPT, PRE_41_SYSTEM_PROMPT].find((prompt) => sha(prompt) === release.systemSha256);
   if (match === undefined) throw new Error(`no fixture prompt for system ${release.systemSha256.slice(0, 12)}`);
   return match;
 }
@@ -172,7 +190,10 @@ export function agentVersionFixture(release: DjonikRelease): Record<string, unkn
     skills: skills(release),
     tools: tools(release),
     mcp_servers: release.mcpServers.map((server) => ({ type: "url", ...server })),
-    multiagent: { type: "coordinator", agents: [{ type: "agent", id: release.specialist.id, version: release.specialist.version }] },
+    // #44: a release without a specialist has no roster at all (the provider reports `multiagent: null`).
+    multiagent: release.specialist === null
+      ? null
+      : { type: "coordinator", agents: [{ type: "agent", id: release.specialist.id, version: release.specialist.version }] },
   };
 }
 
@@ -197,18 +218,20 @@ export function servingSessionFixture(release: DjonikRelease, id = "sesn_test_se
         skill_id: skill.skillId,
         version: skill.pin.kind === "explicit" ? (skill.pin.sessionVersion ?? skill.pin.version) : "latest",
       })),
-      multiagent: {
-        type: "coordinator",
-        agents: [
-          {
-            type: "agent",
-            id: release.specialist.id,
-            version: release.specialist.version,
-            name: "Djonik Project Health Specialist",
-            skills: release.specialist.skills.map((skill) => ({ type: "custom", skill_id: skill.skillId, version: skill.version })),
+      multiagent: release.specialist === null
+        ? null
+        : {
+            type: "coordinator",
+            agents: [
+              {
+                type: "agent",
+                id: release.specialist.id,
+                version: release.specialist.version,
+                name: "Djonik Project Health Specialist",
+                skills: release.specialist.skills.map((skill) => ({ type: "custom", skill_id: skill.skillId, version: skill.version })),
+              },
+            ],
           },
-        ],
-      },
     },
   };
 }
