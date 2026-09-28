@@ -35,13 +35,15 @@ Governance [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) rec
 
 **Update 2026-09-26 — #54 source accepted (Product Owner decision).** Durable code-owned reminders are accepted and published at `855ccb15dfba06984e7453163ac1dcaac7edeb94`; evidence is recorded in [docs/82](82_ISSUE_54_REMINDERS_SOURCE_REPORT.md). Production release r29, Agent custom-tool sync and hosted live reminder validation remain explicitly deferred. **Canonical NOW becomes [#46](https://github.com/danielkokr/djonik-manager-2.0/issues/46).**
 
+**Update 2026-09-28 — #46 source accepted; r29 manual pilot active (Product Owner decision).** The PM benchmark + content-free decision trace is accepted and published at `912a5d5d2f9628ebbe5bfdd09b3a35641f2e7fbd`; evidence is recorded in [docs/83](83_ISSUE_46_PM_BENCHMARK_SOURCE_REPORT.md). The real paid benchmark baseline remains separately authorized and deferred. The #45 behavior release r29 is now serving production for Daniel's normal Telegram pilot; this runs in parallel and does not block implementation. **Canonical NOW becomes [#47](https://github.com/danielkokr/djonik-manager-2.0/issues/47).**
+
 | Order | Issue | Condition |
 |---|---|---|
 | 0 | [#53 — Reconnect to the same Session when the stream drops; never lose an accepted message](https://github.com/danielkokr/djonik-manager-2.0/issues/53) | **DONE — source accepted 2026-09-26; hosted live check deferred by PO** ([docs/80](80_ISSUE_53_STREAM_RECONNECT_SOURCE_REPORT.md)) |
 | 1 | [#45 — Factual grounding + approved message templates](https://github.com/danielkokr/djonik-manager-2.0/issues/45) | **DONE — source accepted 2026-09-26** ([docs/81](81_ISSUE_45_FACTUAL_GROUNDING_SOURCE_REPORT.md)); remote sync/behavioral validation deferred |
 | 1a | [#54 — Reminders stored and delivered by code](https://github.com/danielkokr/djonik-manager-2.0/issues/54) | **DONE — source accepted 2026-09-26** ([docs/82](82_ISSUE_54_REMINDERS_SOURCE_REPORT.md)); r29/live validation deferred |
-| 2 | **NOW — [#46 — PM quality benchmark + decision trace](https://github.com/danielkokr/djonik-manager-2.0/issues/46)** | Source/offline benchmark infrastructure now; paid baseline run requires separate PO budget authorization |
-| 3 | [#47 — Read-only `trello_board_snapshot`](https://github.com/danielkokr/djonik-manager-2.0/issues/47) | Accepted through #46 |
+| 2 | [#46 — PM quality benchmark + decision trace](https://github.com/danielkokr/djonik-manager-2.0/issues/46) | **DONE — source accepted 2026-09-28** ([docs/83](83_ISSUE_46_PM_BENCHMARK_SOURCE_REPORT.md)); paid baseline deferred |
+| 3 | **NOW — [#47 — Read-only `trello_board_snapshot`](https://github.com/danielkokr/djonik-manager-2.0/issues/47)** | #46 measurement infrastructure accepted; expose compact model-ready Trello facts |
 | 4 | [#48 — Forwarded client messages → one proposal with ✅](https://github.com/danielkokr/djonik-manager-2.0/issues/48) | After #45–#47; supersedes #43 |
 | 5 | [#49 — Telegram voice messages](https://github.com/danielkokr/djonik-manager-2.0/issues/49) | After or alongside #48 |
 | 6 | [#50 — Current focus, timebox, live re-planning](https://github.com/danielkokr/djonik-manager-2.0/issues/50) | After #48 |
