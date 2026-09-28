@@ -106,6 +106,10 @@ const PROFILE_SCENARIOS = ["S26", "S27", "S28", "S29", "S30"];
 
 export function memoriesForScenario(scenario: Scenario): Record<string, string> {
   const memories = { ...EVAL_MEMORIES };
+  if (Number(scenario.id.slice(1)) >= 31) {
+    memories["/working-style.md"] = "# Спілкування\n- Одне головне рішення в плані (сказав Daniel, 2026-09-20)\n\n# Робота\n- Концепти краще ставити зранку (прийняв Daniel, 2026-09-21)\n";
+    if (scenario.id === "S35") memories["/working-style.md"] = "# Спілкування\n- Докладні відповіді за замовчуванням (сказав Daniel, 2026-09-20)\n\n# Робота\n- Концепти краще ставити зранку (прийняв Daniel, 2026-09-21)\n";
+  }
   if (PROFILE_SCENARIOS.includes(scenario.id)) {
     // #51: the enriched #17 briefs replace the one-line eval briefs; no accepted commitment competes with the profile.
     for (const [slug, brief] of Object.entries(EVAL_PROFILE_BRIEFS)) memories[`/projects/${slug}.md`] = brief;

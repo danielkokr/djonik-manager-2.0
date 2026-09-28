@@ -6,7 +6,7 @@ import { executeTrelloBoardSnapshot } from "./trelloBoardSnapshot.js";
 import { executeTrelloWorkHistory, TrelloWorkHistoryClient } from "./trelloWorkHistory.js";
 import { EVAL_BOARD_NAME, resetEvalFixture, resetEvalMemory } from "./pmFixture.js";
 import { TrelloEvalBoardDriver } from "./pmTrelloFixture.js";
-import { FIXED_CLOCK, makeReport, renderSummary, renderTable, runBenchmark, type BenchmarkMode, type CandidateFactory } from "./pmBenchmark.js";
+import { makeReport, renderSummary, renderTable, runBenchmark, type BenchmarkMode, type CandidateFactory } from "./pmBenchmark.js";
 import { fakeGrader } from "./pmGrader.js";
 import { GRADER_INSTRUCTIONS, graderPayload, parseGraderResult } from "./pmGrader.js";
 
@@ -79,19 +79,22 @@ async function main(): Promise<void> {
     apiKey: evalKey, token: required(process.env.TRELLO_EVAL_TOKEN, "TRELLO_EVAL_TOKEN") });
   const evalReader = new TrelloWorkHistoryClient({ boardId: evalBoardId, apiKey: evalKey,
     readToken: required(process.env.TRELLO_EVAL_READ_TOKEN, "TRELLO_EVAL_READ_TOKEN") });
-  const evalCustomTools: DjonikCustomToolExecutor = async (toolInput, context) =>
-    context.name === "trello_board_snapshot" ? executeTrelloBoardSnapshot(toolInput, evalReader, new Date(FIXED_CLOCK))
-      : context.name === "trello_work_history" ? executeTrelloWorkHistory(toolInput, evalReader, new Date(FIXED_CLOCK))
-        : { isError: true, content: JSON.stringify({ error: { message: "This custom tool is unavailable in the eval Session." } }) };
   const memoryStore = required(process.env.DJONIK_EVAL_MEMORY_STORE_ID, "DJONIK_EVAL_MEMORY_STORE_ID");
   let spent = 0;
   let graderSpent = 0;
   let sessions = 0;
   let budgetUnknown = false;
-  const candidate: CandidateFactory = { async open({ scenario, repetition }) {
+  const candidate: CandidateFactory = { async open({ scenario, repetition, fixedClock }) {
     if (budgetUnknown || sessions >= maxSessions || spent * 100 + admissionCents + reserveCents > totalCents) throw new Error("benchmark admission budget exhausted or usage unknown");
     sessions += 1;
+    // #52 approval scenarios must be able to write the dedicated, verified eval store;
+    // earlier read-only scenarios keep their original fixture semantics.
+    const memoryAccess = Number(scenario.id.slice(1)) >= 31 ? "read_write" : "read_only";
     let telemetry: DjonikTurnTelemetry | undefined;
+    const evalCustomTools: DjonikCustomToolExecutor = async (toolInput, context) =>
+      context.name === "trello_board_snapshot" ? executeTrelloBoardSnapshot(toolInput, evalReader, new Date(fixedClock))
+        : context.name === "trello_work_history" ? executeTrelloWorkHistory(toolInput, evalReader, new Date(fixedClock))
+          : { isError: true, content: JSON.stringify({ error: { message: "This custom tool is unavailable in the eval Session." } }) };
     const connection = await connectToDjonik(client,
       agentId, environmentId, memoryStore, vaultId,
       undefined, (record) => {
@@ -100,7 +103,7 @@ async function main(): Promise<void> {
         if (record.usage?.listCostCurrency !== "USD" || !amount || !/^\d+$/.test(amount)) budgetUnknown = true;
         else spent += Number(amount) / 100;
       },
-      "diagnostic", evalCustomTools, { agentVersion, memoryAccess: "read_only", now: () => new Date(FIXED_CLOCK),
+      "diagnostic", evalCustomTools, { agentVersion, memoryAccess, now: () => new Date(fixedClock),
         maxListCostUsdCents: String(admissionCents), metadata: { source: "pm-benchmark", release, scenario: scenario.id, repetition: String(repetition) },
         attestSession: async (created) => {
           const id = (created as { id?: unknown } | null)?.id;
@@ -108,7 +111,7 @@ async function main(): Promise<void> {
           const persisted = await client.beta.sessions.retrieve(id);
           if (persisted.agent.id !== agentId || persisted.agent.version !== agentVersion ||
             persisted.environment_id !== environmentId || !persisted.vault_ids.includes(vaultId) ||
-            !persisted.resources.some((resource) => resource.type === "memory_store" && resource.memory_store_id === memoryStore && resource.access === "read_only")) {
+            !persisted.resources.some((resource) => resource.type === "memory_store" && resource.memory_store_id === memoryStore && resource.access === memoryAccess)) {
             throw new Error("Eval Session snapshot does not match the pinned benchmark tuple");
           }
         } });

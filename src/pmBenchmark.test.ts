@@ -9,10 +9,11 @@ test("canonical S1–S16 retained; #48 appends S17–S21; #50 appends S22–S25;
   assert.deepEqual(SCENARIOS.slice(0, 16).map((s) => s.id), Array.from({ length: 16 }, (_, i) => `S${i + 1}`));
   assert.deepEqual(SCENARIOS.slice(16, 21).map((s) => s.id), ["S17", "S18", "S19", "S20", "S21"]);
   assert.deepEqual(SCENARIOS.slice(21, 25).map((s) => s.id), ["S22", "S23", "S24", "S25"]);
-  assert.deepEqual(SCENARIOS.slice(25).map((s) => s.id), ["S26", "S27", "S28", "S29", "S30"]);
+  assert.deepEqual(SCENARIOS.slice(25, 30).map((s) => s.id), ["S26", "S27", "S28", "S29", "S30"]);
+  assert.deepEqual(SCENARIOS.slice(30).map((s) => s.id), Array.from({ length: 10 }, (_, i) => `S${i + 31}`));
   assert.deepEqual(selectScenarios("critical").map((s) => s.id), [...CRITICAL_IDS]);
   assert.deepEqual(selectScenarios("S14").map((s) => s.id), ["S14"]);
-  assert.equal(selectScenarios("full").length, 30);
+  assert.equal(selectScenarios("full").length, 40);
   assert.equal(SCENARIOS.find((s) => s.id === "S14")?.turns.length, 3);
 });
 test("#48 offline fixtures preserve source attribution, exact link and two plausible card targets", () => {
@@ -93,6 +94,30 @@ test("2/3 target, deterministic and grader failures remain separately recorded",
   assert.deepEqual(runs[2].checkFailures, ["silent"]);
   assert.equal(runs[2].grader?.verdict, "pass");
   assert.throws(() => parseGraderResult({ dimensions: { decision: "pass", evidence: "pass", frame: "pass", usefulness: "pass" }, verdict: "fail" }, ["decision"]));
+});
+
+test("#52 S31–S40 preserve S1–S30, use a due-only Friday prompt and score approval boundaries", async () => {
+  const scenario = (id: string) => SCENARIOS.find((entry) => entry.id === id)!;
+  assert.match(scenario("S36").turns[0], /Цього місяця настав короткий огляд working-style/);
+  assert.doesNotMatch(scenario("S37").turns[0], /Цього місяця настав короткий огляд working-style/);
+  assert.match(memoriesForScenario(scenario("S35"))["/working-style.md"], /Докладні відповіді/);
+  assert.equal(memoriesForScenario(scenario("S35"))["/preferences.md"], undefined);
+  const run = async (id: string, replies: string[], writes: string[][] = replies.map(() => [])) => {
+    let index = 0;
+    return (await runBenchmark({ mode: id as `S${number}`, release: "offline", repetitions: 1, grader: fakeGrader(),
+      fixture: { async reset() { return { evidenceAvailable: true }; } },
+      candidate: { async open() { return { async send() { const at = index++; return { reply: replies[at], trace: { ...trace, memoryPathsWritten: writes[at] } }; }, close() {} }; } } }))[0].checkFailures;
+  };
+  assert.deepEqual(await run("S31", ["Головне — концепт. Запамʼятати це як правило?"]), []);
+  assert.deepEqual(await run("S31", ["Головне — концепт."]), ["remember_offer"]);
+  assert.deepEqual(await run("S32", ["Сьогодні Extract не чіпаємо."]), []);
+  assert.deepEqual(await run("S33", ["Дедлайн не вказано."]), []);
+  assert.deepEqual(await run("S34", ["Запамʼятати?", "Один пріоритет зараз." ]), []);
+  assert.deepEqual(await run("S34", ["Запамʼятати?", "І це запамʼятати?" ]), ["no_second_remember_offer"]);
+  assert.deepEqual(await run("S35", ["Запамʼятати?", "Збережено."], [[], ["/working-style.md"]]), []);
+  assert.deepEqual(await run("S35", ["Запамʼятати?", "Збережено."], [[], ["/preferences.md"]]), ["working_style_only", "no_preferences_write"]);
+  assert.deepEqual(await run("S39", ["Запамʼятати?", "Добре."], [[], []]), []);
+  assert.deepEqual(await run("S39", ["Запамʼятати?", "Добре."], [[], ["/working-style.md"]]), ["no_memory_write"]);
 });
 
 test("#50 S22–S25: runtime-built prompts, fixtures and mechanical checks (no paid run, no pass^3 claim)", async () => {

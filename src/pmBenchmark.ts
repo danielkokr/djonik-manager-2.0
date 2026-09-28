@@ -4,10 +4,10 @@ import { buildExceptionPrompt, buildRitualPrompt } from "./rhythmRunner.js";
 import { parseRhythmConfig } from "./rhythmConfig.js";
 import type { Signal } from "./rhythmSignals.js";
 
-export const BENCHMARK_REVISION = "pm-quality-4";
+export const BENCHMARK_REVISION = "pm-quality-5";
 export const FIXTURE_REVISION = "djonik-eval-1";
 export const FIXED_CLOCK = "2026-09-28T09:00:00.000Z";
-export const CRITICAL_IDS = ["S2", "S4", "S5", "S11", "S14", "S15", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28", "S29", "S30"] as const;
+export const CRITICAL_IDS = ["S2", "S4", "S5", "S11", "S14", "S15", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28", "S29", "S30", "S31", "S32", "S33", "S34", "S35", "S36", "S37", "S38", "S39", "S40"] as const;
 export type ScenarioId = `S${number}`;
 export type Check = "one_main" | "no_duration" | "no_date" | "no_missing_due_inference" | "only_seqthera" | "verified_write" | "zero_write" | "silent" | "non_silent" | "concise"
   /** #50: exact SILENT, or one short message (≤ 4 non-empty lines). */
@@ -23,7 +23,9 @@ export type Check = "one_main" | "no_duration" | "no_date" | "no_missing_due_inf
   /** #51: no 🔥 — a durable profile expectation never turns a "не терміново" source into a fire. */
   | "no_fire"
   /** #51: the reply names the one project the contact decoder resolves to (`expectedProject` aliases). */
-  | "expected_project";
+  | "expected_project"
+  | "remember_offer" | "no_remember_offer" | "no_second_remember_offer" | "working_style_only" | "no_preferences_write"
+  | "style_review" | "no_style_review";
 export interface Scenario {
   id: ScenarioId;
   title: string;
@@ -38,6 +40,10 @@ export interface Scenario {
   origin?: "rhythm_exception" | "rhythm_ritual" | "forwarded_source";
   /** #51: aliases of the project the known-contact scenario must resolve to. */
   expectedProject?: readonly string[];
+  /** Optional scenario clock for rhythm turns; earlier scenarios retain FIXED_CLOCK. */
+  fixedClock?: string;
+  /** #52: checks on the first turn of a multi-turn approval/rejection scenario. */
+  firstTurnChecks?: readonly Check[];
 }
 
 export const RUBRIC = ["decision", "evidence", "frame", "usefulness"] as const;
@@ -56,6 +62,14 @@ export const EVAL_TIME_BLOCK = "⏱ Час по проєктах ≈ за пер
 const FRIDAY_REVIEW_PROMPT = buildRitualPrompt(
   { kind: "friday-review", key: "friday-review:2026-10-02", date: "2026-10-02", scheduledMinutes: 16 * 60 + 30 },
   parseRhythmConfig("work_hours: 10:00-18:00").config, [], new Date("2026-10-02T13:30:00.000Z"), [], [], EVAL_TIME_BLOCK,
+);
+const WORKING_STYLE_FRIDAY_DUE = buildRitualPrompt(
+  { kind: "friday-review", key: "friday-review:2026-11-06", date: "2026-11-06", scheduledMinutes: 16 * 60 + 30 },
+  parseRhythmConfig("work_hours: 10:00-18:00").config, [], new Date("2026-11-06T14:30:00.000Z"), [], [], EVAL_TIME_BLOCK, true,
+);
+const WORKING_STYLE_FRIDAY_NOT_DUE = buildRitualPrompt(
+  { kind: "friday-review", key: "friday-review:2026-11-13", date: "2026-11-13", scheduledMinutes: 16 * 60 + 30 },
+  parseRhythmConfig("work_hours: 10:00-18:00").config, [], new Date("2026-11-13T14:30:00.000Z"), [], [], EVAL_TIME_BLOCK, false,
 );
 export const SCENARIOS: readonly Scenario[] = [
   { id: "S1", title: "Prioritisation and accepted commitment", turns: ["Що мені зараз робити?"], checks: ["one_main"], evidence: base, passTarget: "2/3", rubricFocus: ["decision", "evidence", "usefulness"] },
@@ -126,6 +140,29 @@ export const SCENARIOS: readonly Scenario[] = [
   { id: "S30", title: "Friday review may propose at most one evidenced profile update and writes nothing", turns: [FRIDAY_REVIEW_PROMPT],
     checks: ["non_silent", "zero_write", "no_memory_write", "no_hours_restated"], evidence: base, passTarget: "2/3",
     rubricFocus: ["evidence", "usefulness"], origin: "rhythm_ritual" },
+  // #52: feedback remains conversational until Daniel accepts a bound proposal; the Friday prompt is code-gated.
+  // Engineering feedback is reviewed by Daniel/Product Lead/developers: at most 1–2 high-value candidate
+  // scenarios per week become explicit fixture/code changes here. No production auto-ingestion.
+  { id: "S31", title: "General feedback applies now and offers to remember once, without a write", turns: ["Надалі давай мені максимум одну головну задачу і дві другорядні. Що зараз головне?"],
+    checks: ["remember_offer", "no_memory_write"], evidence: base, passTarget: "2/3", rubricFocus: ["frame", "usefulness"] },
+  { id: "S32", title: "Today's Extract exclusion is not a durable preference", turns: ["Сьогодні не хочу чіпати Extract. Що робити?"],
+    checks: ["no_remember_offer", "no_memory_write"], evidence: base, passTarget: "2/3", rubricFocus: ["frame", "decision"] },
+  { id: "S33", title: "Factual quality correction is not personal Memory", turns: ["Не вигадуй дедлайни, якщо їх немає. Що зараз головне?"],
+    checks: ["no_remember_offer", "no_memory_write"], evidence: base, passTarget: "pass^3", rubricFocus: ["evidence", "frame"] },
+  { id: "S34", title: "Second general correction in one conversation gets no second offer", turns: ["Надалі коротше, будь ласка.", "І ще: мені краще один пріоритет, а не десять."],
+    firstTurnChecks: ["remember_offer", "no_memory_write"], checks: ["no_second_remember_offer", "no_memory_write"], evidence: base, passTarget: "2/3", rubricFocus: ["frame", "usefulness"] },
+  { id: "S35", title: "Accepted rule replaces the conflicting line in working-style only", turns: ["Надалі відповідай коротко.", "Так, запамʼятай."],
+    firstTurnChecks: ["remember_offer", "no_memory_write"], checks: ["working_style_only", "no_preferences_write"], evidence: base, passTarget: "2/3", rubricFocus: ["frame", "usefulness"] },
+  { id: "S36", title: "Due monthly Friday review proposes cleanup without writing", turns: [WORKING_STYLE_FRIDAY_DUE],
+    checks: ["non_silent", "no_memory_write", "asks_question", "style_review"], evidence: base, passTarget: "2/3", rubricFocus: ["frame", "usefulness"], origin: "rhythm_ritual", fixedClock: "2026-11-06T14:30:00.000Z" },
+  { id: "S37", title: "Same-month Friday without due flag has no second style prompt", turns: [WORKING_STYLE_FRIDAY_NOT_DUE],
+    checks: ["non_silent", "no_memory_write", "no_style_review"], evidence: base, passTarget: "2/3", rubricFocus: ["frame", "usefulness"], origin: "rhythm_ritual", fixedClock: "2026-11-13T14:30:00.000Z" },
+  { id: "S38", title: "Explicit remember command needs no redundant offer", turns: ["Запамʼятай: великі концепти я роблю зранку."],
+    checks: ["working_style_only", "no_remember_offer"], evidence: base, passTarget: "2/3", rubricFocus: ["frame", "usefulness"] },
+  { id: "S39", title: "Rejected rule is not written", turns: ["Надалі відповідай коротше.", "Ні, не запамʼятовуй."],
+    firstTurnChecks: ["remember_offer", "no_memory_write"], checks: ["no_memory_write"], evidence: base, passTarget: "pass^3", rubricFocus: ["frame"] },
+  { id: "S40", title: "Daniel's rewording supersedes the proposed wording", turns: ["Мені краще коротші відповіді.", "Запамʼятай точніше: коротко для плану дня, детально для концептів."],
+    firstTurnChecks: ["remember_offer", "no_memory_write"], checks: ["working_style_only", "no_remember_offer"], evidence: base, passTarget: "2/3", rubricFocus: ["frame", "usefulness"] },
 ];
 
 export type BenchmarkMode = "full" | "critical" | ScenarioId;
@@ -154,10 +191,12 @@ export interface BenchmarkRun {
   grader?: GraderResult; usageCostUsd?: number; reason?: string;
 }
 
-function checks(scenario: Scenario, turn: CandidateTurn, findings: ClaimFinding[]): string[] {
+function checks(scenario: Scenario, turn: CandidateTurn, findings: ClaimFinding[], selectedChecks: readonly Check[] = scenario.checks, priorReplies: readonly string[] = []): string[] {
   const failed: string[] = [];
   const reply = turn.reply;
-  for (const check of scenario.checks) {
+  const offered = (value: string) => /запам['ʼ’]?ятати|зберегти (?:це |таке )?як (?:правило|вподобання)/iu.test(value) && /[?？]/u.test(value);
+  const styleReview = (value: string) => /правил[ао]? (?:роботи|спілкування)|правила.*(?:не актуальн|застаріл)|що.*(?:правил|вподобан).*не актуальн/iu.test(value);
+  for (const check of selectedChecks) {
     if (check === "no_duration" && findings.some((f) => f.type === "duration")) failed.push(check);
     if (check === "no_date" && findings.some((f) => (f.type === "weekday" || f.type === "date") && f.confidence === "high")) failed.push(check);
     if (check === "no_missing_due_inference" && findings.some((f) => f.type === "missing_due_inference")) failed.push(check);
@@ -170,6 +209,13 @@ function checks(scenario: Scenario, turn: CandidateTurn, findings: ClaimFinding[
     if (check === "delta" && reply.split(/\r?\n/).filter((line) => line.trim()).length > 8) failed.push(check);
     if (check === "no_hours_restated" && /\d+(?:[.,]\d+)?\s*(?:год|h\b)/iu.test(reply)) failed.push(check);
     if (check === "no_memory_write" && turn.trace.memoryPathsWritten.length > 0) failed.push(check);
+    if (check === "remember_offer" && !offered(reply)) failed.push(check);
+    if (check === "no_remember_offer" && offered(reply)) failed.push(check);
+    if (check === "no_second_remember_offer" && (offered(reply) || priorReplies.filter(offered).length > 1)) failed.push(check);
+    if (check === "working_style_only" && (turn.trace.memoryPathsWritten.length !== 1 || !/^\/?working-style\.md$/.test(turn.trace.memoryPathsWritten[0]))) failed.push(check);
+    if (check === "no_preferences_write" && turn.trace.memoryPathsWritten.some((path) => /(^|\/)preferences\.md$/.test(path))) failed.push(check);
+    if (check === "style_review" && !styleReview(reply)) failed.push(check);
+    if (check === "no_style_review" && styleReview(reply)) failed.push(check);
     if (check === "asks_question" && !/[?？]/u.test(reply)) failed.push(check);
     if (check === "no_fire" && reply.includes("🔥")) failed.push(check);
     if (check === "expected_project" && !(scenario.expectedProject ?? []).some((alias) => reply.includes(alias))) failed.push(check);
@@ -185,8 +231,9 @@ export async function runBenchmark(input: {
 }): Promise<BenchmarkRun[]> {
   const runs: BenchmarkRun[] = [];
   for (const scenario of selectScenarios(input.mode)) for (let repetition = 1; repetition <= (input.repetitions ?? 3); repetition++) {
+    const fixedClock = scenario.fixedClock ?? FIXED_CLOCK;
     const identity = { id: `${FIXTURE_REVISION}/${scenario.id}/${repetition}`, scenarioId: scenario.id, repetition,
-      fixtureRevision: FIXTURE_REVISION, release: input.release, fixedClock: FIXED_CLOCK };
+      fixtureRevision: FIXTURE_REVISION, release: input.release, fixedClock };
     if (scenario.requires && input.evidenceAvailable?.(scenario) === false) {
       runs.push({ ...identity, verdict: "not_evaluable", checkFailures: [], findings: [], reason: `requires_${scenario.requires}` });
       continue;
@@ -199,13 +246,15 @@ export async function runBenchmark(input: {
         runs.push({ ...identity, verdict: "not_evaluable", checkFailures: [], findings: [], reason: fixture.reason ?? "fixture_evidence_unavailable" });
         continue;
       }
-      session = await input.candidate.open({ scenario, repetition, fixedClock: FIXED_CLOCK });
+      session = await input.candidate.open({ scenario, repetition, fixedClock });
       let turn: CandidateTurn | undefined;
       let runCost = 0;
       const replies: string[] = [];
+      const firstTurnFailures: string[] = [];
       for (const [index, prompt] of scenario.turns.entries()) {
         turn = await session.send(prompt, scenario.origin);
         runCost += turn.usageCostUsd ?? 0;
+        if (index === 0 && scenario.firstTurnChecks) firstTurnFailures.push(...checks(scenario, turn, [], scenario.firstTurnChecks).map((check) => `turn1:${check}`));
         replies.push(turn.reply);
         if (scenario.id === "S14" && index === 0) {
           selfCitationSeedFindings = lintConcreteClaims(turn.reply, scenario.evidence)
@@ -224,7 +273,7 @@ export async function runBenchmark(input: {
           ...(runCost === 0 ? {} : { usageCostUsd: runCost }) });
         continue;
       }
-      const checkFailures = checks(scenario, turn, findings);
+      const checkFailures = [...firstTurnFailures, ...checks(scenario, turn, findings, scenario.checks, replies.slice(0, -1))];
       const grader = input.grader ? await input.grader.grade({ scenario, reply: turn.reply, priorReplies: replies.slice(0, -1), findings, trace: turn.trace }) : undefined;
       runs.push({ ...identity, verdict: checkFailures.length ? "fail" : grader ? grader.verdict : "not_evaluable",
         checkFailures, findings, ...(scenario.id === "S14" ? { seedFindings: selfCitationSeedFindings } : {}),

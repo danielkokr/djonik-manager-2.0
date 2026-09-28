@@ -53,10 +53,10 @@ test("#34: the commitment contract fits the provider's 4096-character Memory ins
 });
 
 test("#34: the #13 accepted-context invariants survive the commitment extension", () => {
-  assert.match(M, /only write an accepted plan or commitment when the user's acceptance\/commitment is actually explicit, not merely discussed/);
-  assert.match(M, /Do not store live Trello\/task state, transient chat, or anything trivial/);
-  assert.match(M, /fresh external tool reads always outrank what is remembered here for current status/);
-  assert.match(M, /the superseded one is no longer presented as still active/);
+  assert.match(M, /Write plans or commitments only after explicit user acceptance, never from discussion/);
+  assert.match(M, /Do not store live Trello\/task state, transient chat or trivia/);
+  assert.match(M, /Fresh tool reads outrank Memory for current status/);
+  assert.match(M, /corrections supersede old claims/);
 });
 
 test("#34: an accepted plan or commitment about a Trello card keeps its project and a fresh-read card id (issue comment 2026-09-22)", () => {
@@ -186,7 +186,7 @@ test("#34 I stale Memory vs fresh Trello: current card facts are never stored an
   assert.match(facts, /Never store the card's current list, status, due, labels, members or checklist/);
   assert.match(facts, /read them fresh by card id\. Fresh Trello alone does not resolve a commitment/);
   // #51 dedupe (docs/88 §14): "fresh Trello wins on current state" is the first paragraph's one canonical rule.
-  assert.match(M, /fresh external tool reads always outrank what is remembered here for current status/);
+  assert.match(M, /Fresh tool reads outrank Memory for current status/);
 });
 
 test("#34 J weak resolution evidence: a Done card does not prove the awaited outcome", () => {

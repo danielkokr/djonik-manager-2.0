@@ -211,6 +211,7 @@ export function buildRitualPrompt(
   configWarnings: readonly string[] = [],
   reminders: readonly Reminder[] = [],
   timeBlock: string | null = null,
+  workingStyleReviewDue = false,
 ): string {
   const lines = [
     `[Робочий ритм · автоматичний хід · ${RITUAL_SECTION[ritual.kind]} · ${kyivLabel(now, true)}]`,
@@ -236,6 +237,9 @@ export function buildRitualPrompt(
         "він неочевидний. Якщо блок каже «недоступний» — не оцінюй години сам:",
       timeBlock,
     );
+  }
+  if (workingStyleReviewDue && ritual.kind === "friday-review") {
+    lines.push("Цього місяця настав короткий огляд working-style.md: прочитай його, назви число активних правил або покажи їх стисло й запитай, що вже не актуальне. Лише пропозиція; цей автоматичний хід нічого не записує. Якщо файл недоступний, не вигадуй правил.");
   }
   if (observations.length > 0) {
     lines.push("Підказки коду (перевір свіжим Trello; це не готові висновки):", ...hintLines(observations));
@@ -635,14 +639,23 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
       // #50: the Friday review carries a deterministic time-per-project block computed BEFORE the turn from Trello's
       // action log; code places it after the verified work-history facts, and the model only comments.
       let timeBlock: string | null = null;
+      let workingStyleReviewDue = false;
       if (dueRitual.kind === "friday-review") {
+        const month = today.slice(0, 7);
+        // Older state has no month marker. Establish a baseline without asking: an earlier Friday
+        // review could have been pruned from the 21-day delivery ledger. On later months claim
+        // before the model turn, so crash/retry/ambiguous sends cannot prompt twice.
+        workingStyleReviewDue = state.workingStyleReviewMonth !== undefined && state.workingStyleReviewMonth !== month;
+        if (state.workingStyleReviewMonth !== month) {
+          state = await deps.store.update((current) => ({ ...current, workingStyleReviewMonth: month }));
+        }
         try {
           timeBlock = (deps.weeklyTime ? await deps.weeklyTime({ now, config }) : weeklyTimeUnavailable("history_unavailable")).block;
         } catch {
           timeBlock = weeklyTimeUnavailable("history_unavailable").block;
         }
       }
-      const prompt = buildRitualPrompt(dueRitual, config, ritualObservations(signals, config, now), now, noteWarnings ? parsed.warnings : [], claimed, timeBlock);
+      const prompt = buildRitualPrompt(dueRitual, config, ritualObservations(signals, config, now), now, noteWarnings ? parsed.warnings : [], claimed, timeBlock, workingStyleReviewDue);
       const block = timeBlock;
       const compose = block === null ? undefined : (turn: AutonomousTurnResult) => composeWeeklyTimeReply(turn.reply, turn.workHistoryAnswerText, block);
       const result = await attempt(state, dueRitual.key, dueRitual.kind, "rhythm_ritual", prompt, report, {}, carriesReminders, compose);

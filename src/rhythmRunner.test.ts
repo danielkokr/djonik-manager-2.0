@@ -377,6 +377,23 @@ test("a scheduled turn that edited Memory (e.g. 'accepted' the plan itself) is b
   assert.equal(h.sends[0].message.text, AUTONOMOUS_WRITE_NOTICE);
 });
 
+test("#52 monthly working-style review: legacy state baselines safely, next month prompts once, no autonomous write", async () => {
+  const h = harness({ now: "2026-10-02T13:30:00Z", reply: () => ({ reply: "⏸ Огляд тижня. Переносимо?", toolUses: [] }) });
+  const scheduler = createRhythmScheduler(h.deps);
+  await scheduler.tick();
+  assert.doesNotMatch(h.turns[0].prompt, /Цього місяця настав короткий огляд working-style/);
+  assert.equal(h.store.snapshot().workingStyleReviewMonth, "2026-10");
+  h.setNow("2026-11-06T14:30:00Z");
+  await scheduler.tick();
+  assert.match(h.turns[1].prompt, /Цього місяця настав короткий огляд working-style/);
+  assert.equal(h.store.snapshot().workingStyleReviewMonth, "2026-11");
+  assert.equal(h.sends.length, 2);
+  h.setNow("2026-11-13T14:30:00Z");
+  await scheduler.tick();
+  assert.doesNotMatch(h.turns[2].prompt, /Цього місяця настав короткий огляд working-style/);
+  assert.equal(h.sends.length, 3);
+});
+
 /**
  * Stage 2 reviewed exceptions (docs/62): each wiring module may reach exactly one external boundary, and
  * only read-only. Every other rhythm module keeps the Stage 1 rule: no Trello, Session client or Memory path.

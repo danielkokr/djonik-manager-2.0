@@ -75,6 +75,8 @@ export interface RhythmState {
   reminders?: ReminderLedger;
   /** Code-owned focus from Trello moves and explicit focus budgets (#50); absent = never needed yet. */
   focus?: FocusLedger;
+  /** #52: last calendar month considered for a working-style review; no rule content. */
+  workingStyleReviewMonth?: string;
 }
 
 export function emptyRhythmState(): RhythmState {
@@ -144,6 +146,7 @@ function isState(value: unknown): value is RhythmState {
   try {
     if (candidate.reminders !== undefined) validateReminderLedger(candidate.reminders);
     if (candidate.focus !== undefined) validateFocusLedger(candidate.focus);
+    if (candidate.workingStyleReviewMonth !== undefined && !/^\d{4}-(0[1-9]|1[0-2])$/.test(candidate.workingStyleReviewMonth)) return false;
     return true;
   } catch (error) {
     if (error instanceof ReminderLedgerError || error instanceof FocusLedgerError) return false;

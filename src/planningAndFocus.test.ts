@@ -217,15 +217,17 @@ test("a small set of canonical cases teaches decisions, covering the situations 
   for (const item of items) assert.doesNotMatch(item, /→\s*«/, "a case states the decision, not a reply to copy");
 });
 
-test("the merged Skill is smaller than the two it replaces", () => {
+test("#42 merged Skill baseline stays bounded; #52 feedback section has a reviewed growth cap", () => {
   const bytes = Buffer.byteLength(skill, "utf8");
-  assert.ok(bytes < 5558 + 8307, `planning-and-focus is ${bytes} B; daily + weekly were 13 865 B`);
+  const beforeFeedback = skill.replace(/\n## Feedback and working style\n[\s\S]*?\n## Evidence\n/, "\n## Evidence\n");
+  assert.ok(Buffer.byteLength(beforeFeedback, "utf8") < 5558 + 8307, "the earlier merged Skill remains smaller than daily + weekly");
   // #45 grew it on purpose: every case now states its premise and source, two empty-slot cases and the approved
   // docs/77 answer shape were added (7577 → ~11 KB, much of it two-byte Cyrillic). Reviewed; the next growth needs a new review.
   // #50 adds ~300 B (week stakes, the change-today delta, the next-step line on return); raised for Product Lead review.
   // #51 adds the client-profile section (~1.1 KB: schema, missing-fact question, write/provenance) and folds the profile
   // tie-break into the existing week-frame bullet instead of a new case; raised for Product Lead review (docs/88 §13).
-  assert.ok(bytes <= 13800, `review planning-and-focus growth (${bytes} B); 13800 includes #47 snapshot, #48 Size, #50 focus and #51 profiles`);
+  assert.ok(Buffer.byteLength(beforeFeedback, "utf8") <= 13800, "#51 baseline remains within its reviewed cap");
+  assert.ok(bytes <= 16100, `review #52 planning-and-focus growth (${bytes} B)`);
 });
 
 // --- Memory contract (#42) -----------------------------------------------------------------------------
@@ -237,7 +239,8 @@ const places = () => {
 };
 
 test("#42 Memory: working-style.md holds only what Daniel states or accepts — never an inferred profile", () => {
-  assert.match(places(), /working-style.md[^;]{0,60}states or accepts[^;]{0,20}never inferred/i);
+  assert.match(places(), /working-style.md alone holds Daniel-approved work\/communication rules/);
+  assert.match(places(), /write only after his explicit yes or 'remember'/);
 });
 
 test("#42 Memory: plans/current-week.md — one accepted week plan with a week marker from the clock", () => {
@@ -250,14 +253,14 @@ test("#42 Memory: the week plan lifecycle — only on acceptance; replaced by th
   assert.match(places(), /newly accepted week plan replaces it/i);
   assert.match(places(), /accepted change edits it/i);
   assert.match(places(), /Another week's plan is not this week's frame/i);
-  assert.match(M, /A suggestion is not a plan: only write an accepted plan or commitment when the user's acceptance\/commitment is actually explicit/);
+  assert.match(M, /Write plans or commitments only after explicit user acceptance, never from discussion/);
 });
 
 test("#42 Memory: accepted context is never live task state — no day plans, no card fields, fresh reads win", () => {
   assert.match(places(), /No day plans/i);
   // #51 dedupe (docs/88 §14): "no card state" restated the first paragraph's "Do not store live Trello/task state".
   assert.match(M, /Do not store live Trello\/task state/);
-  assert.match(M, /fresh external tool reads always outrank what is remembered here for current status/);
+  assert.match(M, /Fresh tool reads outrank Memory for current status/);
   assert.doesNotMatch(places(), /\b(?:list|due|labels?|members?|checklists?|lastActivityAt)\b\s*:/, "no Trello field in the plan record");
 });
 

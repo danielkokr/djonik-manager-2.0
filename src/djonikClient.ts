@@ -514,16 +514,14 @@ export type DjonikTraceEvent =
  * of next_check (Accept), and the fresh-card clauses (Never store / first paragraph).
  */
 export const DJONIK_MEMORY_INSTRUCTIONS =
-  "A suggestion is " +
-  "not a plan: only write an accepted plan or commitment when the user's " +
-  "acceptance/commitment is actually explicit, not merely discussed. Do not store live " +
-  "Trello/task state, transient chat, or anything trivial. " +
-  "fresh external tool reads always outrank what is " +
-  "remembered here for current status. On correction, the superseded one is no longer presented as still active. An accepted plan or " +
+  "Write plans or commitments only after explicit user acceptance, never from discussion. " +
+  "Do not store live Trello/task state, transient chat or trivia. Fresh tool reads outrank " +
+  "Memory for current status; corrections supersede old claims. An accepted plan or " +
   "commitment about a Trello card keeps its project and, if freshly read, its card id.\n" +
   "\n" +
-  "Fixed places: working-style.md is how Daniel works, only as he states or accepts " +
-  "it, never inferred. plans/current-week.md is the one accepted week plan: week: <its " +
+  "Fixed places: working-style.md alone holds Daniel-approved work/communication rules; " +
+  "apply feedback now, write only after his explicit yes or 'remember', with clock date and source; " +
+  "replace conflicts, never write legacy preferences.md. plans/current-week.md is the one accepted week plan: week: <its " +
   "Monday, from the clock line>, up to 3 outcomes with project and why, what he chose " +
   "to drop. A newly accepted week plan replaces it; an accepted change edits it. No day " +
   "plans. Another week's plan is not this week's frame. projects/<slug>.md is the one brief " +

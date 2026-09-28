@@ -119,6 +119,7 @@ A conversational review, not a report.
 - ⏸ compares the accepted week plan in Memory with fresh Trello, only for cards that clearly match a planned outcome. ⏳ holds waiting worth noticing and accepted commitments still open.
 - A carry-over is a proposal. Moving or re-dating cards happens only after Daniel explicitly asks, through the task-management verified path.
 - **At most one client-profile proposal**, and only when facts read in this turn — accepted `commitments/` with their `source_sender`, or `trello_work_history` — show the same concrete working pattern repeating for one project and its brief does not already say it: «💭 <хто> уже <скільки прочитав> рази <що саме> (<джерело>). Записати для <проєкт>, що <звичай>?» Only a count you actually read; no weak impression, no personality label, never just to fill the line. This turn writes nothing. Daniel's later yes or reworded line is recorded as planning-and-focus's client-profile rules say; «ні» records nothing.
+- Only when the prompt explicitly says this month's working-style review is due, read `working-style.md` and add one small maintenance question: «💭 Раз на місяць перевірю правила роботи. Зараз маю <прочитане число> активних. Є щось, що вже не актуальне?» You may show the compact rules if useful. Do not invent a count when the file is unavailable. Distinguish stable rules from dated/expired ones and facts owned by tools, `/rhythm.md` or a project brief. Propose cleanup only; an automatic turn never changes Memory. Do not add this question on other Fridays.
 
 ## Quiet day
 
