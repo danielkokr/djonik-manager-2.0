@@ -35,6 +35,7 @@ function sender(errors: unknown[] = []) {
 test("turn authority: only Daniel's two origins are human; rhythm origins and anything unknown are read-only", () => {
   assert.equal(mutationAuthorityFor("user_message"), "human");
   assert.equal(mutationAuthorityFor("button_callback"), "human");
+  assert.equal(mutationAuthorityFor("forwarded_source"), "autonomous_read_only");
   assert.equal(mutationAuthorityFor("rhythm_ritual"), "autonomous_read_only");
   assert.equal(mutationAuthorityFor("rhythm_exception"), "autonomous_read_only");
   assert.equal(mutationAuthorityFor("something_else" as TurnOrigin), "autonomous_read_only", "fail closed");
@@ -49,7 +50,7 @@ test("policy: human + reviewed mutating tool on the primary thread under always_
   assert.equal(decideConfirmation({ ...trelloWrite(), evaluationType: null }, "human").decision, "allow");
 });
 
-test("policy: autonomous turns deny every gated tool — no exception for 'small' writes, input never consulted", () => {
+test("policy: autonomous turns deny every gated tool — no exception for 'small' writes", () => {
   for (const request of [trelloWrite(), memoryWrite(), memoryWrite("e", "edit")]) {
     assert.deepEqual(decideConfirmation(request, "autonomous_read_only"), { decision: "deny", reason: "autonomous_read_only" });
   }
@@ -70,8 +71,21 @@ test("policy: anything outside the reviewed surface is denied even for Daniel (f
   for (const [request, reason] of cases) assert.deepEqual(decideConfirmation(request, "human"), { decision: "deny", reason }, request.name);
 });
 
-test("reviewed surface is exactly built-in write/edit + Trello trelloWriteCard (Calendar and other Trello writes excluded)", () => {
-  assert.deepEqual(REVIEWED_CONFIRMATION_TOOLS, { builtIn: ["write", "edit"], mcp: { trello: ["trelloWriteCard"] } });
+test("reviewed surface includes only card/checklist Trello writes; forwarded source denies both", () => {
+  assert.deepEqual(REVIEWED_CONFIRMATION_TOOLS, { builtIn: ["write", "edit"], mcp: { trello: ["trelloWriteCard", "trelloWriteChecklist"] } });
+  const checklist = { ...trelloWrite(), name: "trelloWriteChecklist", checklistAction: "create" };
+  assert.equal(decideConfirmation(checklist, mutationAuthorityFor("forwarded_source")).decision, "deny");
+  assert.equal(decideConfirmation(checklist, mutationAuthorityFor("user_message")).decision, "allow");
+});
+
+test("checklist confirmation allows only create and add_item with human authority", () => {
+  const checklist = { ...trelloWrite(), name: "trelloWriteChecklist" };
+  for (const action of ["create", "add_item"]) {
+    assert.deepEqual(decideConfirmation({ ...checklist, checklistAction: action }, "human"), { decision: "allow", reason: "human_authority" });
+  }
+  for (const action of [undefined, "update", "update_item", "delete", "CREATE", null]) {
+    assert.deepEqual(decideConfirmation({ ...checklist, checklistAction: action }, "human"), { decision: "deny", reason: "unreviewed_tool" });
+  }
 });
 
 test("lifecycle: decision is made once at observation and is immutable — a replay under another authority keeps it", () => {

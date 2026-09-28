@@ -14,6 +14,8 @@ import {
 } from "./telegramAdapter.js";
 import { MessageGroupBuffer, type IncomingFragment } from "./messageGrouping.js";
 import { createGroupDispatchHandlers } from "./telegramDispatch.js";
+import { forwardedSourceOf, type TelegramForwardMetadata } from "./forwardedSource.js";
+import { ProposalConfirmations, STALE_PROPOSAL_TEXT } from "./proposalConfirmation.js";
 import { SERVING_RELEASE } from "./release.js";
 import { ReleaseAttestationError } from "./releaseAttestation.js";
 import {
@@ -40,7 +42,7 @@ import {
 } from "./rhythmRuntime.js";
 import { createFileRhythmStateStore, type RhythmStateStore } from "./rhythmState.js";
 import { createTelegramProactiveSender, enqueueClickAfterPendingText } from "./rhythmTelegram.js";
-import { createFormattedTextSender } from "./telegramFormat.js";
+import { createFormattedTextSender, sendFormattedMessage } from "./telegramFormat.js";
 import { executeTrelloWorkHistoryFromEnvironment, TrelloWorkHistoryClient } from "./trelloWorkHistory.js";
 import { createReminderToolExecutor, REMINDER_TOOL_NAME } from "./reminderTool.js";
 import { trelloCardContext } from "./reminderDelivery.js";
@@ -206,21 +208,29 @@ async function main(): Promise<number> {
    */
   // Every user-visible reply and notice renders through the one shared Telegram HTML path (telegramFormat.ts).
   const sendText = createFormattedTextSender(bot.api);
+  const proposals = new ProposalConfirmations();
   const { onDispatch, onFailure } = createGroupDispatchHandlers({
     djonikSession,
     sendMessage: sendText,
+    proposals,
+    sendProposal: (chatId, text, keyboard) => sendFormattedMessage(bot.api, chatId, text, keyboard),
     onGroupTelemetry: turnTelemetry ? (telemetry) => console.error("[group]", JSON.stringify(telemetry)) : undefined,
     onSessionRecovery: logSessionLifecycle,
   });
   const groupBuffer = new MessageGroupBuffer({ onDispatch, onFailure });
 
-  function baseFragment(ctx: Context, text: string): Pick<IncomingFragment, "chatId" | "userId" | "messageId" | "mediaGroupId" | "text"> {
+  function baseFragment(ctx: Context, text: string): Pick<IncomingFragment, "chatId" | "userId" | "messageId" | "mediaGroupId" | "text" | "forwarded"> {
+    const forwarded = forwardedSourceOf(ctx.message as TelegramForwardMetadata);
+    // A new source supersedes an earlier proposal as soon as its Telegram update arrives,
+    // including while this fragment is still waiting in the grouping buffer.
+    if (forwarded) proposals.invalidate(ctx.chat!.id, ctx.from!.id);
     return {
       chatId: ctx.chat!.id,
       userId: ctx.from!.id,
       messageId: ctx.message!.message_id,
       mediaGroupId: ctx.message!.media_group_id,
       text,
+      ...(forwarded ? { forwarded } : {}),
     };
   }
 
@@ -342,7 +352,27 @@ async function main(): Promise<number> {
     },
   });
   rhythm = startedRhythm;
-  bot.on("callback_query:data", createCallbackListener(startedRhythm, { allowedUserId: telegramConfig.allowedUserId, log: (line) => console.warn(line) }));
+  const rhythmCallback = createCallbackListener(startedRhythm, { allowedUserId: telegramConfig.allowedUserId, log: (line) => console.warn(line) });
+  const enqueueProposalClick = enqueueClickAfterPendingText(groupBuffer);
+  bot.on("callback_query:data", async (ctx) => {
+    if (!ctx.callbackQuery.data.startsWith("fp1:")) { await rhythmCallback(ctx); return; }
+    if (!isAllowedUser(ctx.from?.id, telegramConfig.allowedUserId)) return;
+    const message = ctx.callbackQuery.message;
+    const chatId = message?.chat.id;
+    const messageId = message?.message_id;
+    if (chatId === undefined || messageId === undefined) {
+      await ctx.answerCallbackQuery({ text: STALE_PROPOSAL_TEXT, show_alert: true });
+      return;
+    }
+    const click = proposals.click(ctx.callbackQuery.data, chatId, ctx.from!.id, messageId);
+    if (click.kind === "apply" || click.kind === "modify") {
+      enqueueProposalClick({ chatId, userId: ctx.from!.id, messageId, text: click.text });
+      await ctx.answerCallbackQuery().catch(() => undefined);
+      await bot.api.editMessageReplyMarkup(chatId, messageId, { reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
+    } else {
+      await ctx.answerCallbackQuery({ text: STALE_PROPOSAL_TEXT, show_alert: true });
+    }
+  });
 
   bot.catch((error) => {
     console.error("Unhandled Telegram bot error:", error.message);

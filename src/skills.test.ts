@@ -417,10 +417,11 @@ test("studio-intake Skill mentions deliverable/outcome as part of useful context
   assert.match(content, /deliverable\/outcome/i);
 });
 
-test("studio-intake Skill does not instruct use of trelloWriteChecklist", () => {
+test("#48 studio-intake proposes native checklist structure and leaves writes to task-management", () => {
   const content = readSkill("studio-intake");
   assert.doesNotMatch(content, /\buse\s+`?trelloWriteChecklist`?/i);
-  assert.match(content, /trelloWriteChecklist.*not part of the enabled write scope/i);
+  assert.match(content, /propose a native checklist/);
+  assert.match(content, /Task-management owns the actual create\/add-item calls/);
 });
 
 test("studio-intake Skill defers mutation/verification to task-management rather than duplicating it", () => {
@@ -463,21 +464,15 @@ test("#45: task-management triggers on create / change / complete and one card's
   assert.ok(content.includes("A verified completion reads `✅ <картка> → Done (перевірив у Trello)`; what to do next is planning-and-focus's."));
 });
 
-test("task-management Skill's write-surface boundary and verification rules are unchanged apart from the #37 project label", () => {
+test("#48 task-management keeps verification while adding only reviewed checklist operations", () => {
   const content = readSkill("task-management");
-  assert.match(
-    content,
-    /Writes are limited to create, update title\/description\/due date, move between lists, mark done, and attaching\/detaching an existing project label as described above\./,
-  );
-  assert.match(
-    content,
-    /Archiving, deleting, checklists, creating or renaming labels, labels used for anything other than the project, bulk relabeling, and anything on boards\/lists\/inbox\/planner as their own targets are out of scope/,
-  );
+  assert.match(content, /Writes are limited to create, update title\/description\/due date, move between lists, attach\/detach an existing project label, and the two reviewed native checklist operations/);
+  assert.match(content, /Archiving, deleting, other checklist actions, creating or renaming labels/);
   assert.match(
     content,
     /After every mutation, before replying:/,
   );
-  assert.doesNotMatch(content, /trelloWriteChecklist/);
+  assert.match(content, /trelloWriteChecklist.*create.*add_item/);
 });
 
 // Issue #26 follow-up: live Scenario E showed Djonik inheriting a project from
@@ -541,7 +536,7 @@ test("task-management Skill: the new-task rule stays a one-question/zero-write c
 
 test("task-management Skill: same-card verification and due-date rules are untouched by the new-task hardening", () => {
   const content = readSkill("task-management");
-  assert.match(content, /Writes are limited to create, update title\/description\/due date, move between lists, mark done,/);
+  assert.match(content, /Writes are limited to create, update title\/description\/due date, move between lists/);
   assert.match(content, /Trello's `due` is UTC\./);
   assert.match(content, /After every mutation, before replying:/);
 });
@@ -608,9 +603,24 @@ test("task-management Skill (#37): the no-anchor one-question/zero-write rule is
   assert.match(readSkill("studio-intake"), /does not own Trello mutation, verification, or target\/project resolution/i);
 });
 
-test("task-management Skill: trelloWriteChecklist remains unmentioned/unenabled after the new-task hardening", () => {
+test("#48 task-management names only create and add_item for checklist writes", () => {
   const content = readSkill("task-management");
-  assert.doesNotMatch(content, /trelloWriteChecklist/);
+  assert.match(content, /trelloWriteChecklist.*create.*add_item/);
+  assert.match(content, /After each `add_item`, use `trelloReadChecklist get`/);
+});
+
+test("#48 forwards keep links, vague edits and status reports inside the proposal and verification boundaries", () => {
+  const intake = readSkill("studio-intake");
+  const task = readSkill("task-management");
+  assert.match(intake, /Deduplicate the same URL/);
+  assert.match(intake, /Do not fetch the linked document or imply it was read/);
+  assert.match(intake, /зробіть яскравіше.*question/su);
+  assert.match(intake, /❓ тобі.*❓ клієнту/su);
+  assert.match(task, /Two plausible cards → one question and zero writes/);
+  assert.match(task, /preserving useful existing content/);
+  assert.match(task, /Done.*verified list move only after confirmation/);
+  assert.match(task, /do not use `mark_done`/);
+  assert.match(task, /otherwise ask, zero recovery writes/);
 });
 
 // Issue #27: preserve source provenance/order across rich studio intake.

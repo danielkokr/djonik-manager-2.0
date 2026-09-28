@@ -520,15 +520,18 @@ export const RELEASE_R30_CANDIDATE: DjonikReleaseCandidate = {
   agent: { id: COORDINATOR_ID, fromVersion: 29, version: null },
   model: RELEASE_R29.model,
   systemSha256: RELEASE_R29.systemSha256,
-  skills: RELEASE_R29.skills.map((skill) => ["planning-and-focus", "pm-rhythm"].includes(skill.name)
-    ? { name: skill.name, skillId: null, pin: { kind: "unresolved" as const, reason: "#47 Skill source not remotely synced" } }
+  skills: RELEASE_R29.skills.map((skill) => ["planning-and-focus", "pm-rhythm", "task-management", "studio-intake"].includes(skill.name)
+    ? { name: skill.name, skillId: null, pin: { kind: "unresolved" as const, reason: "#47/#48 Skill source not remotely synced" } }
     : skill),
   specialist: RELEASE_R29.specialist,
   builtInTools: RELEASE_R29.builtInTools,
   customTools: [...RELEASE_R29.customTools, "trello_board_snapshot"],
   mcpServers: RELEASE_R29.mcpServers.filter((server) => server.name !== "google-calendar-calendarmcp"),
-  mcpToolsets: RELEASE_R29.mcpToolsets.filter((toolset) => toolset.server !== "google-calendar-calendarmcp"),
-  confirmationRequired: RELEASE_R29.confirmationRequired!,
+  mcpToolsets: RELEASE_R29.mcpToolsets.filter((toolset) => toolset.server !== "google-calendar-calendarmcp")
+    .map((toolset) => toolset.server === "trello" ? {
+      ...toolset, overrides: { ...toolset.overrides, trelloWriteChecklist: true },
+    } : toolset),
+  confirmationRequired: { ...RELEASE_R29.confirmationRequired!, mcp: { ...RELEASE_R29.confirmationRequired!.mcp, trello: ["trelloWriteCard", "trelloWriteChecklist"] } },
   session: RELEASE_R29.session,
 };
 

@@ -10,7 +10,7 @@
  * - `rhythm_ritual` / `rhythm_exception`: an autonomous scheduled turn. Read-only: every mutating tool
  *   confirmation is denied before the provider executes it.
  */
-export type TurnOrigin = "user_message" | "button_callback" | "rhythm_ritual" | "rhythm_exception";
+export type TurnOrigin = "user_message" | "button_callback" | "forwarded_source" | "rhythm_ritual" | "rhythm_exception";
 
 export type MutationAuthority = "human" | "autonomous_read_only";
 

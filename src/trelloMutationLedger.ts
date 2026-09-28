@@ -37,6 +37,8 @@ const TRELLO_WRITE_TOOL_PATTERN = /^trelloWrite/;
 const TRELLO_READ_TOOL_PATTERN = /^trelloRead/;
 const CARD_WRITE_TOOL = "trelloWriteCard";
 const CARD_READ_TOOL = "trelloReadCard";
+const CHECKLIST_WRITE_TOOL = "trelloWriteChecklist";
+const CHECKLIST_READ_TOOL = "trelloReadChecklist";
 
 export function isTrelloWriteTool(serverName: string, toolName: string): boolean {
   return TRELLO_MCP_SERVER_PATTERN.test(serverName) && TRELLO_WRITE_TOOL_PATTERN.test(toolName);
@@ -161,7 +163,7 @@ function readString(input: Record<string, unknown>, field: string): string | nul
 // Requested fields (what a write asked Trello to change) and their postconditions
 // ---------------------------------------------------------------------------------------------
 
-export type CheckedField = "name" | "desc" | "list" | "due" | "label";
+export type CheckedField = "name" | "desc" | "list" | "due" | "label" | "checklist";
 
 /** `due` in a write's input: a value to set, or a clear request (`""`/`null`). */
 type RequestedDue = { kind: "set"; value: string } | { kind: "clear" };
@@ -313,7 +315,49 @@ function evaluateField(field: CheckedField, requested: RequestedFields, card: Re
       const wantedState: CardLabelState = wanted.action === "attach" ? "present" : "absent";
       return { result: state === wantedState ? "match" : "mismatch" };
     }
+    case "checklist": return { result: "unavailable" }; // handled by the checklist-specific read contract
   }
+}
+
+function oneJsonObject(content: ToolContent): Record<string, unknown> | null {
+  if (!Array.isArray(content)) return null;
+  const parsed: Record<string, unknown>[] = [];
+  for (const block of content) {
+    if (block.type !== "text" || typeof block.text !== "string") continue;
+    try { const value: unknown = JSON.parse(block.text); if (isPlainObject(value)) parsed.push(value); } catch { /* unparseable */ }
+  }
+  return parsed.length === 1 ? parsed[0] : null;
+}
+
+function checklistObject(value: unknown): Record<string, unknown> | null {
+  return isPlainObject(value) && typeof value.id === "string" && value.id.trim() ? value : null;
+}
+
+function checklistFromResult(content: ToolContent): Record<string, unknown> | null {
+  const payload = oneJsonObject(content);
+  return checklistObject(payload) ?? checklistObject(payload?.checklist);
+}
+
+function itemFromResult(content: ToolContent): Record<string, unknown> | null {
+  const payload = oneJsonObject(content);
+  return checklistObject(payload) ?? checklistObject(payload?.item) ?? checklistObject(payload?.checkItem);
+}
+
+function checklistsFromRead(content: ToolContent): Record<string, unknown>[] | null {
+  const payload = oneJsonObject(content);
+  if (!payload) return null;
+  const container = payload.checklists;
+  const nodes = Array.isArray(container) ? container : isPlainObject(container) ? container.nodes : undefined;
+  if (!Array.isArray(nodes)) return null;
+  const parsed = nodes.map(checklistObject);
+  return parsed.every(Boolean) ? parsed as Record<string, unknown>[] : null;
+}
+
+function itemsOfChecklist(checklist: Record<string, unknown>): Record<string, unknown>[] | null {
+  const raw = checklist.items ?? checklist.checkItems;
+  if (!Array.isArray(raw)) return null;
+  const parsed = raw.map(checklistObject);
+  return parsed.every(Boolean) ? parsed as Record<string, unknown>[] : null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -359,6 +403,7 @@ export interface MutationOutcome {
   /** #37: present only for a project-label write (`attach_label`/`detach_label`). `name` is the
    *  label's display name taken from the verified card read; null when not confirmed there. */
   projectLabel?: { action: LabelAction; labelId: string | null; name: string | null };
+  checklist?: { action: "create" | "add_item"; checklistId: string | null; itemId: string | null; name: string };
   /** #37: true when the write was a `create` (its target is the card its own result returned). */
   isCreate?: boolean;
   /** Requested fields whose latest-writer check did NOT confirm (mismatch/unavailable). */
@@ -387,7 +432,7 @@ export function isUnresolved(outcome: MutationOutcome): boolean {
 }
 
 export function isNudgeable(outcome: MutationOutcome): boolean {
-  return NUDGEABLE_STATUSES.has(outcome.status);
+  return !outcome.checklist && NUDGEABLE_STATUSES.has(outcome.status);
 }
 
 /** The card was authoritatively read back after the write and the mutation applied (a differing
@@ -467,6 +512,10 @@ export class TrelloMutationLedger {
     const preliminary = new Map<string, MutationOutcome>();
 
     for (const call of writeCalls) {
+      if (call.toolName === CHECKLIST_WRITE_TOOL) {
+        preliminary.set(call.id, this.evaluateChecklistWrite(call));
+        continue;
+      }
       const requested = call.toolName === CARD_WRITE_TOOL ? requestedFieldsOf(call.input) : {};
       const base: MutationOutcome = {
         toolUseId: call.id,
@@ -565,6 +614,60 @@ export class TrelloMutationLedger {
     return reads;
   }
 
+  /** #48: the write response identifies the created checklist/item, but only a later authoritative
+   * checklist read confirms its presence on the requested card/checklist. Unsupported actions stay
+   * unverified. No second write is ever attempted by this ledger. */
+  private evaluateChecklistWrite(call: RecordedCall): MutationOutcome {
+    const action = call.input.action;
+    const cardId = readString(call.input, "cardId");
+    const inputChecklistId = readString(call.input, "checklistId");
+    const wanted = action === "create" ? readString(call.input, "name") : readString(call.input, "text");
+    const created = action === "create" ? checklistFromResult(call.content) : itemFromResult(call.content);
+    const resultId = created && typeof created.id === "string" ? created.id : null;
+    const checklistId = action === "create" ? resultId : inputChecklistId;
+    const base: MutationOutcome = {
+      toolUseId: call.id,
+      status: "target_unknown",
+      targetCardIds: cardId ? [cardId] : [],
+      label: wanted,
+      unconfirmedFields: ["checklist"],
+      superseded: false,
+      checklist: { action: action === "create" ? "create" : "add_item", checklistId, itemId: action === "add_item" ? resultId : null, name: wanted ?? "невідома назва" },
+    };
+    if (call.resultSeq === undefined) return { ...base, status: "no_result" };
+    if (call.isError) return { ...base, status: "failed", ...(boundedErrorText(call.content) ? { errorText: boundedErrorText(call.content) } : {}) };
+    if ((action !== "create" && action !== "add_item") || !wanted || !resultId || !checklistId ||
+        (action === "create" && !cardId)) return base;
+
+    let sawRelevantRead = false;
+    let sawMismatch = false;
+    for (const read of this.calls.values()) {
+      if (read.toolName !== CHECKLIST_READ_TOOL || read.useSeq <= call.resultSeq || read.resultSeq === undefined || read.isError) continue;
+      if (action === "create") {
+        if (read.input.action !== "list_by_card" || !identifiersMatch(readString(read.input, "cardId") ?? "", cardId!)) continue;
+        const checklists = checklistsFromRead(read.content);
+        if (!checklists) continue;
+        sawRelevantRead = true;
+        const found = checklists.find((checklist) => identifiersMatch(String(checklist.id), checklistId));
+        if (found && typeof found.name === "string" && normalizeText(found.name) === normalizeText(wanted))
+          return { ...base, status: "verified", unconfirmedFields: [] };
+        if (found) sawMismatch = true;
+      } else {
+        if (read.input.action !== "get" || !identifiersMatch(readString(read.input, "checklistId") ?? "", checklistId)) continue;
+        const checklist = checklistFromResult(read.content);
+        if (!checklist || !identifiersMatch(String(checklist.id), checklistId)) continue;
+        const items = itemsOfChecklist(checklist);
+        if (!items) continue;
+        sawRelevantRead = true;
+        const found = items.find((item) => identifiersMatch(String(item.id), resultId));
+        if (found && typeof found.name === "string" && normalizeText(found.name) === normalizeText(wanted))
+          return { ...base, status: "verified", unconfirmedFields: [] };
+        if (found) sawMismatch = true;
+      }
+    }
+    return { ...base, status: sawMismatch ? "field_mismatch" : sawRelevantRead ? "field_unconfirmed" : "awaiting_read" };
+  }
+
   private evaluateWrite(
     write: ResolvedWrite,
     allWrites: ResolvedWrite[],
@@ -653,6 +756,12 @@ function describeCard(outcome: MutationOutcome): string {
 
 /** #37: a project-label write is reported as that label change on its card, never as the card write. */
 function describeTarget(outcome: MutationOutcome): string {
+  if (outcome.checklist) {
+    const target = outcome.checklist.action === "create" ? `картці ${outcome.targetCardIds[0] ?? "без відомого ID"}` :
+      `чеклісті ${outcome.checklist.checklistId ?? "без відомого ID"}`;
+    return outcome.checklist.action === "create" ? `чекліст «${outcome.checklist.name}» у ${target}` :
+      `пункт «${outcome.checklist.name}» у ${target}`;
+  }
   const projectLabel = outcome.projectLabel;
   if (!projectLabel) return describeCard(outcome);
   const id = outcome.targetCardIds[0];
@@ -669,6 +778,7 @@ const FIELD_LABEL_UK: Record<CheckedField, string> = {
   list: "список",
   due: "дедлайн",
   label: "label проєкту",
+  checklist: "чекліст",
 };
 
 /**
@@ -693,7 +803,8 @@ function describeReason(outcome: MutationOutcome): string {
   const fields = outcome.unconfirmedFields.map((field) => FIELD_LABEL_UK[field]).join(", ");
   switch (outcome.status) {
     case "awaiting_read":
-      return "після запису не було успішного прямого читання цієї картки";
+      return outcome.checklist ? "після запису не було успішного читання потрібного чекліста" :
+        "після запису не було успішного прямого читання цієї картки";
     case "field_mismatch":
       return `Trello після запису показує інші значення: ${fields}`;
     case "field_unconfirmed":
@@ -726,7 +837,7 @@ export function describeMutationOutcomes(outcomes: MutationOutcome[], describeDu
       lines.push(
         outcome.due
           ? `✅ ${describeTarget(outcome)}: ${describeDue(outcome.due)}`
-          : `✅ Підтверджено читанням картки: ${describeTarget(outcome)}`,
+          : `✅ Підтверджено читанням ${outcome.checklist ? "чекліста" : "картки"}: ${describeTarget(outcome)}`,
       );
     } else if (outcome.status === "due_differs") {
       if (!outcome.superseded && outcome.due) lines.push(`⚠️ ${describeTarget(outcome)}: ${describeDue(outcome.due)}`);

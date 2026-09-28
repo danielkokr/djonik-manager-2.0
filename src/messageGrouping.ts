@@ -1,4 +1,5 @@
 import type { DjonikDocumentInput, DjonikImageInput, DjonikTurnPart } from "./djonikClient.js";
+import { sourceText, type ForwardedSource } from "./forwardedSource.js";
 
 /**
  * Deterministic, in-memory grouping of related Telegram fragments into one
@@ -32,6 +33,7 @@ export interface IncomingFragment {
   mediaGroupId?: string;
   /** Plain text or caption; "" when this fragment carries no text at all. */
   text: string;
+  forwarded?: ForwardedSource;
   media?: MediaFragment;
 }
 
@@ -57,6 +59,8 @@ export interface GroupedIntake {
    * `DjonikSessionHandle.sendOrdered`, not `send`.
    */
   parts: DjonikTurnPart[];
+  /** Any forwarded fragment makes this source-only until Daniel confirms in a later turn. */
+  hasForwardedSource?: boolean;
   fragmentCount: number;
   textCount: number;
   imageCount: number;
@@ -426,7 +430,8 @@ export class MessageGroupBuffer {
 
     try {
       for (const fragment of sorted) {
-        if (fragment.text) textFragments.push({ order: fragment.messageId, text: fragment.text });
+        const text = fragment.forwarded ? sourceText(fragment.forwarded, fragment.text) : fragment.text;
+        if (text) textFragments.push({ order: fragment.messageId, text });
         if (fragment.media) {
           if (fragment.media.kind === "image") {
             const image = await fragment.media.promise;
@@ -441,7 +446,7 @@ export class MessageGroupBuffer {
         // Media part (if any) precedes this fragment's own text part, matching
         // the pre-#27 fixed single-attachment order (image/document block,
         // then its caption) — see the `parts` field doc above.
-        if (fragment.text) parts.push({ type: "text", text: fragment.text });
+        if (text) parts.push({ type: "text", text });
       }
     } catch (error) {
       // A slow attachment can still fail after the window already elapsed
@@ -463,6 +468,7 @@ export class MessageGroupBuffer {
       images,
       documents,
       parts,
+      hasForwardedSource: sorted.some((fragment) => fragment.forwarded !== undefined),
       fragmentCount: sorted.length,
       textCount: textFragments.length,
       imageCount: images.length,

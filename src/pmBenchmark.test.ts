@@ -2,14 +2,27 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CRITICAL_IDS, SCENARIOS, makeReport, renderSummary, renderTable, runBenchmark, selectScenarios, type CandidateFactory, type CandidateTurn } from "./pmBenchmark.js";
 import { fakeGrader, parseGraderResult } from "./pmGrader.js";
+import { cardsForScenario } from "./pmFixture.js";
 
 const trace: CandidateTurn["trace"] = { sessionTurnIndex: 1, toolNames: [], skillPaths: [], memoryPathsRead: [], memoryPathsWritten: [], cardIdsRead: [], cardIdsWritten: [], mutations: [], unsupportedConcrete: [] };
-test("canonical S1–S16; full, critical and single selections", () => {
-  assert.deepEqual(SCENARIOS.map((s) => s.id), Array.from({ length: 16 }, (_, i) => `S${i + 1}`));
+test("canonical S1–S16 retained; #48 appends S17–S21", () => {
+  assert.deepEqual(SCENARIOS.slice(0, 16).map((s) => s.id), Array.from({ length: 16 }, (_, i) => `S${i + 1}`));
+  assert.deepEqual(SCENARIOS.slice(16).map((s) => s.id), ["S17", "S18", "S19", "S20", "S21"]);
   assert.deepEqual(selectScenarios("critical").map((s) => s.id), [...CRITICAL_IDS]);
   assert.deepEqual(selectScenarios("S14").map((s) => s.id), ["S14"]);
-  assert.equal(selectScenarios("full").length, 16);
+  assert.equal(selectScenarios("full").length, 21);
   assert.equal(SCENARIOS.find((s) => s.id === "S14")?.turns.length, 3);
+});
+test("#48 offline fixtures preserve source attribution, exact link and two plausible card targets", () => {
+  const scenario = (id: string) => SCENARIOS.find((entry) => entry.id === id)!;
+  assert.equal(scenario("S17").origin, "forwarded_source");
+  assert.match(scenario("S17").turns[0], /від: Анна.*Чекаю до пт 2\.10 18:00/su);
+  assert.match(scenario("S18").turns[0], /зробіть яскравіше/u);
+  assert.deepEqual(cardsForScenario(scenario("S19")).filter((card) => card.project === "Azov" && card.title.includes("банер")).map((card) => card.key),
+    ["az-banner-a", "az-banner-b"]);
+  assert.deepEqual(scenario("S19").checks.includes("zero_write"), true);
+  assert.match(scenario("S20").turns[0], /https:\/\/drive\.google\.com\/file\/d\/eval-brief\/view/u);
+  assert.deepEqual(scenario("S21").checks.includes("zero_write"), true);
 });
 test("three repetitions create fresh Sessions; S14 preserves three turns inside each", async () => {
   let opened = 0;

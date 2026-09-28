@@ -180,7 +180,7 @@ test("pinned Skill versions are the accepted repo Skills (recorded hashes in doc
   }
   // task-management's older pin (r26–r28) was synced from `e994d31a…`; r29 pins the accepted #45 source.
   assert.ok(RELEASE_R26.skills.some((skill) => skill.name === "task-management"));
-  assert.equal(sha(read(".claude", "skills", "task-management", "SKILL.md")), "aec09d5aa2b8170fe4f9d365a61484d1a1dc8b5e3b49a55382f3b014a8d70b7a");
+  assert.notEqual(sha(read(".claude", "skills", "task-management", "SKILL.md")), "aec09d5aa2b8170fe4f9d365a61484d1a1dc8b5e3b49a55382f3b014a8d70b7a", "#48 source is unsynced; r29 pin remains historical");
   // #42 retires daily-planning (`7fc9ff92…`) and weekly-planning (`0d6cca38…`) from the next release. Their pinned
   // versions stay immutable on the provider for the served r27 and its rollback; their source leaves the repo
   // (git history keeps it), so no repo file can silently drift from — or be re-synced as — a retired Skill.

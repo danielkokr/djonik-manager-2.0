@@ -40,8 +40,7 @@ test("r29 serves the accepted #45 prompt and only the three changed coordinator 
       assert.equal(skill.pin.kind, "explicit");
       assert.equal(skill.pin.sessionVersion, measuredVersions[skill.name]);
       const source = readFileSync(join(root, ".claude", "skills", skill.name, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
-      if (skill.name === "task-management") assert.equal(sha256(source), sourceHashes[skill.name]);
-      else assert.notEqual(sha256(source), sourceHashes[skill.name], "#47 Skill source is for an unresolved later release; the r29 pin remains historical");
+      assert.notEqual(sha256(source), sourceHashes[skill.name], "#47/#48 Skill source is for an unresolved later release; the r29 pin remains historical");
     } else assert.deepEqual(skill, prior);
   }
   assert.deepEqual(RELEASE_R29.customTools, ["trello_work_history"]);

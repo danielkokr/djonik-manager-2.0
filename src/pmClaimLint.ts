@@ -2,7 +2,7 @@
 export type ClaimType = "weekday" | "date" | "duration" | "size" | "client_expectation" | "missing_due_inference";
 export interface ClaimEvidence {
   /** Only concrete slots actually available to this turn. Earlier model answers are excluded. */
-  slots: readonly { type: ClaimType; value: string; source: "daniel" | "clock" | "trello" | "memory" }[];
+  slots: readonly { type: ClaimType; value: string; source: "daniel" | "clock" | "trello" | "memory" | "forwarded" }[];
   /** Daniel's available time is context, never a task-duration estimate. */
   availableMinutes?: number;
   dueKnown?: boolean;

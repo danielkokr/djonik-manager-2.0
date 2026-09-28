@@ -1,5 +1,6 @@
 import type { GroupedIntake } from "./messageGrouping.js";
 import { buildGroupingTelemetry } from "./messageGrouping.js";
+import { isProposalReply, proposalKeyboard, ProposalConfirmations, STALE_PROPOSAL_TEXT } from "./proposalConfirmation.js";
 import {
   formatGroupFailureError,
   formatUserFacingError,
@@ -21,6 +22,9 @@ import {
 export interface GroupDispatchDeps {
   djonikSession: DjonikSessionManager;
   sendMessage: (chatId: number, text: string) => Promise<unknown>;
+  /** Optional proposal UI; code builds the keyboard and binds the returned Telegram message id. */
+  sendProposal?: (chatId: number, text: string, keyboard: ReturnType<typeof proposalKeyboard>) => Promise<{ message_id: number }>;
+  proposals?: ProposalConfirmations;
   /** Content-free grouping telemetry sink (see `buildGroupingTelemetry`); omit to disable. */
   onGroupTelemetry?: (telemetry: ReturnType<typeof buildGroupingTelemetry>) => void;
   /** Defaults to `console.error`; overridable so tests can assert on/silence it. */
@@ -38,9 +42,17 @@ export function createGroupDispatchHandlers(deps: GroupDispatchDeps): GroupDispa
   const logError = deps.logError ?? ((message, error) => console.error(message, error));
 
   return {
-    onDispatch: async (chatId, _userId, intake) => {
+    onDispatch: async (chatId, userId, intake) => {
       deps.onGroupTelemetry?.(buildGroupingTelemetry(intake));
       try {
+        const proposals = deps.proposals;
+        if (intake.hasForwardedSource) proposals?.invalidate(chatId, userId);
+        const soleText = intake.parts.length === 1 && intake.parts[0].type === "text" ? intake.parts[0].text : null;
+        const typed = !intake.hasForwardedSource && soleText !== null ? proposals?.typed(soleText, chatId, userId) : undefined;
+        if (typed?.kind === "stale") { await deps.sendMessage(chatId, STALE_PROPOSAL_TEXT); return; }
+        const hadPending = !intake.hasForwardedSource && typed?.kind !== "apply" && proposals?.has(chatId, userId) === true;
+        if (hadPending) proposals?.beginRevision(chatId, userId);
+        const parts = typed?.kind === "apply" ? [{ type: "text" as const, text: typed.text }] : intake.parts;
         // #27: send in original Telegram order/relationship (caption next to
         // its own image, text → image → correction kept in sequence) via
         // `sendOrdered`, not the legacy `send(text, images, documents)`
@@ -49,11 +61,17 @@ export function createGroupDispatchHandlers(deps: GroupDispatchDeps): GroupDispa
         // unprocessed — never twice, never a possibly processed turn.
         const reply = await runWithSessionRecovery(
           deps.djonikSession,
-          (session) => session.sendOrdered(intake.parts),
+          (session) => session.sendOrdered(parts, intake.hasForwardedSource ? "forwarded_source" : "user_message"),
           deps.onSessionRecovery,
           logError,
         );
-        await deps.sendMessage(chatId, reply);
+        if (proposals && deps.sendProposal && isProposalReply(reply)) {
+          const ref = proposals.newRef();
+          const sent = await deps.sendProposal(chatId, reply, proposalKeyboard(ref));
+          proposals.register(chatId, userId, sent.message_id, reply, ref);
+        } else {
+          await deps.sendMessage(chatId, reply);
+        }
       } catch (error) {
         logError("Djonik grouped turn failed:", error);
         await deps.sendMessage(chatId, formatUserFacingError(error));

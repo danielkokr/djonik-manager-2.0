@@ -26,13 +26,10 @@ import type { MutationAuthority } from "./turnAuthority.js";
  * (per-id feed), and a replayed request would keep its first, immutable decision anyway.
  */
 
-/** The only tools a human turn may confirm: the reviewed mutating surface that r27 sets to `always_ask`.
- *  Built-in `write`/`edit` include native Memory writes; `trelloWriteCard` is the one enabled Trello write
- *  (#31 verifies it). Calendar is disabled and the other Trello writes stay disabled. Any other tool that
- *  asks for confirmation is outside the reviewed surface and is denied (fail closed). */
+/** The only tools a human turn may confirm. Checklist actions are narrowed further below. */
 export const REVIEWED_CONFIRMATION_TOOLS: Readonly<{ builtIn: readonly string[]; mcp: Readonly<Record<string, readonly string[]>> }> = {
   builtIn: ["write", "edit"],
-  mcp: { trello: ["trelloWriteCard"] },
+  mcp: { trello: ["trelloWriteCard", "trelloWriteChecklist"] },
 };
 
 export type ConfirmationDecision = "allow" | "deny";
@@ -51,7 +48,7 @@ export type ConfirmationReason =
 
 export type ConfirmationState = "DECIDED" | "SUBMITTED" | "SEND_UNKNOWN" | "SEND_REJECTED" | "RESOLVED" | "CONTRADICTED";
 
-/** A gated tool-use event, reduced to what the decision may depend on. Never its input. */
+/** A gated tool-use event, reduced to what the decision may depend on. Only the checklist action is inspected. */
 export interface ConfirmationRequest {
   id: string;
   kind: "builtin" | "mcp";
@@ -62,6 +59,8 @@ export interface ConfirmationRequest {
   threadId?: string | null;
   /** `evaluation.type` when present. Docs: absent on events recorded before `evaluation` existed. */
   evaluationType?: string | null;
+  /** `trelloWriteChecklist` operation; only create and add_item have reviewed readback. */
+  checklistAction?: unknown;
 }
 
 /** Content-free record of one confirmation, for the traced turn and the rhythm runner. */
@@ -107,7 +106,7 @@ export function isReviewedConfirmationTool(request: Pick<ConfirmationRequest, "k
 }
 
 /**
- * The deterministic policy. No model judgement, no input parsing, no exception for "small" writes.
+ * The deterministic policy. No model judgement or exception for "small" writes.
  * Everything that is not exactly "Daniel's turn asking for a reviewed mutating tool on the primary thread
  * under `always_ask`" is denied.
  */
@@ -121,6 +120,10 @@ export function decideConfirmation(
   }
   if (!isReviewedConfirmationTool(request)) return { decision: "deny", reason: "unreviewed_tool" };
   if (authority !== "human") return { decision: "deny", reason: "autonomous_read_only" };
+  if (request.kind === "mcp" && request.name === "trelloWriteChecklist" &&
+    request.checklistAction !== "create" && request.checklistAction !== "add_item") {
+    return { decision: "deny", reason: "unreviewed_tool" };
+  }
   return { decision: "allow", reason: "human_authority" };
 }
 

@@ -351,6 +351,17 @@ test("list/move postcondition: card.list.id, idList and listId; ARI-vs-bare ids 
   assert.equal(run({}), "field_unconfirmed");
 });
 
+test("wrong Done recovery uses two independently verified list moves when the prior list is known", () => {
+  const s = new Script();
+  s.read("before", "CARD", card({ id: "CARD", list: { id: "IN_PROGRESS" } }));
+  s.write("to_done", { action: "move", cardId: "CARD", listId: "DONE" }, card({ id: "CARD" }));
+  s.read("done_read", "CARD", card({ id: "CARD", list: { id: "DONE" } }));
+  s.write("recover", { action: "move", cardId: "CARD", listId: "IN_PROGRESS" }, card({ id: "CARD" }));
+  assert.deepEqual(s.statuses(), ["verified", "awaiting_read"]);
+  s.read("recovered_read", "CARD", card({ id: "CARD", list: { id: "IN_PROGRESS" } }));
+  assert.deepEqual(s.statuses(), ["verified", "verified"]);
+});
+
 test("create postconditions: the created card must carry the requested name, desc, list and due", () => {
   const s = new Script().write(
     "w",
