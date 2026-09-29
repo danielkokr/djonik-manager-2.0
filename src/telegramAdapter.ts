@@ -1,6 +1,7 @@
 import {
   DjonikSessionDeadError,
   DjonikTracedTurnError,
+  DjonikUnverifiedMutationError,
   type DjonikDocumentInput,
   type DjonikImageInput,
   type DjonikSessionHandle,
@@ -240,12 +241,22 @@ export const SESSION_LOST_CHECK_TEXT =
   "⚠️ Не вдалося отримати відповідь — зв'язок із сесією обірвався. Перешли, будь ласка, ще раз; " +
   "якщо просив зміну в Trello, спершу перевір, чи вона вже є.";
 
+/** #56: a Trello write was attempted but not authoritatively confirmed after the one corrective read.
+ *  It may have applied, so this never says it failed, never says it succeeded, and names no ids. */
+export const UNVERIFIED_MUTATION_TEXT =
+  "⚠️ Зміна в Trello могла виконатися, але я не зміг надійно підтвердити результат. " +
+  "Перевір картку в Trello перед повторною спробою.";
+
 /** Bounds a failed turn to a short, secret-free, user-visible message. A lost Session (#53) never shows
  *  raw provider/runtime text: one fixed Ukrainian line, with a Trello check hint unless the message
- *  provably never started processing. */
+ *  provably never started processing. An unverified Trello mutation (#56) shows one fixed line too:
+ *  its `message` is an internal diagnostic (provider ids, per-mutation verifier detail) that stays in
+ *  logs/traces and on `outcomes`. Only its already user-safe Project Health section (#32) follows. */
 export function formatUserFacingError(error: unknown): string {
   const dead = sessionDeadErrorOf(error);
   if (dead) return canResubmit(dead.pendingMessage) ? SESSION_LOST_RESEND_TEXT : SESSION_LOST_CHECK_TEXT;
+  const unverified = unverifiedMutationErrorOf(error);
+  if (unverified) return UNVERIFIED_MUTATION_TEXT + (unverified.specialistSection ?? "");
   const message = error instanceof Error ? error.message : String(error);
   return `⚠️ Джонік не зміг відповісти на це повідомлення: ${message}`;
 }
@@ -341,6 +352,12 @@ export function handleSessionError(manager: DjonikSessionManager, error: unknown
 }
 
 /** The `DjonikSessionDeadError` behind `error`, including one wrapped by a traced (#39) turn. */
+function unverifiedMutationErrorOf(error: unknown): DjonikUnverifiedMutationError | null {
+  if (error instanceof DjonikUnverifiedMutationError) return error;
+  if (error instanceof DjonikTracedTurnError && error.error instanceof DjonikUnverifiedMutationError) return error.error;
+  return null;
+}
+
 export function sessionDeadErrorOf(error: unknown): DjonikSessionDeadError | null {
   if (error instanceof DjonikSessionDeadError) return error;
   if (error instanceof DjonikTracedTurnError && error.error instanceof DjonikSessionDeadError) return error.error;

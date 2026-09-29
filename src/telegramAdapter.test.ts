@@ -20,8 +20,15 @@ import {
   TelegramDocumentTooLargeError,
   TelegramImageDownloadError,
   TelegramImageTooLargeError,
+  UNVERIFIED_MUTATION_TEXT,
 } from "./telegramAdapter.js";
-import { DjonikSessionDeadError, type DjonikSessionHandle } from "./djonikClient.js";
+import {
+  DjonikSessionDeadError,
+  DjonikTracedTurnError,
+  DjonikUnverifiedMutationError,
+  type DjonikSessionHandle,
+} from "./djonikClient.js";
+import type { MutationOutcome } from "./trelloMutationLedger.js";
 
 test("isAllowedUser accepts only the configured Telegram user id", () => {
   assert.equal(isAllowedUser(12345, "12345"), true);
@@ -39,6 +46,41 @@ test("formatUserFacingError includes the underlying error message", () => {
 
 test("formatUserFacingError handles non-Error throws", () => {
   assert.match(formatUserFacingError("boom"), /boom/);
+});
+
+test("#56 formatUserFacingError: an unverified Trello mutation shows one safe Ukrainian line, direct or traced", () => {
+  const outcomes: MutationOutcome[] = [{
+    toolUseId: "toolu_1",
+    status: "awaiting_read",
+    targetCardIds: ["ari:cloud:trello::card/aaaaaaaaaaaaaaaaaaaaaaaa"],
+    label: "Знайти референси",
+    unconfirmedFields: ["checklist"],
+    superseded: false,
+    checklist: { action: "add_item", checklistId: "ari:cloud:trello::checklist/bbbbbbbbbbbbbbbbbbbbbbbb", itemId: "ari:cloud:trello::checkitem/cccccccccccccccccccccccc", name: "Знайти референси" },
+  }];
+  const error = new DjonikUnverifiedMutationError(outcomes, "Готово!");
+  assert.match(error.message, /Djonik mutated Trello/, "the internal diagnostic is kept on the error");
+  const traced = new DjonikTracedTurnError(error, "sesn_123", []);
+  for (const candidate of [error, traced]) {
+    const visible = formatUserFacingError(candidate);
+    assert.equal(visible, UNVERIFIED_MUTATION_TEXT);
+    for (const forbidden of [/DjonikUnverifiedMutationError/, /Djonik mutated Trello/, /ari:cloud/, /agent_/, /sesn_/, /aaaaaaaa|bbbbbbbb|cccccccc/, /Готово/]) {
+      assert.doesNotMatch(visible, forbidden);
+    }
+  }
+  assert.match(UNVERIFIED_MUTATION_TEXT, /могла виконатися/, "never says the write failed");
+  assert.match(UNVERIFIED_MUTATION_TEXT, /не зміг надійно підтвердити/, "never says it succeeded");
+  assert.match(UNVERIFIED_MUTATION_TEXT, /Перевір.*перед повторною спробою/);
+});
+
+test("#56 formatUserFacingError: a verified Project Health section (#32) still follows the safe line", () => {
+  const section = "\n\n———\nВисновок Project Health (без змін):\nHEALTH ONLY";
+  const error = new DjonikUnverifiedMutationError([], "x", section);
+  assert.equal(formatUserFacingError(error), UNVERIFIED_MUTATION_TEXT + section);
+});
+
+test("#56 formatUserFacingError: ordinary errors keep their existing wording", () => {
+  assert.equal(formatUserFacingError(new Error("stream ended unexpectedly")), "⚠️ Джонік не зміг відповісти на це повідомлення: stream ended unexpectedly");
 });
 
 test("formatGroupFailureError includes the underlying error message and is worded distinctly from a single-turn failure (#25)", () => {

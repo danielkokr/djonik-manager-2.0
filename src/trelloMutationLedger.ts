@@ -431,8 +431,10 @@ export function isUnresolved(outcome: MutationOutcome): boolean {
   return UNRESOLVED_STATUSES.has(outcome.status);
 }
 
+/** #56: checklist `create`/`add_item` outcomes are nudgeable too — the one corrective nudge asks for
+ *  the authoritative checklist read their own contract requires (`verificationReadsFor`). */
 export function isNudgeable(outcome: MutationOutcome): boolean {
-  return !outcome.checklist && NUDGEABLE_STATUSES.has(outcome.status);
+  return NUDGEABLE_STATUSES.has(outcome.status) && verificationReadOf(outcome) !== null;
 }
 
 /** The card was authoritatively read back after the write and the mutation applied (a differing
@@ -854,14 +856,58 @@ export function describeMutationOutcomes(outcomes: MutationOutcome[], describeDu
   return lines.join("\n");
 }
 
-/** Targets a corrective nudge should ask the agent to read (deduplicated, in order). */
-export function nudgeTargetIds(outcomes: MutationOutcome[]): string[] {
-  const ids: string[] = [];
+/**
+ * #56: the ONE authoritative read that can settle an unresolved mutation, derived only from the
+ * ledger's own provenance (never user text or model prose):
+ *  - a card write: a direct `trelloReadCard get` of its target card;
+ *  - a checklist `create`: `trelloReadChecklist list_by_card` of the card it was created on;
+ *  - a checklist `add_item`: `trelloReadChecklist get` of the checklist it was added to.
+ * Asking for a read never verifies anything by itself: the ledger still accepts only a successful,
+ * parseable read of that exact target that STARTED after the write's result.
+ */
+export type VerificationRead =
+  | { kind: "card"; cardId: string }
+  | { kind: "checklist_list"; cardId: string }
+  | { kind: "checklist_get"; checklistId: string };
+
+export type VerificationReadKind = VerificationRead["kind"];
+
+function verificationReadOf(outcome: MutationOutcome): VerificationRead | null {
+  if (outcome.checklist) {
+    if (outcome.checklist.action === "create") {
+      const cardId = outcome.targetCardIds[0];
+      return cardId ? { kind: "checklist_list", cardId } : null;
+    }
+    const checklistId = outcome.checklist.checklistId;
+    return checklistId ? { kind: "checklist_get", checklistId } : null;
+  }
+  const cardId = outcome.targetCardIds[0];
+  return cardId ? { kind: "card", cardId } : null;
+}
+
+function readTargetId(read: VerificationRead): string {
+  return read.kind === "checklist_get" ? read.checklistId : read.cardId;
+}
+
+/** Reads a corrective nudge should ask for: one per distinct (kind, target), in first-seen order —
+ *  four `add_item` writes into one checklist need ONE later `get` of that checklist. */
+export function verificationReadsFor(outcomes: MutationOutcome[]): VerificationRead[] {
+  const reads: VerificationRead[] = [];
   for (const outcome of outcomes) {
     if (!isNudgeable(outcome)) continue;
-    for (const id of outcome.targetCardIds.slice(0, 1)) if (!ids.includes(id)) ids.push(id);
+    const read = verificationReadOf(outcome);
+    if (read === null) continue;
+    const duplicate = reads.some(
+      (existing) => existing.kind === read.kind && identifiersMatch(readTargetId(existing), readTargetId(read)),
+    );
+    if (!duplicate) reads.push(read);
   }
-  return ids;
+  return reads;
+}
+
+/** Card targets a corrective nudge should ask the agent to read (deduplicated, in order). */
+export function nudgeTargetIds(outcomes: MutationOutcome[]): string[] {
+  return verificationReadsFor(outcomes).flatMap((read) => (read.kind === "card" ? [read.cardId] : []));
 }
 
 export function describeMutationTarget(outcome: MutationOutcome): string {

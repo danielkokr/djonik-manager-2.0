@@ -9,8 +9,10 @@ import {
   isNudgeable,
   isUnresolved,
   isValidUtcDue,
-  nudgeTargetIds,
+  verificationReadsFor,
   type MutationOutcome,
+  type VerificationRead,
+  type VerificationReadKind,
 } from "./trelloMutationLedger.js";
 import {
   DjonikSpecialistUnverifiedError,
@@ -465,7 +467,8 @@ export type DjonikTraceEvent =
   /** Content-free (#39 Stage 3A): a tool confirmation was submitted and accepted by the API. Permission to
    *  attempt, never verification — an allowed Trello write is still verified by #31. */
   | { type: "tool_confirmation_sent"; toolName: string; decision: ConfirmationRecord["decision"]; reason: ConfirmationRecord["reason"] }
-  | { type: "verification_nudge_sent"; attempt: number }
+  /** `readKinds` (#56): content-free kinds of the reads the nudge asked for, deduplicated — never ids. */
+  | { type: "verification_nudge_sent"; attempt: number; readKinds: VerificationReadKind[] }
   | { type: "write_unverified_failure" }
   | { type: "due_date_reply_finalized"; verifiedDue: string; kyivDate: string; weekdayEn: string; mismatch: boolean }
   /** Content-free (#44, S11): whether the model's text followed the code-owned due confirmation, or why it was withheld. */
@@ -806,16 +809,38 @@ export function resolveProjectHealthSpecialistName(agent: unknown): string | nul
 
 /**
  * The single bounded corrective nudge (#8, kept by #31). It asks for direct reads only — never a
- * replay of the write — and names the exact cards whose mutations are still unverified.
+ * replay of the write — and names the exact targets whose mutations are still unverified. #56: the
+ * requested reads come from the ledger (`verificationReadsFor`), so checklist writes ask for their
+ * own authoritative checklist read, once per distinct target. A card-only request keeps the exact
+ * #31 wording; the leading prefix is what `explainRecordedTurn` uses to recognise a nudge.
  */
-export function buildVerificationNudgeText(cardIds: string[]): string {
+export function buildVerificationNudgeText(reads: VerificationRead[]): string {
+  const cardIds = reads.flatMap((read) => (read.kind === "card" ? [read.cardId] : []));
+  const checklistReads = reads.filter((read) => read.kind !== "card");
+  if (checklistReads.length === 0) {
+    return (
+      "Системна перевірка: у цьому turn є Trello-запис(и), які ще не підтверджені прямим " +
+      "читанням САМЕ ТІЄЇ картки, яку вони змінили, після запису (trelloReadCard, action get). " +
+      "НЕ повторюй запис і не створюй нову картку. Перш ніж відповідати користувачу, зроби окремий " +
+      "trelloReadCard для кожної з цих карток: " +
+      cardIds.join(", ") +
+      ". Потім повідом лише підтверджений результат кожної зміни (або чесно скажи, якщо " +
+      "перевірка показала розбіжність)."
+    );
+  }
+  const lines = reads.map((read) =>
+    read.kind === "card"
+      ? `- trelloReadCard (action get, cardIdOrUrl ${read.cardId})`
+      : read.kind === "checklist_list"
+        ? `- trelloReadChecklist (action list_by_card, cardId ${read.cardId})`
+        : `- trelloReadChecklist (action get, checklistId ${read.checklistId})`,
+  );
   return (
-    "Системна перевірка: у цьому turn є Trello-запис(и), які ще не підтверджені прямим " +
-    "читанням САМЕ ТІЄЇ картки, яку вони змінили, після запису (trelloReadCard, action get). " +
-    "НЕ повторюй запис і не створюй нову картку. Перш ніж відповідати користувачу, зроби окремий " +
-    "trelloReadCard для кожної з цих карток: " +
-    cardIds.join(", ") +
-    ". Потім повідом лише підтверджений результат кожної зміни (або чесно скажи, якщо " +
+    "Системна перевірка: у цьому turn є Trello-запис(и), які ще не підтверджені читанням після " +
+    "запису. НЕ повторюй жоден запис: не створюй чекліст, пункт чи картку ще раз і нічого не змінюй. " +
+    "Перш ніж відповідати користувачу, зроби лише ці читання (кожне один раз):\n" +
+    lines.join("\n") +
+    "\nПотім повідом лише підтверджений результат кожної зміни (або чесно скажи, якщо " +
     "перевірка показала розбіжність)."
   );
 }
@@ -830,6 +855,9 @@ export function buildVerificationNudgeText(cardIds: string[]): string {
 export class DjonikUnverifiedMutationError extends Error {
   readonly outcomes: MutationOutcome[];
   readonly modelReply: string;
+  /** #56: kept separately so a user-facing boundary can show it without the internal diagnostic
+   *  `message` (which carries provider ids and per-mutation verifier detail). */
+  readonly specialistSection: string | null;
 
   /** `specialistSection` (#32) is a deterministic, prebuilt block about the same turn's Project Health
    *  delegation — the VERIFIED result (read-only content that cannot claim a mutation, preserved
@@ -843,6 +871,7 @@ export class DjonikUnverifiedMutationError extends Error {
     this.name = "DjonikUnverifiedMutationError";
     this.outcomes = outcomes;
     this.modelReply = modelReply;
+    this.specialistSection = specialistSection;
   }
 }
 
@@ -1683,12 +1712,13 @@ export async function connectToDjonik(
       // A nudge is a corrective read request for a turn that COMPLETED with an unverified write. A turn
       // that stopped without `end_turn` is never resumed or re-prompted here (#32).
       for (let attempt = 0; end.completed && outcomes.some(isNudgeable) && attempt < MAX_VERIFICATION_NUDGES; attempt += 1) {
-        onTrace?.({ type: "verification_nudge_sent", attempt: attempt + 1 });
+        const reads = verificationReadsFor(outcomes);
+        onTrace?.({ type: "verification_nudge_sent", attempt: attempt + 1, readKinds: [...new Set(reads.map((read) => read.kind))] });
         turnTelemetry.recordVerificationNudge();
         end = await runTurn([
           {
             type: "user.message",
-            content: [{ type: "text", text: buildVerificationNudgeText(nudgeTargetIds(outcomes)) }],
+            content: [{ type: "text", text: buildVerificationNudgeText(reads) }],
           },
         ], false);
         outcomes = ledger.outcomes();
