@@ -93,6 +93,9 @@ const getChecklist = (id = "r_get") => [
   res(id, { id: CHECK, name: "Чекліст", checkItems: ITEMS.map((name, index) => ({ id: itemId(index + 1), name })) }),
 ];
 
+/** #57: the verified checklist confirmation is code-owned (no card read in these turns, so no card name). */
+const CONFIRMED = "Готово. Додав чекліст «Чекліст» з чотирма пунктами: " + ITEMS.map((item) => `«${item}»`).join(", ") + ".";
+
 const nudgeTextOf = (params: unknown): string => {
   const events = (params as { events: Array<{ type: string; content: Array<{ type: string; text?: string }> }> }).events;
   assert.equal(events.length, 1);
@@ -114,7 +117,7 @@ test("#56 production case: one nudge asks only for list_by_card + one get; all f
     IDLE_OK,
   );
   const reply = await session.send("Так");
-  assert.equal(reply, "Додав чекліст «Чекліст» на RDAS: 4 пункти, перевірено.");
+  assert.equal(reply, CONFIRMED, "#57: code-owned confirmation; the model restatement is withheld");
   assert.equal(sendCalls.length, 2, "Daniel's turn plus exactly one verification nudge");
 
   const nudge = nudgeTextOf(sendCalls[1]);
@@ -178,7 +181,7 @@ test("#56 I': a nudge rerun that ends without any read also fails closed after o
 test("#56: reads the model already did in its own turn are respected — no nudge when checklist read-back is complete", async () => {
   const { session, push, sendCalls, traces } = await open();
   push(...productionWrites(), ...listByCard(), ...getChecklist(), msg("Додав 4 пункти, перевірено."), IDLE_OK);
-  assert.equal(await session.send("Так"), "Додав 4 пункти, перевірено.");
+  assert.equal(await session.send("Так"), CONFIRMED);
   assert.equal(sendCalls.length, 1);
   assert.equal(traces.some((t) => t.type === "verification_nudge_sent"), false);
   session.close();
@@ -187,7 +190,9 @@ test("#56: reads the model already did in its own turn are respected — no nudg
 test("#56: the nudge asks only for the still-missing read (create already read back in the turn)", async () => {
   const { session, push, sendCalls, traces } = await open();
   push(...productionWrites(), ...listByCard(), msg("Готово."), IDLE_OK, ...getChecklist(), msg("Перевірено."), IDLE_OK);
-  assert.equal(await session.send("Так"), "Перевірено.");
+  assert.equal(await session.send("Так"), `${CONFIRMED}
+
+Перевірено.`);
   const nudge = nudgeTextOf(sendCalls[1]);
   assert.ok(!/list_by_card/.test(nudge));
   assert.equal(nudge.match(/action get, checklistId/g)?.length, 1);
@@ -251,7 +256,7 @@ test("#56 Telegram: the production case now reaches Daniel as the normal reply",
   const { replies, sendCalls } = await dispatchThroughTelegram([
     ...productionWrites(), msg("Готово."), IDLE_OK, ...listByCard(), ...getChecklist(), msg("Чекліст на RDAS додано: 4 пункти."), IDLE_OK,
   ]);
-  assert.deepEqual(replies, ["Чекліст на RDAS додано: 4 пункти."]);
+  assert.deepEqual(replies, [CONFIRMED]);
   assert.equal(sendCalls.length, 2);
 });
 
@@ -270,4 +275,114 @@ test("#56 Telegram: a genuinely unverified checklist write shows one safe Ukrain
   const inner = logged[0] instanceof DjonikTracedTurnError ? logged[0].error : logged[0];
   assert.ok(inner instanceof DjonikUnverifiedMutationError);
   assert.match(inner.message, /Djonik mutated Trello/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// #57: the verified checklist confirmation never carries provider item-state vocabulary. Exact
+// production shape: a card read (name «Банер»), create «Кроки», three add_item, read-back whose items
+// carry the MCP `state: "INCOMPLETE"`, and the model's own reply that repeated it.
+// ---------------------------------------------------------------------------------------------
+
+const BANNER = "ari:cloud:trello::card/eeeeeeeeeeeeeeeeeeeeeeee";
+const STEPS = "ari:cloud:trello::checklist/ffffffffffffffffffffffff";
+const STEP_ITEMS = ["Варіанти банера з новими ароматами", "Драфти клієнту на затвердження", "Рендер на ніч"];
+const PRODUCTION_REPLY =
+  "Підтверджено читанням: на картці «Банер» чекліст «Кроки» з трьома пунктами — «Варіанти банера з новими ароматами», " +
+  "«Драфти клієнту на затвердження», «Рендер на ніч». Усі три INCOMPLETE.";
+const stepItems = () => STEP_ITEMS.map((name, index) => ({ id: itemId(index + 5), name, state: "INCOMPLETE" }));
+
+const bannerTurn = (modelReply: string) => [
+  use("r_card", "trelloReadCard", { action: "get", cardIdOrUrl: BANNER }),
+  res("r_card", { cards: { nodes: [{ id: BANNER, name: "Банер" }], totalCount: 1 } }),
+  use("w_c", "trelloWriteChecklist", { action: "create", cardId: BANNER, name: "Кроки" }),
+  res("w_c", { id: STEPS, name: "Кроки" }),
+  ...STEP_ITEMS.flatMap((text, index) => [
+    use(`w_i${index}`, "trelloWriteChecklist", { action: "add_item", checklistId: STEPS, text }),
+    res(`w_i${index}`, { id: itemId(index + 5), name: text, state: "INCOMPLETE" }),
+  ]),
+  use("r_l", "trelloReadChecklist", { action: "list_by_card", cardId: BANNER }),
+  res("r_l", { checklists: [{ id: STEPS, name: "Кроки", items: stepItems() }] }),
+  use("r_g", "trelloReadChecklist", { action: "get", checklistId: STEPS }),
+  res("r_g", { id: STEPS, name: "Кроки", checkItems: stepItems() }),
+  msg(modelReply),
+  IDLE_OK,
+];
+
+const BANNER_CONFIRMED =
+  "Готово. На «Банер» додав чекліст «Кроки» з трьома пунктами: «Варіанти банера з новими ароматами», " +
+  "«Драфти клієнту на затвердження», «Рендер на ніч».";
+
+function assertNoProviderLeak(text: string): void {
+  for (const forbidden of [/INCOMPLETE/i, /(?<!\p{L})COMPLETE(?!\p{L})/iu, /ari:cloud/, /eeeeeeee|ffffffff/, /trello(Read|Write)/, /list_by_card/, /Підтверджено читанням/]) {
+    assert.doesNotMatch(text, forbidden);
+  }
+}
+
+test("#57 production case: verified create + 3 items → human confirmation, exact names, no INCOMPLETE", async () => {
+  const { session, push, sendCalls, traces } = await open();
+  push(...bannerTurn(PRODUCTION_REPLY));
+  const reply = await session.send("Так");
+  assert.equal(reply, BANNER_CONFIRMED);
+  assertNoProviderLeak(reply);
+  assert.equal(sendCalls.length, 1, "the model read back itself: no nudge");
+  assert.deepEqual(traces.filter((t) => t.type === "checklist_confirmation_composed"), [
+    { type: "checklist_confirmation_composed", mode: "withheld_provider_state" },
+  ]);
+  session.close();
+});
+
+test("#57 production case through Telegram dispatch: the visible message is the human confirmation", async () => {
+  const { replies } = await dispatchThroughTelegram(bannerTurn(PRODUCTION_REPLY));
+  assert.deepEqual(replies, [BANNER_CONFIRMED]);
+  assertNoProviderLeak(replies[0]);
+});
+
+test("#57: model text carrying provider state is withheld even when it does not restate the checklist", async () => {
+  for (const modelReply of ["Готово, статус: COMPLETE.", "Все incomplete поки що — можна починати."]) {
+    const { session, push, traces } = await open();
+    push(...bannerTurn(modelReply));
+    assert.equal(await session.send("Так"), BANNER_CONFIRMED);
+    assert.deepEqual(traces.filter((t) => t.type === "checklist_confirmation_composed"), [
+      { type: "checklist_confirmation_composed", mode: "withheld_provider_state" },
+    ]);
+    session.close();
+  }
+});
+
+test("#57: useful model commentary that neither restates the checklist nor carries provider state still follows", async () => {
+  const { session, push } = await open();
+  push(...bannerTurn("Раджу почати з варіантів ароматів — клієнт чекає їх першими."));
+  assert.equal(await session.send("Так"), `${BANNER_CONFIRMED}\n\nРаджу почати з варіантів ароматів — клієнт чекає їх першими.`);
+  session.close();
+});
+
+test("#57: the #56 nudge path still works and ends in the human confirmation", async () => {
+  const { session, push, sendCalls, traces } = await open();
+  const turn = bannerTurn(PRODUCTION_REPLY);
+  // Model skips both read-backs in its own turn; the one nudge asks for them.
+  const writesOnly = turn.slice(0, 2 + 2 + STEP_ITEMS.length * 2);
+  const reads = turn.slice(writesOnly.length, writesOnly.length + 4);
+  push(...writesOnly, msg("Готово."), IDLE_OK, ...reads, msg(PRODUCTION_REPLY), IDLE_OK);
+  const reply = await session.send("Так");
+  assert.equal(reply, BANNER_CONFIRMED);
+  assert.equal(sendCalls.length, 2, "exactly one nudge");
+  assert.deepEqual(traces.find((t) => t.type === "verification_nudge_sent"), {
+    type: "verification_nudge_sent", attempt: 1, readKinds: ["checklist_list", "checklist_get"],
+  });
+  session.close();
+});
+
+test("#57: a card-only verified write keeps the model's own reply (no checklist composition)", async () => {
+  const { session, push, traces } = await open();
+  push(
+    use("w", "trelloWriteCard", { action: "update", cardId: "card_A", name: "A" }),
+    res("w", { id: "card_A", name: "A" }),
+    use("r", "trelloReadCard", { action: "get", cardIdOrUrl: "card_A" }),
+    res("r", { id: "card_A", name: "A" }),
+    msg("Перейменував картку на «A»."),
+    IDLE_OK,
+  );
+  assert.equal(await session.send("Перейменуй"), "Перейменував картку на «A».");
+  assert.equal(traces.some((t) => t.type === "checklist_confirmation_composed"), false);
+  session.close();
 });

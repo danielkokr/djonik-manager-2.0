@@ -403,7 +403,16 @@ export interface MutationOutcome {
   /** #37: present only for a project-label write (`attach_label`/`detach_label`). `name` is the
    *  label's display name taken from the verified card read; null when not confirmed there. */
   projectLabel?: { action: LabelAction; labelId: string | null; name: string | null };
-  checklist?: { action: "create" | "add_item"; checklistId: string | null; itemId: string | null; name: string };
+  checklist?: {
+    action: "create" | "add_item";
+    checklistId: string | null;
+    itemId: string | null;
+    name: string;
+    /** #57, display only (never affects status): the card's name from a successful direct card read in
+     *  this turn (create), and the checklist's name from the read that verified an item (add_item). */
+    cardName?: string;
+    checklistName?: string;
+  };
   /** #37: true when the write was a `create` (its target is the card its own result returned). */
   isCreate?: boolean;
   /** Requested fields whose latest-writer check did NOT confirm (mismatch/unavailable). */
@@ -573,12 +582,14 @@ export class TrelloMutationLedger {
   }
 
   /** Display only (#37): a label write names no card, so report it under the name another write in
-   *  this turn requested for the same card. Never affects status or identity. */
+   *  this turn requested for the same card. Never affects status or identity. #57: only a card write
+   *  names a card — a checklist write's `label` is the checklist/item name, never borrowed. */
   private withBorrowedCardName(outcome: MutationOutcome, all: MutationOutcome[]): MutationOutcome {
     if (outcome.label !== null || !outcome.projectLabel) return outcome;
     const ids = outcome.targetCardIds;
     const named = all.find(
-      (other) => other.label !== null && other.targetCardIds.some((otherId) => ids.some((id) => identifiersMatch(id, otherId))),
+      (other) => !other.checklist && other.label !== null &&
+        other.targetCardIds.some((otherId) => ids.some((id) => identifiersMatch(id, otherId))),
     );
     return named ? { ...outcome, label: named.label } : outcome;
   }
@@ -651,8 +662,10 @@ export class TrelloMutationLedger {
         if (!checklists) continue;
         sawRelevantRead = true;
         const found = checklists.find((checklist) => identifiersMatch(String(checklist.id), checklistId));
-        if (found && typeof found.name === "string" && normalizeText(found.name) === normalizeText(wanted))
-          return { ...base, status: "verified", unconfirmedFields: [] };
+        if (found && typeof found.name === "string" && normalizeText(found.name) === normalizeText(wanted)) {
+          const cardName = this.cardDisplayName(cardId!);
+          return { ...base, status: "verified", unconfirmedFields: [], checklist: { ...base.checklist!, ...(cardName ? { cardName } : {}), checklistName: wanted } };
+        }
         if (found) sawMismatch = true;
       } else {
         if (read.input.action !== "get" || !identifiersMatch(readString(read.input, "checklistId") ?? "", checklistId)) continue;
@@ -662,12 +675,23 @@ export class TrelloMutationLedger {
         if (!items) continue;
         sawRelevantRead = true;
         const found = items.find((item) => identifiersMatch(String(item.id), resultId));
-        if (found && typeof found.name === "string" && normalizeText(found.name) === normalizeText(wanted))
-          return { ...base, status: "verified", unconfirmedFields: [] };
+        if (found && typeof found.name === "string" && normalizeText(found.name) === normalizeText(wanted)) {
+          const checklistName = typeof checklist.name === "string" && checklist.name.trim() ? checklist.name : undefined;
+          return { ...base, status: "verified", unconfirmedFields: [], checklist: { ...base.checklist!, ...(checklistName ? { checklistName } : {}) } };
+        }
         if (found) sawMismatch = true;
       }
     }
     return { ...base, status: sawMismatch ? "field_mismatch" : sawRelevantRead ? "field_unconfirmed" : "awaiting_read" };
+  }
+
+  /** #57, display only: the name a successful direct read of this card returned in this turn (any
+   *  order — a name is never a verification claim). Null when no read named it. */
+  private cardDisplayName(cardId: string): string | null {
+    for (const read of this.validDirectReads()) {
+      if (identifiersMatch(read.card.id, cardId) && typeof read.card.name === "string" && read.card.name.trim()) return read.card.name;
+    }
+    return null;
   }
 
   private evaluateWrite(

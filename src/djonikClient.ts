@@ -26,6 +26,12 @@ import {
   type SpecialistCompositionMode,
   type SpecialistUnverifiedReason,
 } from "./turnCorrelation.js";
+import {
+  buildChecklistConfirmation,
+  composeChecklistReply,
+  otherVerifiedWritesLine,
+  type ChecklistCommentaryMode,
+} from "./checklistConfirmation.js";
 import { executeTrelloWorkHistoryFromEnvironment, type CustomToolExecutionResult } from "./trelloWorkHistory.js";
 import { executeTrelloBoardSnapshotFromEnvironment } from "./trelloBoardSnapshot.js";
 import { CustomToolResolution } from "./customToolResolution.js";
@@ -473,6 +479,8 @@ export type DjonikTraceEvent =
   | { type: "due_date_reply_finalized"; verifiedDue: string; kyivDate: string; weekdayEn: string; mismatch: boolean }
   /** Content-free (#44, S11): whether the model's text followed the code-owned due confirmation, or why it was withheld. */
   | { type: "due_commentary_composed"; mode: DueCommentaryMode }
+  /** Content-free (#57): a verified checklist write got the code-owned confirmation; what happened to the model text. */
+  | { type: "checklist_confirmation_composed"; mode: ChecklistCommentaryMode }
   /** Content-free (#28, composition contract since #32): a VERIFIED Project Health specialist result
    *  was preserved in the turn's reply. `mode` says how it met the rest of the reply. */
   | { type: "specialist_reply_composed"; mode: SpecialistCompositionMode }
@@ -920,17 +928,42 @@ export function finalizeMutationReply(reply: string | null, outcomes: MutationOu
   return finalizeMutationReplyWithMode(reply, outcomes).text;
 }
 
-/** `finalizeMutationReply` plus what happened to the model's text on a verified due-write turn (null otherwise). */
+/**
+ * `finalizeMutationReply` plus what happened to the model's text on a verified due-write turn and beside a
+ * code-owned checklist confirmation (#57; absent when the turn has no verified checklist write).
+ *
+ * #57: verified checklist writes get a code-owned confirmation (`buildChecklistConfirmation`): what was added and
+ * where, never a provider item state, id or read mechanics. When the turn confirmed no due write it leads the reply
+ * and the model's text follows only through `composeChecklistReply`. Beside a due write it follows the #23/#44 due
+ * block, and the model's text must pass both gates. Turns without a verified checklist write are unchanged.
+ */
 export function finalizeMutationReplyWithMode(
   reply: string | null,
   outcomes: MutationOutcome[],
-): { text: string; dueCommentary: DueCommentaryMode | null } {
-  if (outcomes.some(isFailed)) return { text: describeMutationOutcomes(outcomes, describeDueForUser), dueCommentary: null };
+): { text: string; dueCommentary: DueCommentaryMode | null; checklistCommentary?: ChecklistCommentaryMode } {
+  if (outcomes.some(isFailed)) {
+    return { text: describeMutationOutcomes(outcomes, describeDueForUser), dueCommentary: null };
+  }
 
-  const effective = outcomes.filter((outcome) => isConfirmed(outcome) && !outcome.superseded);
+  const effective = outcomes.filter((outcome) => isConfirmed(outcome) && !outcome.superseded && !outcome.checklist);
   const dueOutcomes = dueOutcomesFromMutations(outcomes);
-  if (dueOutcomes.length === 0) return { text: reply ?? describeMutationOutcomes(outcomes, describeDueForUser), dueCommentary: null };
-  const block = effective.length === 1
+  const checklistBlock = buildChecklistConfirmation(outcomes);
+  if (dueOutcomes.length === 0) {
+    if (checklistBlock === null) {
+      return { text: reply ?? describeMutationOutcomes(outcomes, describeDueForUser), dueCommentary: null };
+    }
+    // Mixed turn: whenever the model's text (which would report the other confirmed writes) is not shown, one
+    // deterministic, id-free line still acknowledges them — the checklist polish never hides another verified write.
+    const others = otherVerifiedWritesLine(outcomes);
+    if (reply === null) {
+      // #32 verified-specialist turn: no model text.
+      return { text: [checklistBlock, others].filter(Boolean).join("\n"), dueCommentary: null, checklistCommentary: "none" };
+    }
+    const composed = composeChecklistReply(checklistBlock, reply, outcomes, effective.length === 0);
+    const text = composed.mode === "appended" || others === null ? composed.text : `${composed.text}\n${others}`;
+    return { text, dueCommentary: null, checklistCommentary: composed.mode };
+  }
+  const dueBlock = effective.length === 1
     ? finalizeDueDateReply("", dueOutcomes[0])
     : effective
       .map((outcome) => {
@@ -938,9 +971,13 @@ export function finalizeMutationReplyWithMode(
         return `${describeMutationTarget(outcome)}: ${line}`;
       })
       .join("\n");
+  const block = checklistBlock === null ? dueBlock : `${dueBlock}\n${buildChecklistConfirmation(outcomes, false)}`;
   const mismatch = dueOutcomes.some((due) => describeDueOutcomeForTrace(due)?.mismatch === true);
   const composed = composeVerifiedDueReply(block, reply, mismatch);
-  return { text: composed.text, dueCommentary: composed.mode };
+  if (checklistBlock === null) return { text: composed.text, dueCommentary: composed.mode };
+  if (composed.mode !== "appended") return { text: composed.text, dueCommentary: composed.mode, checklistCommentary: "none" };
+  const gated = composeChecklistReply(block, reply, outcomes, false);
+  return { text: gated.text, dueCommentary: composed.mode, checklistCommentary: gated.mode };
 }
 
 /**
@@ -1789,6 +1826,7 @@ export async function connectToDjonik(
       } else {
         const finalized = finalizeMutationReplyWithMode(reply, outcomes);
         if (finalized.dueCommentary !== null) onTrace?.({ type: "due_commentary_composed", mode: finalized.dueCommentary });
+        if (finalized.checklistCommentary !== undefined) onTrace?.({ type: "checklist_confirmation_composed", mode: finalized.checklistCommentary });
         commentary = finalized.text;
       }
 
