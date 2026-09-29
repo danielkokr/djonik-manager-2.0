@@ -201,3 +201,23 @@ test("#44: offline critical simulation includes S41 with no paid inference (fake
   assert.ok(runs.every((run) => run.usageCostUsd === undefined), "no paid usage recorded");
   for (const id of ["S9", "S10", "S11"]) assert.ok(SCENARIOS.some((entry) => entry.id === id), `${id} is retained`);
 });
+
+test("#44 S11 unchanged: the r30 composed mixed reply (verified due first, project view after) meets its mechanical checks offline", async () => {
+  const { finalizeMutationReply } = await import("./djonikClient.js");
+  const s11 = SCENARIOS.find((entry) => entry.id === "S11")!;
+  assert.deepEqual(s11.checks, ["verified_write"], "S11 is not weakened or rewritten");
+  assert.equal(s11.turns[0], "Що по Seqthera і постав дедлайн концепту на п'ятницю 2 жовтня?");
+  const due = "2026-10-02T15:00:00.000Z";
+  const view = "По Seqthera: концепт у роботі, фідбек клієнта в Waiting — це очікування, не блокер.";
+  const reply = finalizeMutationReply(view, [{ toolUseId: "w", status: "verified", targetCardIds: ["card_seq"], label: "[EVAL] Seqthera — концепт",
+    unconfirmedFields: [], superseded: false, due: { intendedDue: due, verifiedDue: due } }]);
+  assert.ok(reply.includes(view), "the read/judgement half is visible (the docs/91 §13 blocker)");
+  assert.match(reply, /^Готово\. Trello підтвердив дедлайн: пʼятниця, 2 жовтня 2026, 18:00 за Києвом\./);
+  const run = async (mutations: CandidateTurn["trace"]["mutations"]) => (await runBenchmark({ mode: "S11", release: "offline", repetitions: 1, grader: fakeGrader(),
+    fixture: { async reset() { return { evidenceAvailable: true }; } },
+    candidate: { async open() { return { async send() { return { reply, trace: { ...trace, mutations } }; }, close() {} }; } } }))[0];
+  const verified = await run([{ cardIds: ["card_seq"], status: "verified" }]);
+  assert.deepEqual(verified.checkFailures, []);
+  assert.deepEqual(verified.findings, [], "the code-owned sentence only restates Daniel's own пт / 2 жовтня");
+  assert.deepEqual((await run([])).checkFailures, ["verified_write"]);
+});

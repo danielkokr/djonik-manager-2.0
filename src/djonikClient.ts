@@ -33,6 +33,7 @@ import { ToolConfirmationLifecycle, type ConfirmationRecord, type ConfirmationRe
 import { mutationAuthorityFor, type MutationAuthority, type TurnOrigin } from "./turnAuthority.js";
 import { buildClockHeader } from "./turnClock.js";
 import { DecisionTraceCollector, type DecisionTrace } from "./decisionTrace.js";
+import { composeVerifiedDueReply, type DueCommentaryMode } from "./mutationCommentary.js";
 import {
   SessionEventFeed,
   SessionFeedDeadError,
@@ -467,6 +468,8 @@ export type DjonikTraceEvent =
   | { type: "verification_nudge_sent"; attempt: number }
   | { type: "write_unverified_failure" }
   | { type: "due_date_reply_finalized"; verifiedDue: string; kyivDate: string; weekdayEn: string; mismatch: boolean }
+  /** Content-free (#44, S11): whether the model's text followed the code-owned due confirmation, or why it was withheld. */
+  | { type: "due_commentary_composed"; mode: DueCommentaryMode }
   /** Content-free (#28, composition contract since #32): a VERIFIED Project Health specialist result
    *  was preserved in the turn's reply. `mode` says how it met the rest of the reply. */
   | { type: "specialist_reply_composed"; mode: SpecialistCompositionMode }
@@ -879,21 +882,36 @@ export function dueOutcomesFromMutations(outcomes: MutationOutcome[]): DueWriteO
  * - Otherwise ordinary confirmed turns keep the model's reply, except that a confirmed due-date
  *   write keeps the #23 guarantee: the wrapper owns the whole confirmation (a lone confirmed
  *   mutation gets the exact #23 sentence — the "differs from what was sent" wording when Trello holds
- *   another due; several get one deterministic line each), so no model due wording survives.
+ *   another due; several get one deterministic line each), so no model due wording survives AS the
+ *   confirmation. #44 (S11): that code block always leads; the model's own text may follow it verbatim
+ *   only through `composeVerifiedDueReply` — withheld whole on any due mismatch or any calendar reference,
+ *   so it can answer the rest of a mixed request but never state a competing due.
  */
 export function finalizeMutationReply(reply: string | null, outcomes: MutationOutcome[]): string {
-  if (outcomes.some(isFailed)) return describeMutationOutcomes(outcomes, describeDueForUser);
+  return finalizeMutationReplyWithMode(reply, outcomes).text;
+}
+
+/** `finalizeMutationReply` plus what happened to the model's text on a verified due-write turn (null otherwise). */
+export function finalizeMutationReplyWithMode(
+  reply: string | null,
+  outcomes: MutationOutcome[],
+): { text: string; dueCommentary: DueCommentaryMode | null } {
+  if (outcomes.some(isFailed)) return { text: describeMutationOutcomes(outcomes, describeDueForUser), dueCommentary: null };
 
   const effective = outcomes.filter((outcome) => isConfirmed(outcome) && !outcome.superseded);
   const dueOutcomes = dueOutcomesFromMutations(outcomes);
-  if (dueOutcomes.length === 0) return reply ?? describeMutationOutcomes(outcomes, describeDueForUser);
-  if (effective.length === 1) return finalizeDueDateReply(reply ?? "", dueOutcomes[0]);
-  return effective
-    .map((outcome) => {
-      const line = outcome.due ? describeDueForUser(outcome.due) : "Зміни підтверджено читанням картки.";
-      return `${describeMutationTarget(outcome)}: ${line}`;
-    })
-    .join("\n");
+  if (dueOutcomes.length === 0) return { text: reply ?? describeMutationOutcomes(outcomes, describeDueForUser), dueCommentary: null };
+  const block = effective.length === 1
+    ? finalizeDueDateReply("", dueOutcomes[0])
+    : effective
+      .map((outcome) => {
+        const line = outcome.due ? describeDueForUser(outcome.due) : "Зміни підтверджено читанням картки.";
+        return `${describeMutationTarget(outcome)}: ${line}`;
+      })
+      .join("\n");
+  const mismatch = dueOutcomes.some((due) => describeDueOutcomeForTrace(due)?.mismatch === true);
+  const composed = composeVerifiedDueReply(block, reply, mismatch);
+  return { text: composed.text, dueCommentary: composed.mode };
 }
 
 /**
@@ -1739,7 +1757,9 @@ export async function connectToDjonik(
         onTrace?.({ type: "specialist_reply_composed", mode: composed.mode });
         commentary = composed.text;
       } else {
-        commentary = finalizeMutationReply(reply, outcomes);
+        const finalized = finalizeMutationReplyWithMode(reply, outcomes);
+        if (finalized.dueCommentary !== null) onTrace?.({ type: "due_commentary_composed", mode: finalized.dueCommentary });
+        commentary = finalized.text;
       }
 
       // Issue #54: a reminder change this turn is a code-owned fact. Its code-resolved `confirmation` line must reach

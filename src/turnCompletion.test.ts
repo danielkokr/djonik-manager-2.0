@@ -1524,26 +1524,100 @@ test("#44 mixed read + verified write on r30: one coordinator answer, #31 verifi
   session.close();
 });
 
-test("#44 mixed read + due write on r30: the #23 deterministic due sentence still owns the reply (open finding, docs/91 §13)", async () => {
-  // Pre-existing #23 behaviour, unchanged by #44: a verified due write replaces the model's text with the deterministic
-  // Kyiv due sentence. On r29 the specialist block rode beside it; on r30 the coordinator's project-view half of a mixed
-  // S11-style turn is therefore not shown. Recorded as an open finding for r30 validation, not fixed inside #44.
-  const due = "2026-09-21T21:30:00.000Z";
-  const card = { id: "card_A", name: "Card A", due };
-  const { session, push, sendCalls } = await open(r30SessionAgent());
+test("#44 S11 resolved — mixed read + verified due write on r30: code-owned due sentence first, then the project view, one reply", async () => {
+  // docs/91 "S11 mixed verified-write blocker resolution": the #23 sentence stays code-owned and leads; the model's own
+  // text follows verbatim because it makes no calendar reference, so it cannot state a competing due.
+  const due = "2026-10-02T15:00:00.000Z"; // Kyiv: пʼятниця, 2 жовтня 2026, 18:00
+  const card = { id: "card_A", name: "Концепт", due };
+  const view = "По Seqthera: концепт у роботі, фідбек клієнта в Waiting — це очікування, не блокер.";
+  const { session, push, sendCalls, traces } = await open(r30SessionAgent());
   push(
     toolUse("w", "trelloWriteCard", { action: "update", cardId: "card_A", due }),
     toolResult("w", false, card),
     toolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "card_A" }),
     toolResult("r", false, card),
-    msg("По Seqthera: концепт у роботі. Дедлайн поставив."),
+    msg(view),
+    IDLE_OK,
+  );
+  const reply = await session.send("Що по Seqthera і постав дедлайн концепту на п'ятницю 2 жовтня?");
+  assert.strictEqual(reply, `Готово. Trello підтвердив дедлайн: пʼятниця, 2 жовтня 2026, 18:00 за Києвом.\n\n${view}`);
+  assert.ok(!reply.includes(WITHHELD_CUE) && !reply.includes("Висновок Project Health"));
+  assert.equal(reply.split("Trello підтвердив дедлайн").length - 1, 1, "one statement of what Trello saved");
+  assert.equal(sendCalls.length, 1, "no nudge, no second message");
+  assert.deepEqual(traces.filter((t) => t.type === "due_commentary_composed"), [{ type: "due_commentary_composed", mode: "appended" }]);
+  assert.deepEqual(specialistTraces(traces), []);
+  session.close();
+});
+
+test("#44 S11: a mixed reply that restates the due (e.g. a wrong weekday) is withheld whole — the #23 sentence stands alone", async () => {
+  const due = "2026-09-21T21:30:00.000Z"; // Kyiv: вівторок, 22 вересня 2026, 00:30
+  const card = { id: "card_A", name: "Card A", due };
+  const { session, push, traces } = await open(r30SessionAgent());
+  push(
+    toolUse("w", "trelloWriteCard", { action: "update", cardId: "card_A", due }),
+    toolResult("w", false, card),
+    toolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "card_A" }),
+    toolResult("r", false, card),
+    msg("По Seqthera: концепт у роботі. Дедлайн поставив на понеділок, 22 вересня."),
     IDLE_OK,
   );
   const reply = await session.send("Що по Seqthera і постав дедлайн");
-  assert.ok(reply.startsWith("Готово. Trello підтвердив дедлайн: вівторок, 22 вересня 2026, 00:30 за Києвом."));
-  assert.ok(!reply.includes(WITHHELD_CUE) && !reply.includes("Висновок Project Health"));
-  assert.ok(!reply.includes("По Seqthera"), "the project-view half is dropped by the #23 finalizer (finding)");
-  assert.equal(sendCalls.length, 1);
+  assert.strictEqual(reply, "Готово. Trello підтвердив дедлайн: вівторок, 22 вересня 2026, 00:30 за Києвом.");
+  assert.deepEqual(traces.filter((t) => t.type === "due_commentary_composed"), [{ type: "due_commentary_composed", mode: "withheld_calendar" }]);
+  session.close();
+});
+
+test("#44 S11: a calendar-free claim about the write («Але дедлайн не зберігся.») is withheld whole — the code owns the result", async () => {
+  const due = "2026-10-02T15:00:00.000Z";
+  const card = { id: "card_A", name: "Концепт", due };
+  const { session, push, traces } = await open(r30SessionAgent());
+  push(
+    toolUse("w", "trelloWriteCard", { action: "update", cardId: "card_A", due }),
+    toolResult("w", false, card),
+    toolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "card_A" }),
+    toolResult("r", false, card),
+    msg("По Seqthera: концепт у роботі. Але дедлайн не зберігся."),
+    IDLE_OK,
+  );
+  const reply = await session.send("Що по Seqthera і постав дедлайн концепту на п'ятницю 2 жовтня?");
+  assert.strictEqual(reply, "Готово. Trello підтвердив дедлайн: пʼятниця, 2 жовтня 2026, 18:00 за Києвом.");
+  assert.deepEqual(traces.filter((t) => t.type === "due_commentary_composed"), [{ type: "due_commentary_composed", mode: "withheld_mutation_claim" }]);
+  session.close();
+});
+
+test("#44 S11: a verified due mismatch keeps the deterministic mismatch sentence alone, whatever the model wrote", async () => {
+  const sent = "2026-10-02T15:00:00.000Z";
+  const saved = { id: "card_A", name: "Концепт", due: "2026-10-01T15:00:00.000Z" };
+  const { session, push, traces } = await open(r30SessionAgent());
+  push(
+    toolUse("w", "trelloWriteCard", { action: "update", cardId: "card_A", due: sent }),
+    toolResult("w", false, saved),
+    toolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: "card_A" }),
+    toolResult("r", false, saved),
+    msg("Все як просив. По Seqthera: концепт у роботі."),
+    IDLE_OK,
+  );
+  const reply = await session.send("Що по Seqthera і постав дедлайн концепту на п'ятницю 2 жовтня?");
+  assert.strictEqual(reply, "Картку оновлено, але Trello підтвердив дедлайн: четвер, 1 жовтня 2026, 18:00 за Києвом. Це відрізняється від значення, яке було відправлено.");
+  assert.deepEqual(traces.filter((t) => t.type === "due_commentary_composed"), [{ type: "due_commentary_composed", mode: "withheld_mismatch" }]);
+  session.close();
+});
+
+test("#44 S11: an unverified due write still fails closed after one nudge; model success prose is never the reply", async () => {
+  const due = "2026-10-02T15:00:00.000Z";
+  const { session, push, sendCalls } = await open(r30SessionAgent());
+  push(
+    toolUse("w", "trelloWriteCard", { action: "update", cardId: "card_A", due }),
+    toolResult("w", false, { id: "card_A", name: "Концепт", due }),
+    msg("Готово! По Seqthera: концепт у роботі."),
+    IDLE_OK,
+    msg("Все ще готово."),
+    IDLE_OK,
+  );
+  const error = await rejection(session.send("Що по Seqthera і постав дедлайн концепту на п'ятницю 2 жовтня?"));
+  assert.ok(error instanceof DjonikUnverifiedMutationError);
+  assert.ok(!error.message.includes("По Seqthera") && !error.message.includes("Готово!"), "the deterministic report only");
+  assert.equal(sendCalls.length, 2, "exactly one verification nudge");
   session.close();
 });
 
