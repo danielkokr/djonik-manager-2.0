@@ -17,7 +17,7 @@ const djonikSource = readFileSync(join(repoRoot, "managed-agents", "djonik.md"),
 export const SOURCE_SYSTEM_PROMPT = /^---\n[\s\S]*?\n---\n\n([\s\S]*)$/.exec(djonikSource)![1].replace(/\n$/, "");
 
 /** The #44 coordinator-prompt edit (Project Health specialist retired in r30), exact text before → after, applied on
- *  top of r29. Not synced: serving r29 (Agent v29) stores the source minus this edit. The whole `# Project Health`
+ *  top of r29. Synced only into Agent v30 (r30): r29 (Agent v29, the rollback) stores the source minus this edit. The whole `# Project Health`
  *  delegation section goes, with no replacement routing section (docs/90 §18, docs/91). */
 export const ISSUE_44_PROMPT_EDITS: ReadonlyArray<{ before: string; after: string }> = [
   {
@@ -40,7 +40,7 @@ function revertEdits(prompt: string, edits: ReadonlyArray<{ before: string; afte
   }, prompt);
 }
 
-/** The prompt serving r29 (Agent v29) stores: the r30 source minus the unsynced #44 edit. */
+/** The prompt r29 (Agent v29, the rollback since #56) stores: the r30 source minus the #44 edit. */
 export const R29_SYSTEM_PROMPT = revertEdits(SOURCE_SYSTEM_PROMPT, ISSUE_44_PROMPT_EDITS, "#44");
 
 /** The #45 coordinator-prompt edits (factual grounding), exact text before → after, applied on top of r28.

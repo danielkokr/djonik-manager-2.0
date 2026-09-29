@@ -53,8 +53,8 @@ test("source parses as frontmatter + system body and declares the Sonnet 5 mediu
 
 test("frontmatter declares Agent v30 (r30): no roster at all — no specialist, advisor or other member (#44, #55)", () => {
   // #55 created Agent v30 with `multiagent: null` and read it back as `multiagent: null`. The declaration states the
-  // cleared roster explicitly instead of omitting the key, so it cannot be read as "preserve the r29 roster". Serving r29
-  // (specialist v4) stays reproducible from `RELEASE_R29` and git history.
+  // cleared roster explicitly instead of omitting the key, so it cannot be read as "preserve the r29 roster". The r29
+  // rollback (specialist v4) stays reproducible from `RELEASE_R29` and git history; since #56 this declaration is served.
   assert.match(frontmatter, /^multiagent: null$/m);
   assert.doesNotMatch(frontmatter, /type: coordinator|- type: agent\b/);
   assert.doesNotMatch(frontmatter, /agent_01KNiQDzzPjaMU6LLF4mU6uM/, "the retired specialist is not declared");

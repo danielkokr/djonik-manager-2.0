@@ -570,8 +570,9 @@ export const RELEASE_R30_CANDIDATE: DjonikReleaseCandidate = {
  * timestamp; `work-review` shows its known r29 spelling there. Written out, not derived at import; `releaseR30.test.ts`
  * proves it equals the resolved candidate.
  *
- * NOT the serving release: production and this revision serve r29 until a separately authorized behavioural validation,
- * source cutover and deploy. Its source is `managed-agents/djonik.md` (body and frontmatter = Agent v30).
+ * #55 constructed it without a cutover; #56 (docs/93) makes it this revision's serving release by the source cutover
+ * alone — the tuple is unchanged. Its source is `managed-agents/djonik.md` (body and frontmatter = Agent v30).
+ * r29 stays the immediate rollback (Agent v29 + specialist v4 unchanged).
  */
 export const RELEASE_R30: DjonikRelease = {
   id: "r30",
@@ -626,9 +627,10 @@ export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_
  * docs/66), to `r28` after Agent v28 attested and a zero-event inspection Session measured its last Skill spelling
  * (docs/74, docs/75), and to `r29` after the #45 prompt and three Skill versions attested on v29 with another
  * zero-event inspection Session. Production serves its currently deployed revision until r29 is deployed.
- * #55 constructed and attested r30 (Agent v30) remotely WITHOUT a cutover: r30 is reviewed and attestable, and this
- * still serves r29 until a separately authorized behavioural validation and source cutover (docs/92).
+ * #55 constructed and attested r30 (Agent v30) remotely WITHOUT a cutover (docs/92). #56 flips this to `r30`
+ * (docs/93): the Product Owner replaced a paid pre-deploy benchmark with manual Telegram validation after a controlled
+ * deploy. The host keeps serving its deployed r29 revision until that deploy; r29 is the immediate rollback.
  * This is deliberately not an environment variable:
  * the reviewed revision, not host configuration, decides what is served.
  */
-export const SERVING_RELEASE: DjonikRelease = RELEASE_R29;
+export const SERVING_RELEASE: DjonikRelease = RELEASE_R30;

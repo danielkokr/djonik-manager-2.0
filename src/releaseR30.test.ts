@@ -11,7 +11,7 @@ import { PROJECT_HEALTH_SPECIALIST_AGENT_ID } from "./djonikClient.js";
 import { SOURCE_SYSTEM_PROMPT, agentVersionFixture, servingSessionFixture } from "./releaseFixtures.test-helpers.js";
 
 // #55 (docs/92): r30 is the remote-constructed, attested resolution of RELEASE_R30_CANDIDATE — Agent v30, four new
-// byte-verified Skill versions, no roster. It is NOT served: this revision and production serve r29.
+// byte-verified Skill versions, no roster. #56 (docs/93): this revision serves it; the host serves r29 until deployed.
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const skillSource = (name: string) => readFileSync(join(root, ".claude", "skills", name, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
@@ -29,9 +29,11 @@ const explicit = (skill: ReleaseSkill) => {
   return skill.pin as Extract<ReleaseSkill["pin"], { kind: "explicit" }>;
 };
 
-test("r30 is a reviewed, attestable release — and NOT the serving release: this revision serves r29", () => {
+test("r30 is a reviewed, attestable release and the serving release of this revision (#56); r29 is the rollback", () => {
   assert.equal(RELEASES.r30, RELEASE_R30);
-  assert.equal(SERVING_RELEASE, RELEASE_R29, "#55 constructs r30 without cutover");
+  assert.equal(SERVING_RELEASE, RELEASE_R30, "#56 source cutover");
+  assert.equal(RELEASES[SERVING_RELEASE.id], RELEASE_R30, "the default `release:check` checks r30");
+  assert.equal(RELEASES.r29, RELEASE_R29, "r29 stays a reviewed rollback release");
   assert.equal(RELEASE_R30.id, "r30");
   assert.deepEqual(RELEASE_R30.agent, { id: RELEASE_R29.agent.id, version: 30 });
   assert.equal(RELEASE_R29.agent.version, 29, "r29 stays pinned to immutable Agent v29");

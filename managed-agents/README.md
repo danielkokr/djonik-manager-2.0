@@ -20,7 +20,13 @@ The v21/v4 statements below describe recorded remote resource state from the rol
 
 ## Files
 
-**#55 (2026-09-29; [docs/92](../docs/92_ISSUE_55_R30_REMOTE_CONSTRUCTION_AND_ATTESTATION.md)): `djonik.md` (body and frontmatter) now declares Agent v30 = `RELEASE_R30`, but the application still serves r29.**
+**#56 (2026-09-29; [docs/93](../docs/93_ISSUE_56_R30_SOURCE_CUTOVER_AND_DEPLOY_HANDOFF.md)): source cutover — `djonik.md` = `SERVING_RELEASE` = `RELEASE_R30` (Agent v30).**
+- The #55 transition is over: the declaration, the application's serving release and `RELEASE_R30` are one lockstep again (`src/release.test.ts`). Nothing was applied or synced; Agent v30 and its Skills are unchanged.
+- Coordinator-only Project Health: no roster, no specialist.
+- r29 (Agent v29 + specialist v4) is the immediate rollback. `project-health-specialist.md` and the `project-health` Skill stay untouched rollback source.
+- The host still serves r29 until the separately authorized deploy. Manual Telegram validation follows that deploy; a paid benchmark is not a pre-deploy gate.
+
+**#55 (2026-09-29; [docs/92](../docs/92_ISSUE_55_R30_REMOTE_CONSTRUCTION_AND_ATTESTATION.md)): `djonik.md` (body and frontmatter) now declares Agent v30 = `RELEASE_R30`, but the application still serves r29** (superseded by #56 above).
 - Agent v30 was created from v29 by one `version: 29`-preconditioned `agents.update` with the body `buildCandidateUpdateBody` generated. It was read back exactly: `release:check -- r30` OK.
 - Four new Skill versions (task-management, planning-and-focus, studio-intake, pm-rhythm) are byte-identical to committed main. `work-review` keeps its r29 pin.
 - Roster cleared (`multiagent: null`, stated explicitly in the frontmatter). Calendar MCP removed. `trello_board_snapshot` and `focus_budget` added. `trelloWriteChecklist` is enabled behind `always_ask`.

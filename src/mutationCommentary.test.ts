@@ -117,7 +117,7 @@ test("commentary contract: task-management tells the model what the gate enforce
   assert.match(section, /rest of Daniel's request \(a project view, the next step\) or add nothing/i);
   assert.match(section, /shown only if it names no date, weekday, time or relative day/i);
   assert.match(section, /no claim of its own about the deadline or whether the change was saved/i);
-  // task-management is already an unresolved r30 Skill; serving r29 keeps its pinned version.
+  // task-management is an unresolved r30-candidate Skill (pinned in r30, served since #56); the r29 rollback keeps its pin.
   assert.ok(RELEASE_R30_CANDIDATE.skills.some((entry) => entry.name === "task-management" && entry.pin.kind === "unresolved"));
 });
 

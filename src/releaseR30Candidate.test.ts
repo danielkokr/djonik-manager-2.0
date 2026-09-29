@@ -7,7 +7,7 @@ import { SOURCE_SYSTEM_PROMPT, agentVersionFixture, servingSessionFixture } from
 import { PROJECT_HEALTH_SPECIALIST_AGENT_ID } from "./djonikClient.js";
 
 test("#47/#48/#50 candidate preserves immutable r29 and remains unresolved", () => {
-  assert.equal(SERVING_RELEASE, RELEASE_R29);
+  assert.equal(SERVING_RELEASE, RELEASE_R30, "#56 serves the resolved r30, never the candidate");
   assert.equal(RELEASES.r29, RELEASE_R29);
   // #55 resolved the candidate into a separate, written-out RELEASE_R30; the candidate itself stays unresolved provenance.
   assert.equal(RELEASES.r30, RELEASE_R30);
@@ -44,12 +44,13 @@ test("candidate update would replace MCP servers and tools together, with no inv
   assert.equal(SUPPORTED_CUSTOM_TOOLS.trello_board_snapshot?.description.length > 0, true);
 });
 
-test("#50: focus_budget exists only on the unresolved candidate; r25–r29 and the serving release never expose it", async () => {
+test("#50: focus_budget exists only on the r30 candidate and its resolution r30 (served since #56); r25–r29 never expose it", async () => {
   const { RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28 } = await import("./release.js");
-  for (const release of [RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28, RELEASE_R29, SERVING_RELEASE]) {
+  for (const release of [RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28, RELEASE_R29]) {
     assert.ok(!release.customTools.includes("focus_budget"), release.id);
   }
-  assert.equal(SERVING_RELEASE.id, "r29");
+  assert.equal(SERVING_RELEASE, RELEASE_R30);
+  assert.ok(SERVING_RELEASE.customTools.includes("focus_budget"), "the served r30 exposes the #50 tool");
   assert.ok(RELEASE_R30_CANDIDATE.customTools.includes("focus_budget"));
   assert.ok(!RELEASE_R30_CANDIDATE.customTools.includes("reminder"), "reminder stays dormant");
   assert.equal(RELEASE_R30_CANDIDATE.agent.version, null, "no invented Agent v30");
@@ -67,7 +68,7 @@ const R30_TEST_PINS = Object.fromEntries(["planning-and-focus", "pm-rhythm", "ta
 /** Test-only resolution of the candidate: invented ids never leave this file (the real r30 has no Agent version yet). */
 const resolvedR30 = () => resolveReleaseCandidate(RELEASE_R30_CANDIDATE, { skills: R30_TEST_PINS, agentVersion: 30 });
 
-test("#44 topology: r25–r29 pin specialist v4 unchanged; the r30 candidate has no specialist; no r31; r29 serves", () => {
+test("#44 topology: r25–r29 pin specialist v4 unchanged; the r30 candidate has no specialist; no r31; r30 serves (#56)", () => {
   for (const release of [RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28, RELEASE_R29]) {
     assert.deepEqual(release.specialist, {
       id: PROJECT_HEALTH_SPECIALIST_AGENT_ID,
@@ -80,7 +81,8 @@ test("#44 topology: r25–r29 pin specialist v4 unchanged; the r30 candidate has
   assert.equal(RELEASE_R30_CANDIDATE.agent.version, null, "the candidate never carries an Agent version; RELEASE_R30 does (#55)");
   assert.deepEqual(Object.keys(RELEASES), ["r25", "r26", "r27", "r28", "r29", "r30"], "r30 is attestable (#55); no r31");
   assert.equal(RELEASE_R30.specialist, null);
-  assert.equal(SERVING_RELEASE, RELEASE_R29);
+  assert.equal(SERVING_RELEASE, RELEASE_R30);
+  assert.equal(SERVING_RELEASE.specialist, null, "the served topology is coordinator-only");
   assert.equal(RELEASE_R30_CANDIDATE.model, RELEASE_R29.model, "#44 changes neither model nor effort");
   assert.deepEqual(RELEASE_R30_CANDIDATE.builtInTools, RELEASE_R29.builtInTools, "#44 changes no tool permission");
 });
