@@ -20,9 +20,16 @@ The v21/v4 statements below describe recorded remote resource state from the rol
 
 ## Files
 
+**#55 (2026-09-29; [docs/92](../docs/92_ISSUE_55_R30_REMOTE_CONSTRUCTION_AND_ATTESTATION.md)): `djonik.md` (body and frontmatter) now declares Agent v30 = `RELEASE_R30`, but the application still serves r29.**
+- Agent v30 was created from v29 by one `version: 29`-preconditioned `agents.update` with the body `buildCandidateUpdateBody` generated. It was read back exactly: `release:check -- r30` OK.
+- Four new Skill versions (task-management, planning-and-focus, studio-intake, pm-rhythm) are byte-identical to committed main. `work-review` keeps its r29 pin.
+- Roster cleared (`multiagent: null`, stated explicitly in the frontmatter). Calendar MCP removed. `trello_board_snapshot` and `focus_budget` added. `trelloWriteChecklist` is enabled behind `always_ask`.
+- `SERVING_RELEASE` stays `RELEASE_R29` (Agent v29, specialist v4): behavioural validation, source cutover and deploy are separate, separately authorized steps. The r29 declaration stays reproducible from `RELEASE_R29` and git history; `src/release.test.ts` proves served r29 differs from this file by exactly the r30 transition.
+- Remote latest is now v30. Every serving path pins its version explicitly, so production (r29) is unaffected. A Console Session created without a version pin would get v30.
+
 **#44 (2026-09-28, source only; [docs/91](../docs/91_ISSUE_44_PROJECT_HEALTH_RETIREMENT_SOURCE_REPORT.md)).** The Project Health specialist is retired from the **r30 candidate**:
 - `djonik.md`'s body no longer has the `# Project Health` delegation section. That body is the r30 candidate prompt (SHA-256 `0296d624…33d1`); serving r29 stores it plus that section (`fe28b195…5025`).
-- `djonik.md`'s frontmatter still declares serving r29, including the specialist v4 roster.
+- `djonik.md`'s frontmatter then still declared serving r29, including the specialist v4 roster (superseded by #55 above).
 - r30 has no roster; its update body clears it with `multiagent: null`.
 - Project state, stuck work, blockers and risk belong to the coordinator's `planning-and-focus` project view.
 

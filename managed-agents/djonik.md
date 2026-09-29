@@ -8,32 +8,24 @@ model:
 skills:
   - type: custom
     skill_id: skill_01WS6JtY1GMu3rGZaKCVR9w1
-    version: skver_01H9ZMhZKJv7Ryi3tdKiS4Ni
+    version: skver_01KzWwpv88cC2K2nncoTdkt2
   - type: custom
     skill_id: skill_01PxXTvhbZSrbxqi7gmDs6KW
-    version: skver_01ELK2Ap5N8oYTQxYtNpGptG
+    version: skver_01L9cL8yv244qmpXSyqvmqzJ
   - type: custom
     skill_id: skill_015c8dtDnWyDfVLwS6NLS7r6
-    version: skver_018sJv1GCnzfZRG4NbExbAzj
+    version: skver_01SYUXncujJcAWuXz1wbD69U
   - type: custom
     skill_id: skill_0169h7GYNYUDDDZteDCUV2fE
     version: skver_015LYzVdivGGMsBpuki4kW4S
   - type: custom
     skill_id: skill_01GzpQX3bVuWNk5bhbGcbzku
-    version: skver_011MPsX8NEXALfqBKMRzGVz8
-multiagent:
-  type: coordinator
-  agents:
-    - type: agent
-      id: agent_01KNiQDzzPjaMU6LLF4mU6uM
-      version: 4
+    version: skver_01BetXsjNcGqmaHY9MpNQgns
+multiagent: null
 mcp_servers:
   - type: url
     name: trello
     url: https://mcp.trello.com/v1
-  - type: url
-    name: google-calendar-calendarmcp
-    url: https://calendarmcp.googleapis.com/mcp/v1
 tools:
   - type: agent_toolset_20260401
     default_config:
@@ -65,6 +57,14 @@ tools:
     name: trello_work_history
     description: "Read a compact, read-only Trello board-action digest for a requested week or explicit Kyiv date range. Use it for questions about what moved into Done, returned from Done, was created, archived, or changed during a period. It computes Kyiv dates, counts, current-label project scope, and coverage itself; do not use it for current Project Health, writes, effort, or work outside Trello."
     input_schema: {"type":"object","additionalProperties":false,"required":["window","scope"],"properties":{"window":{"oneOf":[{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"this_week"}}},{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"last_week"}}},{"type":"object","additionalProperties":false,"required":["kind","from","to"],"properties":{"kind":{"const":"explicit"},"from":{"type":"string"},"to":{"type":"string"}}}]},"scope":{"oneOf":[{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"board"}}},{"type":"object","additionalProperties":false,"required":["kind","label"],"properties":{"kind":{"const":"project"},"label":{"type":"string","minLength":1,"maxLength":120}}}]},"response_format":{"enum":["concise","detailed"]}}}
+  - type: custom
+    name: trello_board_snapshot
+    description: "Read a fresh, compact Trello current-board factual snapshot for planning, workload, nearly finished work, and Waiting. Includes real Size, checklist progress, Kyiv due, and evidenced days in the current list. Backlog and Inbox are counts by default. Use Trello MCP for exact card detail or writes; use trello_work_history for retrospective changes. This tool never ranks work or writes."
+    input_schema: {"type":"object","additionalProperties":false,"properties":{"response_format":{"enum":["concise","detailed"]}}}
+  - type: custom
+    name: focus_budget
+    description: "Daniel's own explicit time budget for the card he is working on now, stored by code as the timebox of that card's current In-progress stint. `set` only when Daniel himself gives a duration for work he is taking ('беру Azov на 2 години' → minutes 120); never derive minutes from Size (S/M/L/XL are not durations) and never estimate them. The card must already be In progress — move it there first through the verified Trello write — and `card_id` must come from a fresh Trello read in this turn. `clear` removes the budget ('без таймера'). Say it is set only when the result is ok, and give its `confirmation` line exactly. Only working time from /rhythm.md `work_hours` counts; when the budget is used up, Djonik may check once whether Daniel should switch — the timer never means 'stop'."
+    input_schema: {"type":"object","additionalProperties":false,"required":["op","card_id"],"properties":{"op":{"enum":["set","clear"]},"card_id":{"type":"string","pattern":"^[0-9a-fA-F]{24}$"},"minutes":{"type":"integer","minimum":15,"maximum":720}}}
   - type: mcp_toolset
     mcp_server_name: trello
     default_config:
@@ -117,9 +117,9 @@ tools:
         permission_policy:
           type: always_ask
       - name: trelloWriteChecklist
-        enabled: false
+        enabled: true
         permission_policy:
-          type: always_allow
+          type: always_ask
       - name: trelloWriteInbox
         enabled: false
         permission_policy:
@@ -132,12 +132,6 @@ tools:
         enabled: false
         permission_policy:
           type: always_allow
-  - type: mcp_toolset
-    mcp_server_name: google-calendar-calendarmcp
-    default_config:
-      enabled: false
-      permission_policy:
-        type: always_allow
 ---
 
 # Who you are

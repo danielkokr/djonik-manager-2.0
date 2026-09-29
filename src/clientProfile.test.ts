@@ -269,9 +269,10 @@ test("#51 mechanical checks: memory write, missing question, fire, wrong project
 
 // --- I. Release boundary --------------------------------------------------------------------------------------------
 
-test("#51 release: the same unresolved r30 candidate; r29 still serves; no new release, Agent version, tool or pin", () => {
+test("#51 release: the same unresolved r30 candidate; r29 still serves; #51 adds no release, Agent version, tool or pin", () => {
   assert.equal(SERVING_RELEASE, RELEASE_R29);
-  assert.equal(RELEASES.r30, undefined);
+  // r30 exists only as #55's resolution of this same candidate; no further release follows from #51.
+  assert.equal(RELEASES.r30?.id, "r30");
   assert.equal(RELEASES.r31, undefined);
   assert.equal(RELEASE_R30_CANDIDATE.agent.version, null);
   const unresolved = RELEASE_R30_CANDIDATE.skills.filter((entry) => entry.pin.kind === "unresolved");

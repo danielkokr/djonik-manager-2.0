@@ -30,8 +30,8 @@ test("source parses as frontmatter + system body and declares the Sonnet 5 mediu
   assert.match(frontmatter, /^name: Джонік$/m);
   assert.match(frontmatter, /^model:\n  id: claude-sonnet-5\n  effort: medium\n  speed: standard$/m);
   assert.ok(system.length > 0);
-  // r28 (#41 + #42, Agent v28; docs/74): task-management, the #42 planning-and-focus Skill in place of daily-planning
-  // and weekly-planning, studio-intake, the accepted #36 work-review Skill and the #39 pm-rhythm Skill.
+  // r30 (Agent v30; docs/92): the same five coordinator Skills as r28/r29 — task-management, planning-and-focus,
+  // studio-intake, the accepted #36 work-review Skill and the #39 pm-rhythm Skill — at their r30 pins.
   const skills = [...frontmatter.matchAll(/- type: custom\n\s+skill_id: (\S+)\n\s+version: (\S+)/g)];
   assert.deepEqual(
     skills.map((entry) => entry[1]),
@@ -51,21 +51,21 @@ test("source parses as frontmatter + system body and declares the Sonnet 5 mediu
   assert.doesNotMatch(frontmatter, /skill_01Treson5zdU1TgxXDaREwnY/);
 });
 
-test("frontmatter still declares serving r29: specialist v4 pinned through the native roster, at an explicit version", () => {
-  // #44 retires the specialist from the r30 CANDIDATE only (`RELEASE_R30_CANDIDATE.specialist === null`, cleared by the
-  // candidate update body). The frontmatter stays the serving r29 declaration, which is also r30's rollback.
-  assert.match(frontmatter, /multiagent:\n\s+type: coordinator/);
-  const roster = [...frontmatter.matchAll(/- type: agent\n\s+id: (\S+)\n\s+version: (\d+)/g)];
-  assert.equal(roster.length, 1, "exactly one pinned specialist");
-  assert.equal(roster[0][1], "agent_01KNiQDzzPjaMU6LLF4mU6uM");
-  assert.match(roster[0][2], /^\d+$/, "the roster entry must pin a version, never float");
+test("frontmatter declares Agent v30 (r30): no roster at all — no specialist, advisor or other member (#44, #55)", () => {
+  // #55 created Agent v30 with `multiagent: null` and read it back as `multiagent: null`. The declaration states the
+  // cleared roster explicitly instead of omitting the key, so it cannot be read as "preserve the r29 roster". Serving r29
+  // (specialist v4) stays reproducible from `RELEASE_R29` and git history.
+  assert.match(frontmatter, /^multiagent: null$/m);
+  assert.doesNotMatch(frontmatter, /type: coordinator|- type: agent\b/);
+  assert.doesNotMatch(frontmatter, /agent_01KNiQDzzPjaMU6LLF4mU6uM/, "the retired specialist is not declared");
 });
 
-test("source records the production Trello write surface: only trelloWriteCard is enabled", () => {
-  const writes = [...frontmatter.matchAll(/- name: (trelloWrite\w+)\n\s+enabled: (true|false)/g)];
+test("source records the r30 Trello write surface: trelloWriteCard and trelloWriteChecklist, both gated", () => {
+  const writes = [...frontmatter.matchAll(/- name: (trelloWrite\w+)\n\s+enabled: (true|false)\n\s+permission_policy:\n\s+type: (always_\w+)/g)];
   assert.equal(writes.length, 6, "all six Trello write tools stay explicitly stated");
-  const enabled = writes.filter((entry) => entry[2] === "true").map((entry) => entry[1]);
-  assert.deepEqual(enabled, ["trelloWriteCard"]);
+  const enabled = writes.filter((entry) => entry[2] === "true").map((entry) => `${entry[1]}=${entry[3]}`);
+  // #48 checklist writes (r30): enabled only behind a pre-execution confirmation, like card writes.
+  assert.deepEqual(enabled, ["trelloWriteCard=always_ask", "trelloWriteChecklist=always_ask"]);
 });
 
 test("built-in toolset is an allowlist: file tools for Skills and Memory only — no bash, no web tools (#33)", () => {
@@ -79,20 +79,20 @@ test("built-in toolset is an allowlist: file tools for Skills and Memory only �
   assert.doesNotMatch(block, /\b(bash|web_fetch|web_search)\b/);
 });
 
-test("source exposes exactly the accepted #36 custom tool, byte-for-byte the definition the client executes", async () => {
-  const { TRELLO_WORK_HISTORY_TOOL } = await import("./trelloWorkHistory.js");
-  const { canonicalJsonSha256 } = await import("./releaseAttestation.js");
+test("source exposes exactly the r30 custom tools, each byte-for-byte the definition the client executes", async () => {
+  const { SUPPORTED_CUSTOM_TOOLS, canonicalJsonSha256 } = await import("./releaseAttestation.js");
   const custom = [...frontmatter.matchAll(/^  - type: custom\n    name: (\S+)\n    description: (.+)\n    input_schema: (.+)$/gm)];
-  assert.equal(custom.length, 1);
-  assert.equal(custom[0][1], TRELLO_WORK_HISTORY_TOOL.name);
-  assert.equal(JSON.parse(custom[0][2]), TRELLO_WORK_HISTORY_TOOL.description);
-  assert.equal(canonicalJsonSha256(JSON.parse(custom[0][3])), canonicalJsonSha256(TRELLO_WORK_HISTORY_TOOL.input_schema));
+  // #36 work history, #47 board snapshot, #50 focus budget. The dormant #54 `reminder` is not exposed.
+  assert.deepEqual(custom.map((entry) => entry[1]), ["trello_work_history", "trello_board_snapshot", "focus_budget"]);
+  for (const [, name, description, schema] of custom) {
+    assert.equal(JSON.parse(description), SUPPORTED_CUSTOM_TOOLS[name].description, name);
+    assert.equal(canonicalJsonSha256(JSON.parse(schema)), canonicalJsonSha256(SUPPORTED_CUSTOM_TOOLS[name].input_schema), name);
+  }
 });
 
-test("source records the Google Calendar toolset as default-disabled, so the prompt may not promise Calendar", () => {
-  const calendar = /mcp_server_name: google-calendar-calendarmcp\n\s+default_config:\n\s+enabled: (true|false)/.exec(frontmatter);
-  assert.ok(calendar, "the Calendar MCP toolset must be represented");
-  assert.equal(calendar[1], "false");
+test("source declares no Google Calendar MCP (removed in r30, #47), and the prompt does not promise Calendar", () => {
+  assert.doesNotMatch(frontmatter, /google-calendar-calendarmcp|calendarmcp\.googleapis\.com/);
+  assert.deepEqual([...frontmatter.matchAll(/mcp_server_name: (\S+)/g)].map((entry) => entry[1]), ["trello"]);
   assert.doesNotMatch(system, /calendar/i);
 });
 

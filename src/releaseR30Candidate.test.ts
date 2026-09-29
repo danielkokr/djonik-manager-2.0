@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28, RELEASE_R29, RELEASE_R30_CANDIDATE, RELEASES, SERVING_RELEASE, UnresolvedReleaseCandidateError, resolveReleaseCandidate } from "./release.js";
+import { RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28, RELEASE_R29, RELEASE_R30, RELEASE_R30_CANDIDATE, RELEASES, SERVING_RELEASE, UnresolvedReleaseCandidateError, resolveReleaseCandidate } from "./release.js";
 import { buildCandidateUpdateBody, buildReleaseUpdateBody } from "./releasePlan.js";
 import { SUPPORTED_CUSTOM_TOOLS, attestAgentVersion, attestServingSession, formatServingTuple, normalizeAgentConfig } from "./releaseAttestation.js";
 import { SOURCE_SYSTEM_PROMPT, agentVersionFixture, servingSessionFixture } from "./releaseFixtures.test-helpers.js";
@@ -9,7 +9,9 @@ import { PROJECT_HEALTH_SPECIALIST_AGENT_ID } from "./djonikClient.js";
 test("#47/#48/#50 candidate preserves immutable r29 and remains unresolved", () => {
   assert.equal(SERVING_RELEASE, RELEASE_R29);
   assert.equal(RELEASES.r29, RELEASE_R29);
-  assert.equal(RELEASES.r30, undefined);
+  // #55 resolved the candidate into a separate, written-out RELEASE_R30; the candidate itself stays unresolved provenance.
+  assert.equal(RELEASES.r30, RELEASE_R30);
+  assert.ok(!Object.values(RELEASES).includes(RELEASE_R30_CANDIDATE as never));
   assert.deepEqual(RELEASE_R29.customTools, ["trello_work_history"]);
   assert.ok(RELEASE_R29.mcpServers.some((server) => server.name === "google-calendar-calendarmcp"));
   assert.deepEqual(RELEASE_R30_CANDIDATE.customTools, ["trello_work_history", "trello_board_snapshot", "focus_budget"]);
@@ -75,8 +77,9 @@ test("#44 topology: r25–r29 pin specialist v4 unchanged; the r30 candidate has
   }
   assert.equal(RELEASE_R30_CANDIDATE.specialist, null, "absence is explicit, not a missing field");
   assert.ok("specialist" in RELEASE_R30_CANDIDATE);
-  assert.equal(RELEASE_R30_CANDIDATE.agent.version, null, "no remote Agent v30 is invented");
-  assert.deepEqual(Object.keys(RELEASES), ["r25", "r26", "r27", "r28", "r29"], "no r30/r31 release is served or attestable");
+  assert.equal(RELEASE_R30_CANDIDATE.agent.version, null, "the candidate never carries an Agent version; RELEASE_R30 does (#55)");
+  assert.deepEqual(Object.keys(RELEASES), ["r25", "r26", "r27", "r28", "r29", "r30"], "r30 is attestable (#55); no r31");
+  assert.equal(RELEASE_R30.specialist, null);
   assert.equal(SERVING_RELEASE, RELEASE_R29);
   assert.equal(RELEASE_R30_CANDIDATE.model, RELEASE_R29.model, "#44 changes neither model nor effort");
   assert.deepEqual(RELEASE_R30_CANDIDATE.builtInTools, RELEASE_R29.builtInTools, "#44 changes no tool permission");

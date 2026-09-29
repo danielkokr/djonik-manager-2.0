@@ -555,7 +555,69 @@ export const RELEASE_R30_CANDIDATE: DjonikReleaseCandidate = {
   session: RELEASE_R29.session,
 };
 
-export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_R25, r26: RELEASE_R26, r27: RELEASE_R27, r28: RELEASE_R28, r29: RELEASE_R29 };
+// --- r30 (#55 remote construction, no cutover) ---------------------------------------------------------------------
+
+/**
+ * r30 — `RELEASE_R30_CANDIDATE` with its real identifiers (#55, docs/92): Agent v30, created 2026-09-29 from v29 by ONE
+ * `buildCandidateUpdateBody` update under a `version: 29` precondition and read back exactly. Four new immutable Skill
+ * versions were created on their existing Skill identities from committed main and downloaded byte-identical
+ * (task-management `e30e8aa1…`, planning-and-focus `a1f743f6…`, studio-intake `e96b38c0…`, pm-rhythm `f3592baa…`);
+ * `work-review` keeps its r29 pin (remote bytes = repo). The update cleared the roster (`multiagent: null`; v30 reads back
+ * `multiagent: null`), replaced MCP servers (Calendar removed) and tools (+ `trello_board_snapshot`, `focus_budget`;
+ * `trelloWriteChecklist` enabled and `always_ask`). Model, built-in tools, `trello_work_history`, Trello reads and
+ * Session resources are r29's. The four new `sessionVersion`s were read from the snapshot of zero-event inspection Session
+ * `sesn_017J9XJDeTKVngGTZ5hq49dH` (pinned @30, Memory `read_only`, 0 events; docs/92 §13), never derived from a
+ * timestamp; `work-review` shows its known r29 spelling there. Written out, not derived at import; `releaseR30.test.ts`
+ * proves it equals the resolved candidate.
+ *
+ * NOT the serving release: production and this revision serve r29 until a separately authorized behavioural validation,
+ * source cutover and deploy. Its source is `managed-agents/djonik.md` (body and frontmatter = Agent v30).
+ */
+export const RELEASE_R30: DjonikRelease = {
+  id: "r30",
+  agent: { id: COORDINATOR_ID, version: 30 },
+  model: MODEL,
+  systemSha256: "0296d62462ecc4262bf32b7aa2b8472b2a4c72d77bb063049aa360ab3e1e33d1",
+  skills: [
+    { name: "task-management", skillId: "skill_01WS6JtY1GMu3rGZaKCVR9w1", pin: { kind: "explicit", version: "skver_01KzWwpv88cC2K2nncoTdkt2", sessionVersion: "1790666094447918" } },
+    { name: "planning-and-focus", skillId: "skill_01PxXTvhbZSrbxqi7gmDs6KW", pin: { kind: "explicit", version: "skver_01L9cL8yv244qmpXSyqvmqzJ", sessionVersion: "1790666103656343" } },
+    { name: "studio-intake", skillId: "skill_015c8dtDnWyDfVLwS6NLS7r6", pin: { kind: "explicit", version: "skver_01SYUXncujJcAWuXz1wbD69U", sessionVersion: "1790666109304881" } },
+    { name: "work-review", skillId: WORK_REVIEW_SKILL.skillId, pin: { kind: "explicit", version: WORK_REVIEW_SKILL.version, sessionVersion: WORK_REVIEW_SKILL.sessionVersion } },
+    { name: "pm-rhythm", skillId: "skill_01GzpQX3bVuWNk5bhbGcbzku", pin: { kind: "explicit", version: "skver_01BetXsjNcGqmaHY9MpNQgns", sessionVersion: "1790666114030041" } },
+  ],
+  specialist: null,
+  builtInTools: ["read", "write", "edit", "glob", "grep"],
+  customTools: ["trello_work_history", "trello_board_snapshot", "focus_budget"],
+  mcpServers: [{ name: "trello", url: "https://mcp.trello.com/v1" }],
+  mcpToolsets: [
+    {
+      server: "trello",
+      defaultEnabled: true,
+      defaultPolicy: "always_ask",
+      overrides: {
+        trelloReadBoard: true,
+        trelloReadCard: true,
+        trelloReadChecklist: true,
+        trelloReadInbox: true,
+        trelloReadList: true,
+        trelloReadMember: true,
+        trelloReadPlanner: true,
+        trelloReadWorkspace: true,
+        trelloSearch: true,
+        trelloWriteBoard: false,
+        trelloWriteCard: true,
+        trelloWriteChecklist: true,
+        trelloWriteInbox: false,
+        trelloWriteList: false,
+        trelloWritePlanner: false,
+      },
+    },
+  ],
+  confirmationRequired: { builtIn: ["write", "edit"], mcp: { trello: ["trelloWriteCard", "trelloWriteChecklist"] } },
+  session: SESSION,
+};
+
+export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_R25, r26: RELEASE_R26, r27: RELEASE_R27, r28: RELEASE_R28, r29: RELEASE_R29, r30: RELEASE_R30 };
 
 /**
  * The one release this application revision serves. Changing it is the application half of a cutover
@@ -564,6 +626,8 @@ export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_
  * docs/66), to `r28` after Agent v28 attested and a zero-event inspection Session measured its last Skill spelling
  * (docs/74, docs/75), and to `r29` after the #45 prompt and three Skill versions attested on v29 with another
  * zero-event inspection Session. Production serves its currently deployed revision until r29 is deployed.
+ * #55 constructed and attested r30 (Agent v30) remotely WITHOUT a cutover: r30 is reviewed and attestable, and this
+ * still serves r29 until a separately authorized behavioural validation and source cutover (docs/92).
  * This is deliberately not an environment variable:
  * the reviewed revision, not host configuration, decides what is served.
  */
