@@ -51,6 +51,8 @@ Governance [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) rec
 
 **Update 2026-09-28 — #44 topology audit accepted (Product Owner / Product Lead decision).** The architecture audit is published at `aa18116990d33d5eaaa0af3db45074c95f32fa54` ([docs/90](90_ISSUE_44_PROJECT_HEALTH_TOPOLOGY_AUDIT.md)). The old mandatory specialist-vs-coordinator A/B gate is superseded: r30 should retire the Project Health specialist and route project state/stuck/blocker/risk questions through the coordinator's `planning-and-focus` + `trello_board_snapshot`. No advisor replaces it. r29 and the specialist runtime stay intact for rollback; S9/S10/S11 plus new S41 belong to later ordinary r30 validation. **#44 remains canonical NOW for source implementation.**
 
+**Update 2026-09-29 — #44 source implementation accepted.** The r30 topology change is implemented at `cf210472431b8ee1d5f6fe85bda6fa2edec0066d`, with the mixed verified-due composition safety fix at `f889da2165e6faca79940337d08fd88677718c60`; evidence is recorded in [docs/91](91_ISSUE_44_PROJECT_HEALTH_RETIREMENT_SOURCE_REPORT.md). r30 is coordinator-only for project state/stuck/blocker/risk, while r29 retains specialist v4 and remains serving/rollback. **Canonical NOW becomes [#55](https://github.com/danielkokr/djonik-manager-2.0/issues/55) — construct and attest the remote r30 candidate without cutover.**
+
 | Order | Issue | Condition |
 |---|---|---|
 | 0 | [#53 — Reconnect to the same Session when the stream drops; never lose an accepted message](https://github.com/danielkokr/djonik-manager-2.0/issues/53) | **DONE — source accepted 2026-09-26; hosted live check deferred by PO** ([docs/80](80_ISSUE_53_STREAM_RECONNECT_SOURCE_REPORT.md)) |
@@ -63,7 +65,8 @@ Governance [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) rec
 | 6 | [#50 — Current focus, timebox, live re-planning](https://github.com/danielkokr/djonik-manager-2.0/issues/50) | **DONE — source accepted 2026-09-28** ([docs/87](87_ISSUE_50_FOCUS_TIMEBOX_WEEKLY_TIME_SOURCE_REPORT.md)); r30/Working Rhythm live activation deferred |
 | 7 | [#51 — Client profiles](https://github.com/danielkokr/djonik-manager-2.0/issues/51) | **DONE — source accepted 2026-09-28** ([docs/88](88_ISSUE_51_CLIENT_PROFILE_ENRICHMENT_SOURCE_REPORT.md)); production Memory/r30 live validation deferred |
 | 8 | [#52 — Feedback → approved working-style rules](https://github.com/danielkokr/djonik-manager-2.0/issues/52) | **DONE — source accepted 2026-09-28** ([docs/89](89_ISSUE_52_WORKING_STYLE_FEEDBACK_SOURCE_REPORT.md)); production Memory migration/r30 behavioral validation deferred |
-| 9 | **NOW — [#44 — Retire Project Health specialist in r30](https://github.com/danielkokr/djonik-manager-2.0/issues/44)** | **Architecture decided in [docs/90](90_ISSUE_44_PROJECT_HEALTH_TOPOLOGY_AUDIT.md):** coordinator + planning-and-focus + snapshot own project state/stuck/risk; remove specialist from r30, preserve r29 rollback; paid A/B not required before implementation |
+| 9 | [#44 — Retire Project Health specialist in r30](https://github.com/danielkokr/djonik-manager-2.0/issues/44) | **DONE — source accepted 2026-09-29** ([docs/90](90_ISSUE_44_PROJECT_HEALTH_TOPOLOGY_AUDIT.md), [docs/91](91_ISSUE_44_PROJECT_HEALTH_RETIREMENT_SOURCE_REPORT.md)); r30 behavioral/live validation deferred |
+| 10 | **NOW — [#55 — Construct and attest r30 candidate](https://github.com/danielkokr/djonik-manager-2.0/issues/55)** | Resolve the accepted local r30 candidate into pinned remote Skills + Agent v30 + read-back/attestation; production stays on r29; behavioral validation/cutover remain separate |
 
 Only one item is NOW. Everything before this update is historical record.
 
