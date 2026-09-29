@@ -16,7 +16,7 @@ Foundations 1–12, studio intake Wave B and Project Health #28 retain their his
 
 The [architecture audit](17_DJONIK_V1_ARCHITECTURE_AUDIT.md) exposes uncovered deterministic verification/completion/relay cases despite 330 passing baseline tests. These are reachable offline failures, not a claim of production frequency. Fix those boundaries before further review-model experimentation. #18 conditional fresh-read enforcement, due-clearing provider limitations, disabled Calendar and previously accepted intake caveats remain unchanged.
 
-Governance [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) records this authorized docs/issues handoff. Documents are local until explicitly committed/published; a fresh checkout with the old roadmap must obtain this change before implementing the new queue. #30 stays open pending publication/PO closeout; its open state does not select implementation scope.
+Governance [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) records this historical docs/issues handoff. The documents were subsequently published and the queue was executed; Product Owner housekeeping closed #30 on 2026-09-29. Its historical open-state instruction is superseded and never selected implementation scope.
 
 ## Canonical delivery queue
 
@@ -60,6 +60,8 @@ Governance [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) rec
 **Update 2026-09-29 — #56 production acceptance.** Source cutover `2c8ee827ac0283eec571337cc71371d3b5a5494a` deployed r30 / Agent v30 to Hetzner and `release:check -- r30 --serving` passed. Daniel's real Telegram validation covered project view, grounded risk judgement, confirmed due write, forwarded-client source authority, PM recommendation and confirmed checklist writes. The checklist path exposed one bounded false-negative verification defect; it was fixed at `4604286276bb840008ed01da4467c4febc3ccb9a`, redeployed, and the control checklist flow then wrote/read back correctly with no internal error/ARI leak. r29 remains the immediate rollback target. **#56 is accepted. Canonical NOW becomes [#57](https://github.com/danielkokr/djonik-manager-2.0/issues/57) for the non-blocking raw-`INCOMPLETE` wording polish; after that, return to [#35](https://github.com/danielkokr/djonik-manager-2.0/issues/35) real-use working-rhythm pilot.**
 
 **Update 2026-09-29 — #57 source accepted; live polish check deferred by Product Owner.** Human checklist confirmation source is accepted at `daee5aa68ac7be59cdac9680e04de9cc240df5e0`; it removes raw provider-enum wording from verified checklist confirmations while preserving #56 verification safety and mixed-write acknowledgement. Daniel chose not to deploy/retest this non-blocking polish now. **Canonical NOW returns to [#35](https://github.com/danielkokr/djonik-manager-2.0/issues/35) — the real-use working-rhythm pilot.**
+
+**Update 2026-09-29 — backlog housekeeping.** Product Owner explicitly authorized closing stale umbrella/governance issues [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) and [#38](https://github.com/danielkokr/djonik-manager-2.0/issues/38). #30's publication/governance handoff is complete; #38 was already recorded as ACCEPTED on 2026-09-24 and later releases supersede its old open-state bookkeeping. **No implementation scope is added or removed; [#35](https://github.com/danielkokr/djonik-manager-2.0/issues/35) remains the only open/canonical NOW issue.**
 
 | Order | Issue | Condition |
 |---|---|---|
