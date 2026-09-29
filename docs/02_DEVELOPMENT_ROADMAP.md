@@ -55,6 +55,8 @@ Governance [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) rec
 
 **Update 2026-09-29 — #55 remote construction accepted.** r30 was resolved and attested at `6e82f596130ecd69549c68f00961cb620411371d` with evidence in [docs/92](92_ISSUE_55_R30_REMOTE_CONSTRUCTION_AND_ATTESTATION.md): Agent v30, four byte-verified new Skill versions, measured Session spellings, empty specialist roster, and `release:check -- r30` all passed. Production and source `SERVING_RELEASE` remain r29. **Canonical NOW becomes [#56](https://github.com/danielkokr/djonik-manager-2.0/issues/56) — bounded behavioral validation of exact r30 before any cutover. Paid inference still requires a separately declared/approved docs/04 §27 plan.**
 
+**Update 2026-09-29 — #56 validation strategy changed by Product Owner.** The separate paid benchmark is no longer a prerequisite for r30. The next path is: reviewed source cutover to `RELEASE_R30` → standard controlled Hetzner deploy → Daniel manually validates the key PM scenarios in the real Telegram product. Existing S9/S10/S11/S41 remain a checklist/reference and can still be used later if a bounded paid diagnostic is needed. r29 stays the immediate rollback target. **#56 remains canonical NOW.**
+
 | Order | Issue | Condition |
 |---|---|---|
 | 0 | [#53 — Reconnect to the same Session when the stream drops; never lose an accepted message](https://github.com/danielkokr/djonik-manager-2.0/issues/53) | **DONE — source accepted 2026-09-26; hosted live check deferred by PO** ([docs/80](80_ISSUE_53_STREAM_RECONNECT_SOURCE_REPORT.md)) |
@@ -69,7 +71,7 @@ Governance [#30](https://github.com/danielkokr/djonik-manager-2.0/issues/30) rec
 | 8 | [#52 — Feedback → approved working-style rules](https://github.com/danielkokr/djonik-manager-2.0/issues/52) | **DONE — source accepted 2026-09-28** ([docs/89](89_ISSUE_52_WORKING_STYLE_FEEDBACK_SOURCE_REPORT.md)); production Memory migration/r30 behavioral validation deferred |
 | 9 | [#44 — Retire Project Health specialist in r30](https://github.com/danielkokr/djonik-manager-2.0/issues/44) | **DONE — source accepted 2026-09-29** ([docs/90](90_ISSUE_44_PROJECT_HEALTH_TOPOLOGY_AUDIT.md), [docs/91](91_ISSUE_44_PROJECT_HEALTH_RETIREMENT_SOURCE_REPORT.md)); r30 behavioral/live validation deferred |
 | 10 | [#55 — Construct and attest r30 candidate](https://github.com/danielkokr/djonik-manager-2.0/issues/55) | **DONE — remote/source accepted 2026-09-29** ([docs/92](92_ISSUE_55_R30_REMOTE_CONSTRUCTION_AND_ATTESTATION.md)); production remained on r29 |
-| 11 | **NOW — [#56 — Validate r30 PM behavior before cutover](https://github.com/danielkokr/djonik-manager-2.0/issues/56)** | Freeze a docs/04 §27 budgeted plan, then validate exact r30 behavior (S9/S10/S11/S41 + existing r30 coverage) before any source cutover/deploy |
+| 11 | **NOW — [#56 — Cut over source to r30, deploy, and validate manually in Telegram](https://github.com/danielkokr/djonik-manager-2.0/issues/56)** | Product Owner chose real-product validation: source cutover to r30 → controlled Hetzner deploy → manual Telegram checks; paid benchmark is no longer the pre-deploy gate; r29 remains rollback |
 
 Only one item is NOW. Everything before this update is historical record.
 
