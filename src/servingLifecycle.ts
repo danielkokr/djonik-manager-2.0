@@ -1,3 +1,5 @@
+import { classifyProviderFailure } from "./providerFailure.js";
+
 /**
  * Graceful stop of the Telegram serving process (#33).
  *
@@ -98,6 +100,28 @@ export function createShutdownCoordinator(deps: ShutdownDeps): ShutdownCoordinat
       return running !== null;
     },
   };
+}
+
+/**
+ * #60: a serving turn whose Anthropic API call was refused with 401 (the host API key itself was rejected) stops
+ * the process gracefully with exit 1 instead of answering every later message with the same failure. systemd
+ * (`Restart=on-failure`) then restarts it, and the startup preflight re-validates the key: a spurious 401 recovers
+ * on its own; a key that is really revoked ends at startup with 78 (`classifyStartupProviderFailure`), which
+ * `RestartPreventExitStatus=78` leaves stopped and visible to the operator. 403 (a permission on one resource) and
+ * every transient failure never stop serving.
+ */
+export function providerFailureStop(event: { category: string; status: number | null }): { reason: string; exitCode: number } | null {
+  return event.category === "auth_config" && event.status === 401 ? { reason: "anthropic_auth_rejected", exitCode: 1 } : null;
+}
+
+/**
+ * #60: a startup Anthropic call (release preflight, first Session) refused with 401/403 is a host configuration
+ * problem restarting cannot fix: exit 78 (no systemd restart loop). A transient failure returns null — the caller
+ * keeps today's behaviour (exit 1, restarted after `RestartSec`, bounded by `StartLimitBurst`).
+ */
+export function classifyStartupProviderFailure(error: unknown): { reason: string; exitCode: number } | null {
+  const failure = classifyProviderFailure(error);
+  return failure?.category === "auth_config" ? { reason: `anthropic_auth_rejected status=${failure.status}`, exitCode: 78 } : null;
 }
 
 /** Maps a polling failure to an exit code: 409 = another poller holds this bot token; 401 = bad token. */

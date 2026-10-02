@@ -28,7 +28,13 @@ import {
   ServingConfigError,
   type ServingConfig,
 } from "./servingRelease.js";
-import { classifyPollingFailure, createShutdownCoordinator } from "./servingLifecycle.js";
+import {
+  classifyPollingFailure,
+  classifyStartupProviderFailure,
+  createShutdownCoordinator,
+  providerFailureStop,
+} from "./servingLifecycle.js";
+import type { ServingTurnFailureEvent } from "./telegramAdapter.js";
 import { createRhythmFactCollector } from "./rhythmFacts.js";
 import { createMemoryRhythmConfigSource, sdkRhythmMemoryReader } from "./rhythmMemoryConfig.js";
 import {
@@ -92,6 +98,12 @@ async function main(): Promise<number> {
       console.error(error.message);
       return EXIT_CONFIG;
     }
+    // #60: a rejected host credential is configuration, not a transient failure — no restart loop.
+    const auth = classifyStartupProviderFailure(error);
+    if (auth) {
+      console.error(`[release] preflight failed: ${auth.reason}`);
+      return auth.exitCode;
+    }
     throw error;
   }
 
@@ -110,6 +122,13 @@ async function main(): Promise<number> {
   const trace = process.env.DJONIK_TRACE === "1";
   /** #53 Session lifecycle evidence (reconnects, replacement, resubmission): content-free, always logged. */
   const logSessionLifecycle = (event: { type: string }) => console.log("[session]", JSON.stringify(event));
+  /** #60: content-free classification of every failed turn attempt; a rejected API key (401) stops serving
+   *  gracefully so systemd restarts it and the startup preflight re-validates the key (`providerFailureStop`). */
+  const logTurnFailure = (event: ServingTurnFailureEvent) => {
+    logSessionLifecycle(event);
+    const stop = providerFailureStop(event);
+    if (stop) requestStop?.(stop.reason, stop.exitCode);
+  };
   const turnTelemetry = process.env.DJONIK_TURN_TELEMETRY === "1";
   let polling: Promise<unknown> = Promise.resolve();
   /** Set once serving has started; before that a failure simply ends `main` with its exit code. */
@@ -182,6 +201,11 @@ async function main(): Promise<number> {
     await djonikSession.getSession();
   } catch (error) {
     if (error instanceof ReleaseAttestationError) return EXIT_CONFIG;
+    const auth = classifyStartupProviderFailure(error);
+    if (auth) {
+      console.error(`[release] serving Session failed: ${auth.reason}`);
+      return auth.exitCode;
+    }
     throw error;
   }
 
@@ -242,6 +266,7 @@ async function main(): Promise<number> {
     sendProposal: (chatId, text, keyboard) => sendFormattedMessage(bot.api, chatId, text, keyboard),
     onGroupTelemetry: turnTelemetry ? (telemetry) => console.error("[group]", JSON.stringify(telemetry)) : undefined,
     onSessionRecovery: logSessionLifecycle,
+    onTurnFailure: logTurnFailure,
   });
   const groupBuffer = new MessageGroupBuffer({ onDispatch, onFailure });
 
@@ -404,7 +429,7 @@ async function main(): Promise<number> {
           })
       : undefined,
     createWeeklyTimeReporter: trelloReader ? () => createWeeklyTimeReporter({ reader: trelloReader, log: (line) => console.log(line) }) : undefined,
-    runTurn: createSessionTurnRunner(djonikSession, logSessionLifecycle),
+    runTurn: createSessionTurnRunner(djonikSession, logSessionLifecycle, logTurnFailure),
     send: createTelegramProactiveSender(bot.api, Number(telegramConfig.allowedUserId)),
     currentSessionId: () => djonikSession.currentSessionId(),
     answer: (query, alert) =>

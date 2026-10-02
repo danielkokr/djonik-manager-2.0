@@ -54,6 +54,7 @@ import {
   type SessionEventApi,
   type StreamLifecycleEvent,
 } from "./sessionEventFeed.js";
+import { classifyProviderFailure, sessionDisposition, type ProviderFailure, type ServingStage } from "./providerFailure.js";
 
 /** Read-only work history (#36): no side-effect idempotency key is needed beyond the #40 per-id lifecycle. */
 const WORK_HISTORY_TOOL = "trello_work_history";
@@ -447,13 +448,20 @@ export function createTurnTelemetryCollector(
  * replacement Session (`canResubmit`) — never when it may already have been processed.
  */
 export class DjonikSessionDeadError extends Error {
+  /** #60: the turn stage the Session was given up at, and the provider failure behind it (if any). Content-free. */
+  readonly stage: ServingStage;
+  readonly providerFailure: ProviderFailure | null;
+
   constructor(
     message: string,
     readonly pendingMessage: PendingMessageState = "unknown",
     readonly reason: FeedDeathReason | "unspecified" = "unspecified",
+    detail: { stage?: ServingStage; providerFailure?: ProviderFailure | null } = {},
   ) {
     super(message);
     this.name = "DjonikSessionDeadError";
+    this.stage = detail.stage ?? "turn";
+    this.providerFailure = detail.providerFailure ?? null;
   }
 }
 
@@ -1188,9 +1196,18 @@ function showsProcessing(type: string): boolean {
   return type.startsWith("agent.") || type.startsWith("span.") || type.startsWith("session.thread_") || type === "session.status_running";
 }
 
-function sessionDead(reason: FeedDeathReason, pending: PendingMessageState, message?: string): DjonikSessionDeadError {
-  return new DjonikSessionDeadError(message ?? `Djonik session is unavailable (${reason}).`, pending, reason);
+function sessionDead(
+  reason: FeedDeathReason,
+  pending: PendingMessageState,
+  stage: ServingStage,
+  message?: string,
+  providerFailure: ProviderFailure | null = null,
+): DjonikSessionDeadError {
+  return new DjonikSessionDeadError(message ?? `Djonik session is unavailable (${reason}).`, pending, reason, { stage, providerFailure });
 }
+
+/** #60: per-request SDK options of the primary `user.message` send — no automatic SDK retry (`RequestOptions.maxRetries`). */
+export const PRIMARY_SEND_OPTIONS = Object.freeze({ maxRetries: 0 });
 
 /** The id of the single `user.message` the provider accepted (official `events.send` response
  *  `data[0].id`), or null when the response carries none (then no per-turn anchor is available). */
@@ -1412,21 +1429,35 @@ export async function connectToDjonik(
       // (same Session) first; a Session already known dead is given up with the message still unsent.
       await feed.ensureReady();
     } catch (error) {
-      if (error instanceof SessionFeedDeadError) throw sessionDead(error.reason, unsent);
+      if (error instanceof SessionFeedDeadError) throw sessionDead(error.reason, unsent, "pre_send");
       throw error;
     }
     let sent: unknown;
     try {
-      sent = await client.beta.sessions.events.send(session.id, { events });
+      // #60: Daniel's own `user.message` (the primary submission) is sent with at most ONE HTTP attempt. The SDK
+      // would otherwise re-POST it on 408/409/429/5xx/connection failures (default `maxRetries: 2`) with no
+      // idempotency key, so a request the provider had already accepted could enter the Session twice. A failed
+      // attempt is classified below (5xx/connection = delivery unknown, never resubmitted). Verification nudges
+      // and #40/#39 continuation sends keep the SDK default.
+      sent = await client.beta.sessions.events.send(session.id, { events }, primary ? PRIMARY_SEND_OPTIONS : undefined);
     } catch (error) {
       // A refusal (4xx response) from a Session the provider reports terminated/gone proves the message
-      // reached no Session that could run it. Anything else keeps the pre-#53 turn-error behaviour.
+      // reached no Session that could run it.
       if (isRefusedSend(error)) {
         const gone = await sessionIsGone(sessionApi);
         if (gone !== null) {
           feed.markDead(gone);
-          throw sessionDead(gone, unsent);
+          throw sessionDead(gone, unsent, "event_send");
         }
+      }
+      // #60: a 5xx/connection failure (after the SDK's own retries) gives this Session up, so no later turn —
+      // including one already queued on this handle — reuses it. No provider guarantee says such a request was
+      // not accepted, so delivery is `unknown` and the message is never resubmitted (#53 `canResubmit`).
+      // Every other failure (4xx refusal, non-API error) stays an ordinary turn error on a kept Session.
+      const failure = classifyProviderFailure(error);
+      if (sessionDisposition(failure, "event_send") === "replace") {
+        feed.markDead("provider_unavailable");
+        throw sessionDead("provider_unavailable", primary ? "unknown" : "processed", "event_send", undefined, failure);
       }
       throw error;
     }
@@ -1444,7 +1475,7 @@ export async function connectToDjonik(
      *  the provider's own history proves it was never processed (`classifyPendingMessage`). */
     async function giveUp(reason: FeedDeathReason, message?: string): Promise<never> {
       const pending: PendingMessageState = !primary || processingSeen ? "processed" : await classifyPendingMessage(sessionApi, submittedId);
-      throw sessionDead(reason, pending, message);
+      throw sessionDead(reason, pending, "turn_stream", message);
     }
 
     for (;;) {

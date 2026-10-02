@@ -8,6 +8,7 @@ import {
   type PendingMessageState,
 } from "./djonikClient.js";
 import { canResubmit } from "./sessionEventFeed.js";
+import { classifyProviderFailure, type ProviderFailure, type ProviderFailureCategory, type ServingStage } from "./providerFailure.js";
 
 /** MIME types the Claude API accepts as an `image` content block (Vision docs, 2026-09-17). */
 export const SUPPORTED_IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
@@ -247,16 +248,74 @@ export const UNVERIFIED_MUTATION_TEXT =
   "⚠️ Зміна в Trello могла виконатися, але я не зміг надійно підтвердити результат. " +
   "Перевір картку в Trello перед повторною спробою.";
 
+/** #60: Claude was unavailable and nothing of this message was submitted (Session connect, or a 4xx throttle). */
+export const PROVIDER_UNAVAILABLE_TEXT =
+  "⚠️ Сервіс Claude зараз тимчасово недоступний, тож це повідомлення я не обробив. Спробуй надіслати його ще раз за хвилину.";
+
+/** #60: Claude failed with a 5xx/connection error after the message may have reached it. */
+export const PROVIDER_UNAVAILABLE_CHECK_TEXT =
+  "⚠️ Сервіс Claude тимчасово відповів помилкою, тож відповіді немає. Спробуй ще раз за хвилину; " +
+  "якщо просив зміну в Trello, спершу перевір, чи вона вже є.";
+
+/** #60: the host credential/permission was refused (401/403) — an operator problem, not Daniel's message. */
+export const PROVIDER_CONFIG_TEXT =
+  "⚠️ Джонік зараз не може підключитися до Claude. Це проблема налаштувань сервісу, а не твого повідомлення, " +
+  "тож повторне надсилання не допоможе, доки її не виправлено.";
+
+/** #60: the provider refused this request (another 4xx). */
+export const PROVIDER_REJECTED_TEXT =
+  "⚠️ Claude не прийняв цей запит, тож відповіді немає. Якщо було вкладення, спробуй інший формат або надішли текстом.";
+
+/** #60: no Session could be opened for a reason that is not a classified provider failure (e.g. attestation). */
+export const SESSION_UNAVAILABLE_TEXT =
+  "⚠️ Джонік зараз не зміг відкрити сесію з Claude, тож це повідомлення я не обробив. Спробуй ще раз трохи пізніше.";
+
+/**
+ * #60: no Session could be obtained for a turn (`getSession` failed: Session creation, serving attestation or the
+ * first stream open). Nothing of the turn was submitted anywhere. `cause` is the original error, kept for logs.
+ */
+export class DjonikSessionConnectError extends Error {
+  readonly providerFailure: ProviderFailure | null;
+
+  constructor(readonly cause: unknown) {
+    const failure = classifyProviderFailure(cause);
+    super(`Djonik could not open a Managed Session (${failure ? `${failure.category}, status=${failure.status ?? "none"}` : "unclassified"}).`);
+    this.name = "DjonikSessionConnectError";
+    this.providerFailure = failure;
+  }
+}
+
+function providerText(category: ProviderFailureCategory, delivered: "not_submitted" | "unknown"): string {
+  if (category === "auth_config") return PROVIDER_CONFIG_TEXT;
+  if (category === "request_rejected") return PROVIDER_REJECTED_TEXT;
+  return delivered === "not_submitted" ? PROVIDER_UNAVAILABLE_TEXT : PROVIDER_UNAVAILABLE_CHECK_TEXT;
+}
+
 /** Bounds a failed turn to a short, secret-free, user-visible message. A lost Session (#53) never shows
  *  raw provider/runtime text: one fixed Ukrainian line, with a Trello check hint unless the message
  *  provably never started processing. An unverified Trello mutation (#56) shows one fixed line too:
  *  its `message` is an internal diagnostic (provider ids, per-mutation verifier detail) that stays in
- *  logs/traces and on `outcomes`. Only its already user-safe Project Health section (#32) follows. */
+ *  logs/traces and on `outcomes`. Only its already user-safe Project Health section (#32) follows.
+ *  #60: a provider (Anthropic API) failure never shows its raw text either — one fixed line per class, with the
+ *  Trello hint whenever the message may have reached Claude. Only non-provider application errors keep the
+ *  existing wording. */
 export function formatUserFacingError(error: unknown): string {
   const dead = sessionDeadErrorOf(error);
-  if (dead) return canResubmit(dead.pendingMessage) ? SESSION_LOST_RESEND_TEXT : SESSION_LOST_CHECK_TEXT;
+  if (dead) {
+    if (canResubmit(dead.pendingMessage)) return SESSION_LOST_RESEND_TEXT;
+    return dead.reason === "provider_unavailable" ? PROVIDER_UNAVAILABLE_CHECK_TEXT : SESSION_LOST_CHECK_TEXT;
+  }
+  if (error instanceof DjonikSessionConnectError) {
+    return error.providerFailure ? providerText(error.providerFailure.category, "not_submitted") : SESSION_UNAVAILABLE_TEXT;
+  }
   const unverified = unverifiedMutationErrorOf(error);
   if (unverified) return UNVERIFIED_MUTATION_TEXT + (unverified.specialistSection ?? "");
+  const provider = classifyProviderFailure(error);
+  if (provider) {
+    // Unattributed to a stage: a 4xx is a refusal (nothing accepted); a 5xx/connection failure may not be.
+    const refused = provider.status !== null && provider.status < 500;
+    return providerText(provider.category, refused ? "not_submitted" : "unknown");
+  }
   const message = error instanceof Error ? error.message : String(error);
   return `⚠️ Джонік не зміг відповісти на це повідомлення: ${message}`;
 }
@@ -266,9 +325,13 @@ export function formatUserFacingError(error: unknown): string {
  * user-visible message. Deliberately distinct wording from
  * `formatUserFacingError`: a grouped-intake failure means the whole related
  * batch of fragments was discarded (fail-closed, zero Trello mutation), not
- * just one ordinary single-message turn.
+ * just one ordinary single-message turn. #60: a provider/Session failure that
+ * somehow reaches this path never shows its raw text — it gets the turn wording.
  */
 export function formatGroupFailureError(error: unknown): string {
+  if (classifyProviderFailure(error) !== null || sessionDeadErrorOf(error) !== null || error instanceof DjonikSessionConnectError) {
+    return formatUserFacingError(error);
+  }
   const message = error instanceof Error ? error.message : String(error);
   return `⚠️ Джонік не зміг обробити цю групу повідомлень: ${message}`;
 }
@@ -370,6 +433,66 @@ export type SessionRecoveryEvent =
   | { type: "message_resubmitted"; outcome: "completed" | "turn_failed" | "not_delivered" };
 
 /**
+ * #60: one content-free line per failed serving turn attempt, enough to place a future provider incident: the
+ * stage, the class (structured, never `error.message`), the HTTP status, what happened to the cached Session and
+ * what is known about the message's delivery. No message text, ids, request ids, URLs or credentials.
+ */
+export interface ServingTurnFailureEvent {
+  type: "serving_turn_failure";
+  stage: ServingStage;
+  category: ProviderFailureCategory | "session_dead" | "application";
+  status: number | null;
+  errorClass: string;
+  /** `replace`: the Session was given up; `keep`: it serves the next turn; `none`: no Session was obtained. */
+  sessionAction: "replace" | "keep" | "none";
+  delivery: PendingMessageState;
+}
+
+/** Builds the #60 failure event for an error `runWithSessionRecovery` saw. */
+export function servingTurnFailureOf(error: unknown): ServingTurnFailureEvent {
+  if (error instanceof DjonikSessionConnectError) {
+    const failure = error.providerFailure;
+    return {
+      type: "serving_turn_failure",
+      stage: "session_connect",
+      category: failure?.category ?? "application",
+      status: failure?.status ?? null,
+      errorClass: failure?.errorClass ?? errorClassOf(error.cause),
+      sessionAction: "none",
+      delivery: "not_submitted",
+    };
+  }
+  const dead = sessionDeadErrorOf(error);
+  if (dead) {
+    const failure = dead.providerFailure;
+    return {
+      type: "serving_turn_failure",
+      stage: dead.stage,
+      category: failure?.category ?? "session_dead",
+      status: failure?.status ?? null,
+      errorClass: failure?.errorClass ?? `DjonikSessionDeadError:${dead.reason}`,
+      sessionAction: "replace",
+      delivery: dead.pendingMessage,
+    };
+  }
+  const failure = classifyProviderFailure(error);
+  return {
+    type: "serving_turn_failure",
+    stage: "turn",
+    category: failure?.category ?? "application",
+    status: failure?.status ?? null,
+    errorClass: failure?.errorClass ?? errorClassOf(error instanceof DjonikTracedTurnError ? error.error : error),
+    sessionAction: "keep",
+    // A 4xx is a refusal of the request; anything else is not established here.
+    delivery: failure !== null && failure.status !== null && failure.status < 500 ? "not_submitted" : "unknown",
+  };
+}
+
+function errorClassOf(error: unknown): string {
+  return error instanceof Error ? error.constructor.name : typeof error;
+}
+
+/**
  * #53: runs one turn on the process's Session and owns the only Session REPLACEMENT path. A dropped stream
  * never reaches here — the handle reconnects to the same Session itself; this handles the Session being
  * given up (`DjonikSessionDeadError`):
@@ -382,17 +505,33 @@ export type SessionRecoveryEvent =
  *
  * A failure of the replacement Session itself propagates as the ORIGINAL error (safe to resend, since
  * nothing was processed); a second give-up on the replacement only invalidates it.
+ *
+ * #60: a Session that cannot be obtained at all (`getSession` failed) becomes `DjonikSessionConnectError` —
+ * nothing was submitted, and the user-facing line says so without the provider's raw text. That includes the
+ * replacement here: its message provably never started processing (that is why it was being resubmitted).
+ * Every failed attempt is reported once, content-free, to `onFailure`.
  */
 export async function runWithSessionRecovery<H extends DjonikSessionHandle, T>(
   manager: DjonikSessionManager<H>,
   run: (session: H) => Promise<T>,
   onRecovery?: (event: SessionRecoveryEvent) => void,
   logError: (message: string, error: unknown) => void = (message, error) => console.error(message, error),
+  onFailure?: (event: ServingTurnFailureEvent) => void,
 ): Promise<T> {
-  const session = await manager.getSession();
+  const fail = (error: unknown): unknown => {
+    onFailure?.(servingTurnFailureOf(error));
+    return error;
+  };
+  let session: H;
+  try {
+    session = await manager.getSession();
+  } catch (connectError) {
+    throw fail(new DjonikSessionConnectError(connectError));
+  }
   try {
     return await run(session);
   } catch (error) {
+    fail(error);
     const dead = sessionDeadErrorOf(error);
     if (!dead) throw error;
     const resubmit = canResubmit(dead.pendingMessage);
@@ -406,7 +545,10 @@ export async function runWithSessionRecovery<H extends DjonikSessionHandle, T>(
     } catch (connectError) {
       logError("Djonik replacement Session could not be created:", connectError);
       onRecovery?.({ type: "message_resubmitted", outcome: "not_delivered" });
-      throw error;
+      const connectFailure = new DjonikSessionConnectError(connectError);
+      fail(connectFailure);
+      // A classified provider failure gets its own (still "not processed") line; anything else keeps #53's.
+      throw connectFailure.providerFailure ? connectFailure : error;
     }
     try {
       const result = await run(replacement);
@@ -414,6 +556,7 @@ export async function runWithSessionRecovery<H extends DjonikSessionHandle, T>(
       return result;
     } catch (retryError) {
       onRecovery?.({ type: "message_resubmitted", outcome: "turn_failed" });
+      fail(retryError);
       if (sessionDeadErrorOf(retryError)) manager.invalidate(replacement);
       throw retryError;
     }

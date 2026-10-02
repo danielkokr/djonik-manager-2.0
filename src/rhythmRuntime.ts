@@ -26,7 +26,7 @@ import {
   type RhythmCallbackDeps,
   type RhythmCallbackQuery,
 } from "./rhythmTelegram.js";
-import { isAllowedUser, runWithSessionRecovery, type DjonikSessionManager, type SessionRecoveryEvent } from "./telegramAdapter.js";
+import { isAllowedUser, runWithSessionRecovery, type DjonikSessionManager, type ServingTurnFailureEvent, type SessionRecoveryEvent } from "./telegramAdapter.js";
 import { confirmationPolicyProblems, REVIEWED_TRELLO_READ_TOOLS, SERVING_RELEASE, type DjonikRelease } from "./release.js";
 import { REVIEWED_CONFIRMATION_TOOLS } from "./toolConfirmation.js";
 
@@ -208,6 +208,7 @@ export function createRhythmTimer(options: {
 export function createSessionTurnRunner(
   sessions: DjonikSessionManager<DjonikTracedSessionHandle>,
   onSessionRecovery?: (event: SessionRecoveryEvent) => void,
+  onTurnFailure?: (event: ServingTurnFailureEvent) => void,
 ): AutonomousTurnRunner {
   return async (request) => {
     let sessionId: string | null = null;
@@ -221,6 +222,8 @@ export function createSessionTurnRunner(
           return session.sendTraced([{ type: "text", text: request.prompt }], request.origin);
         },
         onSessionRecovery,
+        undefined,
+        onTurnFailure,
       );
     } catch (error) {
       if (error instanceof DjonikTracedTurnError) {

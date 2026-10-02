@@ -13,6 +13,7 @@ import {
   formatUserFacingError,
   runWithSessionRecovery,
   type DjonikSessionManager,
+  type ServingTurnFailureEvent,
   type SessionRecoveryEvent,
 } from "./telegramAdapter.js";
 import type { TurnOrigin } from "./turnAuthority.js";
@@ -40,6 +41,8 @@ export interface GroupDispatchDeps {
   logError?: (message: string, error: unknown) => void;
   /** Content-free Session replacement / resubmission telemetry (#53). */
   onSessionRecovery?: (event: SessionRecoveryEvent) => void;
+  /** Content-free per-attempt turn failure classification (#60). */
+  onTurnFailure?: (event: ServingTurnFailureEvent) => void;
 }
 
 export interface GroupDispatchHandlers {
@@ -94,6 +97,7 @@ export function createGroupDispatchHandlers(deps: GroupDispatchDeps): GroupDispa
           (session) => session.sendOrdered(parts, intakeOrigin(intake)),
           deps.onSessionRecovery,
           logError,
+          deps.onTurnFailure,
         );
         if (proposals && deps.sendProposal && isProposalReply(reply)) {
           const ref = proposals.newRef();

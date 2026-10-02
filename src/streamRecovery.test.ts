@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type Anthropic from "@anthropic-ai/sdk";
-import { APIConnectionError, APIError, NotFoundError } from "@anthropic-ai/sdk";
+import Anthropic, { APIConnectionError, APIError, NotFoundError } from "@anthropic-ai/sdk";
 import {
   connectToDjonik,
   DjonikSessionDeadError,
+  PRIMARY_SEND_OPTIONS,
   type DjonikTraceEvent,
   type DjonikTracedSessionHandle,
   type DjonikTurnTelemetry,
@@ -12,13 +12,19 @@ import {
 } from "./djonikClient.js";
 import { classifyPendingMessage, SessionEventFeed, type FeedEvent, type SessionEventApi } from "./sessionEventFeed.js";
 import {
+  DjonikSessionConnectError,
+  PROVIDER_CONFIG_TEXT,
+  PROVIDER_UNAVAILABLE_CHECK_TEXT,
+  PROVIDER_UNAVAILABLE_TEXT,
   SESSION_LOST_CHECK_TEXT,
   SESSION_LOST_RESEND_TEXT,
   createSessionManager,
   formatUserFacingError,
   runWithSessionRecovery,
+  type ServingTurnFailureEvent,
   type SessionRecoveryEvent,
 } from "./telegramAdapter.js";
+import { providerFailureStop } from "./servingLifecycle.js";
 import { createSessionTurnRunner } from "./rhythmRuntime.js";
 import { createGroupDispatchHandlers } from "./telegramDispatch.js";
 import type { GroupedIntake } from "./messageGrouping.js";
@@ -92,6 +98,8 @@ class FakeSession {
   listFailures = 0;
   /** A send answered with an HTTP 400 (not accepted). */
   refuseSends = false;
+  /** #60: the next sends fail with `error`; `accepted` means the provider persisted the events before failing. */
+  readonly sendFailures: Array<{ error: unknown; accepted?: boolean }> = [];
   /** A new stream first re-delivers the whole history (overlap between list and live stream). */
   replayOnOpen = false;
   onUserMessage?: (session: FakeSession, message: Ev) => void;
@@ -157,9 +165,34 @@ class FakeSession {
     for (const event of [...this.history]) yield event;
   }
 
-  async send(params: { events: Ev[] }): Promise<{ data: Ev[] }> {
+  /** #60: the per-request SDK options of every `events.send` call (not per HTTP attempt). */
+  readonly sendOptions: Array<{ maxRetries?: number } | undefined> = [];
+
+  /**
+   * `events.send` as the installed SDK performs it (#60): up to `1 + (options.maxRetries ?? 2)` HTTP attempts, re-POSTing
+   * the same events after a connection error or 408/409/429/5xx. `sent` records every HTTP attempt. The real-SDK test
+   * "#60 SDK contract" pins this model to `@anthropic-ai/sdk` itself.
+   */
+  async send(params: { events: Ev[] }, options?: { maxRetries?: number }): Promise<{ data: Ev[] }> {
+    this.sendOptions.push(options);
+    const retries = options?.maxRetries ?? 2;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.sendOnce(params);
+      } catch (error) {
+        const status = error instanceof APIError ? error.status : undefined;
+        const retryable = error instanceof APIError && (typeof status !== "number" || status >= 500 || [408, 409, 429].includes(status));
+        if (!retryable || attempt >= retries) throw error;
+      }
+    }
+  }
+
+  /** One HTTP attempt. */
+  private async sendOnce(params: { events: Ev[] }): Promise<{ data: Ev[] }> {
     this.sent.push(params.events);
     if (this.refuseSends || this.status === "terminated") throw APIError.generate(400, {}, "session is not accepting events", new Headers());
+    const failure = this.sendFailures.shift();
+    if (failure && !failure.accepted) throw failure.error;
     const data: Ev[] = [];
     for (const event of params.events) {
       if (event.type === "user.message") {
@@ -176,12 +209,15 @@ class FakeSession {
         setImmediate(() => this.onConfirmation?.(this, id));
       }
     }
+    if (failure) throw failure.error;
     return { data };
   }
 }
 
 function createWorld(configure: (session: FakeSession, index: number) => void = () => {}) {
   const sessions: FakeSession[] = [];
+  /** #60: the next `sessions.create` calls fail with these errors, in order. */
+  const createFailures: unknown[] = [];
   const byId = (id: string) => {
     const found = sessions.find((session) => session.id === id);
     if (!found) throw new Error(`unknown session ${id}`);
@@ -191,6 +227,7 @@ function createWorld(configure: (session: FakeSession, index: number) => void = 
     beta: {
       sessions: {
         create: async () => {
+          if (createFailures.length > 0) throw createFailures.shift();
           const session = new FakeSession(`sesn_${sessions.length + 1}`);
           sessions.push(session);
           configure(session, sessions.length - 1);
@@ -200,12 +237,12 @@ function createWorld(configure: (session: FakeSession, index: number) => void = 
         events: {
           stream: (id: string) => byId(id).openStream(),
           list: (id: string) => byId(id).list(),
-          send: (id: string, params: { events: Ev[] }) => byId(id).send(params),
+          send: (id: string, params: { events: Ev[] }, options?: { maxRetries?: number }) => byId(id).send(params, options),
         },
       },
     },
   } as unknown as Anthropic;
-  return { client, sessions };
+  return { client, sessions, createFailures };
 }
 
 interface Probe {
@@ -449,9 +486,11 @@ function managedWorld(configure: (session: FakeSession, index: number) => void) 
   const world = createWorld(configure);
   const probe = newProbe();
   const recovery: SessionRecoveryEvent[] = [];
+  const failures: ServingTurnFailureEvent[] = [];
   const manager = createSessionManager(() => connect(world.client, probe));
-  const run = (text: string) => runWithSessionRecovery(manager, (session) => session.send(text), (event) => recovery.push(event), () => {});
-  return { ...world, probe, recovery, manager, run };
+  const run = (text: string) =>
+    runWithSessionRecovery(manager, (session) => session.send(text), (event) => recovery.push(event), () => {}, (event) => failures.push(event));
+  return { ...world, probe, recovery, failures, manager, run };
 }
 
 test("#53 dead before the turn (terminated while idle): nothing goes to the old Session; the message is submitted once to a replacement", async () => {
@@ -757,4 +796,308 @@ test("#53 Telegram dispatch: an unprocessed intake is answered from the replacem
     assert.deepEqual(sent, [expected]);
     assert.equal(world.sessions.reduce((sum, s) => sum + s.userMessages(), 0), expected === SESSION_LOST_CHECK_TEXT ? 1 : 2);
   }
+});
+
+// --- #60: provider failures at the serving-turn boundaries -----------------------------------------------------
+
+/** The production incident's error, exactly as the SDK builds it: `InternalServerError`, message "503 credential validation failed". */
+const incident503 = () => APIError.generate(503, { message: "credential validation failed" }, undefined, new Headers());
+const FORBIDDEN_VISIBLE = ["credential", "503", "validation", "sesn_", "evt_", "http", "request", "Error"];
+
+function assertNoProviderLeak(text: string): void {
+  for (const forbidden of FORBIDDEN_VISIBLE) assert.ok(!text.includes(forbidden), `visible text leaks "${forbidden}": ${text}`);
+}
+
+test("#60 incident: a 503 on events.send gives the cached Session up, never resubmits, never shows provider text, and later turns use a fresh Session", async () => {
+  const w = managedWorld((session, index) => {
+    session.onUserMessage = answerWith(`Відповідь із сесії ${index + 1}.`);
+  });
+  await w.manager.getSession();
+  w.sessions[0].sendFailures.push({ error: incident503() });
+
+  const error = await rejection(w.run("Це правка по сторінці Career Page"));
+  assert.ok(error instanceof DjonikSessionDeadError);
+  assert.equal(error.reason, "provider_unavailable");
+  assert.equal(error.pendingMessage, "unknown", "no provider guarantee that a 5xx send was not accepted");
+  assert.equal(error.stage, "event_send");
+  const visible = formatUserFacingError(error);
+  assert.equal(visible, PROVIDER_UNAVAILABLE_CHECK_TEXT);
+  assertNoProviderLeak(visible);
+  assert.equal(w.manager.currentSessionId(), null, "the exact failing handle was invalidated");
+  assert.equal(w.sessions.length, 1, "no replacement Session was used for this turn (no resubmission)");
+  assert.deepEqual(w.recovery, [{ type: "session_replaced", pendingMessage: "unknown", resubmit: false }]);
+  assert.deepEqual(w.failures, [
+    { type: "serving_turn_failure", stage: "event_send", category: "upstream_transient", status: 503, errorClass: "InternalServerError", sessionAction: "replace", delivery: "unknown" },
+  ]);
+
+  // No stale-cache loop: the next two turns are answered by one new Session, not the known-bad handle.
+  assert.equal(await w.run("тест"), "Відповідь із сесії 2.");
+  assert.equal(await w.run("тест"), "Відповідь із сесії 2.");
+  assert.equal(w.sessions[0].sent.length, 1, "the bad Session received nothing after the failure");
+  assert.equal(w.sessions[1].userMessages(), 2);
+});
+
+test("#60 a 5xx after the provider already accepted the message: still exactly one submission in total (zero automatic duplicates)", async () => {
+  const w = managedWorld((session, index) => {
+    session.onUserMessage = answerWith(`Створив картку (сесія ${index + 1}).`);
+  });
+  await w.manager.getSession();
+  w.sessions[0].sendFailures.push({ error: incident503(), accepted: true });
+  const error = await rejection(w.run("створи картку Career Page"));
+  assert.ok(error instanceof DjonikSessionDeadError && error.pendingMessage === "unknown");
+  assert.equal(formatUserFacingError(error), PROVIDER_UNAVAILABLE_CHECK_TEXT, "Daniel is told to check Trello before repeating");
+  assert.equal(w.sessions.reduce((sum, s) => sum + s.userMessages(), 0), 1, "never resubmitted to a replacement");
+});
+
+test("#60 a connection failure on events.send is delivery-unknown too; a 4xx throttle (429) is a refusal that keeps the Session", async () => {
+  const w = managedWorld((session) => {
+    session.onUserMessage = answerWith("Ок.");
+  });
+  await w.manager.getSession();
+  w.sessions[0].sendFailures.push({ error: new APIConnectionError({ message: "socket hang up" }) });
+  const lost = await rejection(w.run("перше"));
+  assert.ok(lost instanceof DjonikSessionDeadError && lost.pendingMessage === "unknown" && lost.reason === "provider_unavailable");
+
+  await w.manager.getSession();
+  w.sessions[1].sendFailures.push({ error: APIError.generate(429, { message: "rate limited" }, undefined, new Headers()) });
+  const throttled = await rejection(w.run("друге"));
+  assert.ok(!(throttled instanceof DjonikSessionDeadError), "a 429 is account throttling, not a bad Session");
+  assert.equal(formatUserFacingError(throttled), PROVIDER_UNAVAILABLE_TEXT);
+  assert.equal(w.manager.currentSessionId(), "sesn_2", "kept");
+  assert.equal(w.failures.at(-1)?.sessionAction, "keep");
+  assert.equal(w.failures.at(-1)?.delivery, "not_submitted");
+});
+
+test("#60 permanent auth: 401 on events.send keeps the Session, shows the configuration line, and asks the process to restart (not a resend loop)", async () => {
+  const w = managedWorld((session) => {
+    session.onUserMessage = answerWith("Ок.");
+  });
+  await w.manager.getSession();
+  w.sessions[0].sendFailures.push({ error: APIError.generate(401, { message: "invalid x-api-key" }, undefined, new Headers()) });
+  const error = await rejection(w.run("Привіт"));
+  assert.ok(!(error instanceof DjonikSessionDeadError));
+  const visible = formatUserFacingError(error);
+  assert.equal(visible, PROVIDER_CONFIG_TEXT);
+  assert.ok(!visible.includes("api-key"));
+  assert.equal(w.manager.currentSessionId(), "sesn_1", "a new Session would carry the same rejected credential");
+  const [event] = w.failures;
+  assert.deepEqual(
+    { category: event.category, status: event.status, sessionAction: event.sessionAction },
+    { category: "auth_config", status: 401, sessionAction: "keep" },
+  );
+  assert.deepEqual(providerFailureStop(event), { reason: "anthropic_auth_rejected", exitCode: 1 });
+
+  w.sessions[0].sendFailures.push({ error: incident503() });
+  const transient = await rejection(w.run("Привіт"));
+  assert.notEqual(formatUserFacingError(transient), PROVIDER_CONFIG_TEXT, "503 is not a configuration failure");
+  assert.equal(providerFailureStop(w.failures.at(-1)!), null, "a transient failure never stops serving");
+});
+
+test("#60 an ordinary domain failure (no text reply) does not invalidate a healthy Session", async () => {
+  const w = managedWorld((session) => {
+    let turn = 0;
+    session.onUserMessage = (s) => {
+      turn += 1;
+      if (turn === 1) {
+        s.emit({ type: "session.status_running" });
+        s.emit(END_TURN); // end_turn with no agent.message
+      } else answerWith("Друга відповідь.")(s);
+    };
+  });
+  const error = await rejection(w.run("перше"));
+  assert.ok(!(error instanceof DjonikSessionDeadError));
+  assert.equal(w.failures[0].category, "application");
+  assert.equal(w.failures[0].sessionAction, "keep");
+  assert.equal(await w.run("друге"), "Друга відповідь.");
+  assert.equal(w.sessions.length, 1, "the same Session serves the next turn");
+});
+
+test("#60 a turn queued on the handle behind a provider_unavailable give-up is provably unsent: it goes once to the replacement; the failed one is never resubmitted", async () => {
+  const w = managedWorld((session, index) => {
+    session.onUserMessage =
+      index === 0
+        ? answerWith("не мало статися")
+        : (s, message) => answerWith(`re:${JSON.stringify((message.content as Array<{ text?: string }>).at(-1)?.text)}`)(s);
+  });
+  await w.manager.getSession();
+  w.sessions[0].sendFailures.push({ error: incident503() });
+  const [first, second] = await Promise.allSettled([w.run("перше"), w.run("друге")]);
+  assert.equal(first.status, "rejected");
+  assert.deepEqual(second, { status: "fulfilled", value: 're:"друге"' });
+  assert.equal(w.sessions[0].sent.length, 1, "the queued turn never reached the given-up Session");
+  assert.equal(w.sessions[1].userMessages(), 1, "only the provably unsent message was submitted to the replacement");
+  assert.ok(w.recovery.some((event) => event.type === "session_replaced" && event.pendingMessage === "not_submitted" && event.resubmit));
+});
+
+test("#60 incident replay (Session lost, provider down): no raw 503 on the first message or on later ones; the first healthy connect recovers without a restart", async () => {
+  const w = managedWorld((session) => {
+    session.onUserMessage = answerWith("Працюю.");
+  });
+  await w.manager.getSession();
+  w.sessions[0].terminate(); // the serving Session is lost while idle (#53 path)
+  w.sessions[0].drop("end");
+  await settle();
+  w.createFailures.push(incident503(), incident503(), incident503());
+
+  const first = await rejection(w.run("скрін + інструкція"));
+  assert.ok(first instanceof DjonikSessionConnectError, "the replacement could not be created");
+  assert.equal(formatUserFacingError(first), PROVIDER_UNAVAILABLE_TEXT, "nothing was processed, and Daniel is told why");
+  for (const text of ["тест", "тест"]) {
+    const later = await rejection(w.run(text));
+    assert.ok(later instanceof DjonikSessionConnectError);
+    const visible = formatUserFacingError(later);
+    assert.equal(visible, PROVIDER_UNAVAILABLE_TEXT);
+    assertNoProviderLeak(visible);
+  }
+  assert.equal(await w.run("тест"), "Працюю.", "the next getSession creates and attests a fresh Session");
+  assert.equal(w.sessions.length, 2);
+  assert.equal(w.sessions.reduce((sum, s) => sum + s.userMessages(), 0), 1, "only the successful turn was ever submitted");
+  const connectFailures = w.failures.filter((event) => event.stage === "session_connect");
+  assert.equal(connectFailures.length, 3);
+  for (const event of connectFailures) {
+    assert.deepEqual(
+      { category: event.category, status: event.status, sessionAction: event.sessionAction, delivery: event.delivery },
+      { category: "upstream_transient", status: 503, sessionAction: "none", delivery: "not_submitted" },
+    );
+  }
+});
+
+test("#60 attachment independence and dispatch: image+text and text-only take the same path, with the same visible line and content-free telemetry", async () => {
+  const image = { data: Buffer.from("png").toString("base64"), mediaType: "image/png", byteSize: 3 };
+  const intakes = [
+    { parts: [{ type: "image", image }, { type: "text", text: "Секретна правка Career Page" }], fragmentCount: 2 },
+    { parts: [{ type: "text", text: "Секретна правка Career Page" }], fragmentCount: 1 },
+  ];
+  const outcomes: Array<{ sent: string[]; failures: ServingTurnFailureEvent[] }> = [];
+  for (const shape of intakes) {
+    const world = createWorld((session) => {
+      session.sendFailures.push({ error: incident503() });
+    });
+    const sent: string[] = [];
+    const failures: ServingTurnFailureEvent[] = [];
+    const { onDispatch } = createGroupDispatchHandlers({
+      djonikSession: createSessionManager(() => connect(world.client)),
+      sendMessage: async (_chatId, text) => void sent.push(text),
+      logError: () => {},
+      onTurnFailure: (event) => failures.push(event),
+    });
+    await onDispatch(1, 100, { ...shape, text: "", images: [], documents: [], textCount: 1, imageCount: 0, documentCount: 0, groupingReason: "single", groupingWaitMs: 0 } as unknown as GroupedIntake);
+    assert.equal(world.sessions.reduce((sum, s) => sum + s.userMessages(), 0), 1);
+    outcomes.push({ sent, failures });
+  }
+  assert.deepEqual(outcomes[0], outcomes[1]);
+  assert.deepEqual(outcomes[0].sent, [PROVIDER_UNAVAILABLE_CHECK_TEXT]);
+  const serialized = JSON.stringify(outcomes[0].failures);
+  for (const forbidden of ["Секрет", "credential", "sesn_", "evt_", "content", "key"]) assert.ok(!serialized.includes(forbidden), forbidden);
+});
+
+test("#60 Working Rhythm turns report the same failure classification and never resubmit a delivery-unknown prompt", async () => {
+  const request = { origin: "rhythm_ritual" as const, occurrenceKey: "morning:2026-10-02", kind: "morning" as const, prompt: "[Робочий ритм · автоматичний хід]" };
+  const world = createWorld((session) => {
+    session.sendFailures.push({ error: incident503() });
+  });
+  const failures: ServingTurnFailureEvent[] = [];
+  const runner = createSessionTurnRunner(createSessionManager(() => connect(world.client)), undefined, (event) => failures.push(event));
+  assert.ok((await rejection(runner(request))) instanceof AutonomousTurnFailure);
+  assert.equal(world.sessions.length, 1);
+  assert.equal(failures[0].category, "upstream_transient");
+  assert.equal(failures[0].sessionAction, "replace");
+});
+
+// --- #60 amendment: at most one HTTP attempt for the primary user.message ------------------------------------
+
+/** A real installed-SDK client whose transport answers every `POST …/events` with `response`, counting attempts. */
+function sdkWithEventsResponse(response: () => Response | Promise<Response>) {
+  const attempts: string[] = [];
+  const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if ((init?.method ?? "GET") === "POST" && /\/v1\/sessions\/[^/]+\/events/.test(url)) {
+      attempts.push(url);
+      return response();
+    }
+    throw new Error(`unexpected request ${url}`);
+  };
+  return { client: new Anthropic({ apiKey: "test-key-not-real", fetch: fetchImpl as typeof fetch, maxRetries: 2 }), attempts };
+}
+
+const sdk503 = () =>
+  new Response(JSON.stringify({ message: "credential validation failed" }), {
+    status: 503,
+    headers: { "content-type": "application/json", "retry-after-ms": "0" },
+  });
+
+test("#60 SDK contract (installed @anthropic-ai/sdk): events.send re-POSTs a 503 by default; per-request maxRetries: 0 makes exactly one attempt", async () => {
+  assert.deepEqual(PRIMARY_SEND_OPTIONS, { maxRetries: 0 });
+  const params = { events: [{ type: "user.message" as const, content: [{ type: "text" as const, text: "x" }] }] };
+
+  const defaults = sdkWithEventsResponse(sdk503);
+  const retried = await rejection(defaults.client.beta.sessions.events.send("sesn_1", params));
+  assert.ok(retried instanceof APIError && retried.status === 503);
+  assert.equal(defaults.attempts.length, 3, "the client-level default (maxRetries 2) would re-send the same user.message");
+
+  const once = sdkWithEventsResponse(sdk503);
+  const single = await rejection(once.client.beta.sessions.events.send("sesn_1", params, PRIMARY_SEND_OPTIONS));
+  assert.equal(single instanceof APIError ? single.message : null, "503 credential validation failed");
+  assert.equal(once.attempts.length, 1, "per-request override: one HTTP attempt");
+
+  const reset = sdkWithEventsResponse(() => Promise.reject(new TypeError("fetch failed")));
+  assert.ok((await rejection(reset.client.beta.sessions.events.send("sesn_1", params, PRIMARY_SEND_OPTIONS))) instanceof APIConnectionError);
+  assert.equal(reset.attempts.length, 1, "a connection failure is not retried either");
+});
+
+test("#60 the primary user.message is sent with SDK retries disabled; accepted-then-503 yields ONE submission, delivery unknown, and a fresh Session next", async () => {
+  const w = managedWorld((session, index) => {
+    session.onUserMessage = answerWith(`Створив картку (сесія ${index + 1}).`);
+  });
+  await w.manager.getSession();
+  // The provider persists the message, then the response fails — and would keep failing for any retry.
+  w.sessions[0].sendFailures.push({ error: incident503(), accepted: true }, { error: incident503(), accepted: true }, { error: incident503(), accepted: true });
+
+  const error = await rejection(w.run("створи картку Career Page"));
+  assert.deepEqual(w.sessions[0].sendOptions, [PRIMARY_SEND_OPTIONS]);
+  assert.equal(w.sessions[0].sent.length, 1, "exactly one HTTP attempt for the primary user.message");
+  assert.equal(w.sessions[0].history.filter((event) => event.type === "user.message").length, 1, "the Session holds one copy");
+  assert.ok(error instanceof DjonikSessionDeadError && error.pendingMessage === "unknown" && error.reason === "provider_unavailable");
+  const visible = formatUserFacingError(error);
+  assert.equal(visible, PROVIDER_UNAVAILABLE_CHECK_TEXT);
+  assertNoProviderLeak(visible);
+  assert.equal(w.manager.currentSessionId(), null, "the exact handle was invalidated");
+
+  assert.equal(await w.run("інше повідомлення"), "Створив картку (сесія 2).");
+  assert.equal(w.sessions[0].sent.length, 1, "nothing more reached the given-up Session");
+  assert.equal(w.sessions[1].userMessages(), 1);
+
+  // Negative control: the same server under the SDK's default retry policy would have stored the message three times.
+  const control = new FakeSession("sesn_control");
+  for (let i = 0; i < 3; i += 1) control.sendFailures.push({ error: incident503(), accepted: true });
+  await rejection(control.send({ events: [{ type: "user.message", content: [] }] }));
+  assert.equal(control.history.filter((event) => event.type === "user.message").length, 3);
+});
+
+test("#60 an ordinary successful turn: one primary send, one HTTP attempt, retries disabled", async () => {
+  const w = managedWorld((session) => {
+    session.onUserMessage = answerWith("Готово.");
+  });
+  assert.equal(await w.run("Привіт"), "Готово.");
+  assert.deepEqual(w.sessions[0].sendOptions, [PRIMARY_SEND_OPTIONS]);
+  assert.equal(w.sessions[0].sent.length, 1);
+  assert.deepEqual(w.failures, []);
+});
+
+test("#60 continuation sends (custom-tool results) and verification nudges keep the SDK default retry policy", async () => {
+  const w = managedWorld((session) => {
+    session.onUserMessage = (s) => {
+      s.emit({ type: "agent.custom_tool_use", id: "ctu_1", name: "trello_work_history", input: { period: "this_week" } });
+      s.emit({ type: "session.status_idle", stop_reason: { type: "requires_action", event_ids: ["ctu_1"] } });
+    };
+    session.onCustomToolResult = (s) => {
+      s.emit({ type: "session.status_running" });
+      s.emit(reply("Тиждень рівний."));
+      s.emit(END_TURN);
+    };
+  });
+  await w.run("що було цього тижня?");
+  const kinds = w.sessions[0].sent.map((batch) => batch[0].type);
+  assert.deepEqual(kinds, ["user.message", "user.custom_tool_result"]);
+  assert.deepEqual(w.sessions[0].sendOptions, [PRIMARY_SEND_OPTIONS, undefined], "only the primary user.message overrides retries");
 });

@@ -52,6 +52,9 @@ export type FeedDeathReason =
   | "reconnect_exhausted"
   /** A reconnect step failed permanently (non-retryable API error or an unexpected client error). */
   | "reconnect_failed"
+  /** #60: a Session-scoped call (`events.send`) failed with a 5xx/connection error after the SDK's own retries;
+   *  the Session is given up so no later turn reuses it. */
+  | "provider_unavailable"
   /** `close()` was called. */
   | "closed";
 
