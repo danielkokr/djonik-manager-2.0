@@ -64,8 +64,15 @@ export interface GroupedIntake {
    * `DjonikSessionHandle.sendOrdered`, not `send`.
    */
   parts: DjonikTurnPart[];
-  /** Any forwarded fragment makes this source-only until Daniel confirms in a later turn. */
+  /** Any forwarded fragment: its parts carry the #48 source wrapper and a pending proposal is invalidated. */
   hasForwardedSource?: boolean;
+  /**
+   * #58: at least one NON-forwarded fragment carries non-empty typed text or caption — Daniel's own words, by
+   * Telegram transport metadata alone (never by what any text says). A forward with such text is Daniel's
+   * ordinary turn; a forward without it stays source-only (`forwarded_source`). Own voice transcripts do not
+   * count (#49): a forward + voice-only intake stays source-only.
+   */
+  hasOwnTypedText?: boolean;
   fragmentCount: number;
   textCount: number;
   imageCount: number;
@@ -497,6 +504,7 @@ export class MessageGroupBuffer {
       documents,
       parts,
       hasForwardedSource: sorted.some((fragment) => fragment.forwarded !== undefined),
+      hasOwnTypedText: sorted.some((fragment) => fragment.forwarded === undefined && fragment.text.trim() !== ""),
       fragmentCount: sorted.length,
       textCount: textFragments.length,
       imageCount: images.length,

@@ -15,6 +15,7 @@ import {
   type DjonikSessionManager,
   type SessionRecoveryEvent,
 } from "./telegramAdapter.js";
+import type { TurnOrigin } from "./turnAuthority.js";
 import { formatVoiceFailure, VOICE_GROUP_SUFFIX, VoiceInputError } from "./voiceInput.js";
 
 /**
@@ -44,6 +45,16 @@ export interface GroupDispatchDeps {
 export interface GroupDispatchHandlers {
   onDispatch: (chatId: number, userId: number, intake: GroupedIntake) => Promise<void>;
   onFailure: (chatId: number, userId: number, error: unknown, fragmentCount?: number) => Promise<void>;
+}
+
+/**
+ * The trusted origin of a Telegram intake (#48, refined by #58), from transport provenance only — never from
+ * what any text says. Source-only forwarded material is `forwarded_source` (read-only). A forward grouped with
+ * Daniel's own typed text or caption is his ordinary `user_message` turn; the forwarded parts keep their
+ * source wrapper and remain data, not instruction.
+ */
+export function intakeOrigin(intake: Pick<GroupedIntake, "hasForwardedSource" | "hasOwnTypedText">): TurnOrigin {
+  return intake.hasForwardedSource === true && intake.hasOwnTypedText !== true ? "forwarded_source" : "user_message";
 }
 
 export function createGroupDispatchHandlers(deps: GroupDispatchDeps): GroupDispatchHandlers {
@@ -80,7 +91,7 @@ export function createGroupDispatchHandlers(deps: GroupDispatchDeps): GroupDispa
         // unprocessed — never twice, never a possibly processed turn.
         const reply = await runWithSessionRecovery(
           deps.djonikSession,
-          (session) => session.sendOrdered(parts, intake.hasForwardedSource ? "forwarded_source" : "user_message"),
+          (session) => session.sendOrdered(parts, intakeOrigin(intake)),
           deps.onSessionRecovery,
           logError,
         );

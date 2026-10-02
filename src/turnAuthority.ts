@@ -7,6 +7,8 @@
  *
  * - `user_message` / `button_callback`: Daniel's own turn (typed, or a Working Rhythm button converted into
  *   his ordinary message). Mutating tools may be attempted through the normal verified pipeline (#31/#32).
+ * - `forwarded_source` (#48): a Telegram intake of forwarded material only. Read-only; a forward grouped with
+ *   Daniel's own typed text/caption is his `user_message` instead (#58, `telegramDispatch.intakeOrigin`).
  * - `rhythm_ritual` / `rhythm_exception`: an autonomous scheduled turn. Read-only: every mutating tool
  *   confirmation is denied before the provider executes it.
  */
