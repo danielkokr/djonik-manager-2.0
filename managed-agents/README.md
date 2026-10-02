@@ -20,13 +20,18 @@ The v21/v4 statements below describe recorded remote resource state from the rol
 
 ## Files
 
-**#64 (2026-10-02; [docs/102](../docs/102_ISSUE_64_R31_REMOTE_CONSTRUCTION_AND_ATTESTATION.md)): `djonik.md` (body and frontmatter) now declares Agent v31 = `RELEASE_R31`, but the application still serves r30.**
+**#65 (2026-10-02; [docs/103](../docs/103_ISSUE_65_R31_SOURCE_CUTOVER.md)): source cutover — `djonik.md` = `SERVING_RELEASE` = `RELEASE_R31` (Agent v31).**
+- The #64 transition is over: the declaration, the application's serving release and `RELEASE_R31` are one lockstep again (`src/release.test.ts`). Nothing was applied or synced; Agent v31 and its Skills are unchanged.
+- r30 (Agent v30) is the immediate rollback; `src/release.test.ts` proves it differs from this file by exactly the r31 transition (#59 + #62).
+- Source cutover only: the host still serves its deployed r30 revision until a separately authorized deploy. Manual Telegram validation of #59/#62 follows that deploy.
+
+**#64 (2026-10-02; [docs/102](../docs/102_ISSUE_64_R31_REMOTE_CONSTRUCTION_AND_ATTESTATION.md)): `djonik.md` (body and frontmatter) now declares Agent v31 = `RELEASE_R31`, but the application still serves r30** (superseded by #65 above).
 - Agent v31 was created from v30 by one `version: 30`-preconditioned `agents.update` with the body `buildCandidateUpdateBody` generated (#59 prompt, new `task-management` and `work-review` pins, `+ trello_project_time`). It was read back exactly: `release:check -- r31` OK.
 - The body is unchanged (#59 prompt, SHA `569999b5…`); only the frontmatter moved (two Skill pins, one custom tool). It was rendered from the body that created v31, by a renderer that first reproduced the r30 frontmatter byte-for-byte.
 - `SERVING_RELEASE` stays `RELEASE_R30` (Agent v30), the immediate rollback; `src/release.test.ts` proves served r30 differs from this file by exactly the r31 transition. Cutover, deploy and Telegram validation are separate, separately authorized steps.
 - Remote latest is now v31. Every serving path pins its version explicitly, so production (r30) is unaffected. A Console Session created without a version pin would get v31.
 
-**#56 (2026-09-29; [docs/93](../docs/93_ISSUE_56_R30_SOURCE_CUTOVER_AND_DEPLOY_HANDOFF.md)): source cutover — `djonik.md` = `SERVING_RELEASE` = `RELEASE_R30` (Agent v30).** (The declaration moved to r31 in #64 above; serving is still r30.)
+**#56 (2026-09-29; [docs/93](../docs/93_ISSUE_56_R30_SOURCE_CUTOVER_AND_DEPLOY_HANDOFF.md)): source cutover — `djonik.md` = `SERVING_RELEASE` = `RELEASE_R30` (Agent v30).** (Superseded by #65 above: r31 is declared and served; r30 is the rollback.)
 - The #55 transition is over: the declaration, the application's serving release and `RELEASE_R30` are one lockstep again (`src/release.test.ts`). Nothing was applied or synced; Agent v30 and its Skills are unchanged.
 - Coordinator-only Project Health: no roster, no specialist.
 - r29 (Agent v29 + specialist v4) is the immediate rollback. `project-health-specialist.md` and the `project-health` Skill stay untouched rollback source.

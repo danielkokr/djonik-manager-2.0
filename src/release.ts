@@ -658,7 +658,9 @@ export const RELEASE_R31_CANDIDATE: DjonikReleaseCandidate = {
  * 0 events), never derived from a timestamp; the other three pins show their known r30 spellings there. Written out, not
  * derived at import; `releaseR31.test.ts` proves it equals the resolved candidate.
  *
- * Constructed WITHOUT a cutover: r30 stays this revision's serving release and the immediate rollback (Agent v30).
+ * #64 constructed it WITHOUT a cutover; #65 (docs/103) makes it this revision's serving release by the source cutover
+ * alone — the tuple is unchanged. Its source is `managed-agents/djonik.md` (body and frontmatter = Agent v31).
+ * r30 stays the immediate rollback (Agent v30 unchanged).
  */
 export const RELEASE_R31: DjonikRelease = {
   id: "r31",
@@ -693,8 +695,10 @@ export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_
  * #55 constructed and attested r30 (Agent v30) remotely WITHOUT a cutover (docs/92). #56 flips this to `r30`
  * (docs/93): the Product Owner replaced a paid pre-deploy benchmark with manual Telegram validation after a controlled
  * deploy. The host keeps serving its deployed r29 revision until that deploy; r29 is the immediate rollback.
- * #64 constructed and attested r31 (Agent v31) remotely WITHOUT a cutover (docs/102): this stays `r30`.
+ * #64 constructed and attested r31 (Agent v31) remotely WITHOUT a cutover (docs/102). #65 flips this to `r31`
+ * (docs/103), a source cutover only: the host keeps serving its deployed r30 revision until a separately authorized
+ * deploy; r30 is the immediate rollback.
  * This is deliberately not an environment variable:
  * the reviewed revision, not host configuration, decides what is served.
  */
-export const SERVING_RELEASE: DjonikRelease = RELEASE_R30;
+export const SERVING_RELEASE: DjonikRelease = RELEASE_R31;

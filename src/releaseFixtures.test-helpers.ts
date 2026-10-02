@@ -41,7 +41,7 @@ function revertEdits(prompt: string, edits: ReadonlyArray<{ before: string; afte
 }
 
 /** The #59 coordinator-prompt edit (project names resolve through the brief before any Trello use), exact text
- *  before → after, applied on top of r30. Synced into Agent v31 (r31, #64, docs/102); r30 (Agent v30, still serving)
+ *  before → after, applied on top of r30. Synced into Agent v31 (r31, #64, docs/102); r30 (Agent v30, the rollback since #65)
  *  stores the source minus this edit (docs/99). */
 export const ISSUE_59_PROMPT_EDITS: ReadonlyArray<{ before: string; after: string }> = [
   {
@@ -56,7 +56,7 @@ export const ISSUE_59_PROMPT_EDITS: ReadonlyArray<{ before: string; after: strin
   },
 ];
 
-/** The prompt r30 (Agent v30, serving since #56) stores: the source (= r31) minus the #59 edit. */
+/** The prompt r30 (Agent v30, served #56–#65, now the rollback) stores: the source (= r31) minus the #59 edit. */
 export const R30_SYSTEM_PROMPT = revertEdits(SOURCE_SYSTEM_PROMPT, ISSUE_59_PROMPT_EDITS, "#59");
 
 /** The #59 task-management edit (Project label step 2), exact text before → after. Synced into r31 (#64); r30 pins the source minus it (docs/99). */

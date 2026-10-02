@@ -269,8 +269,8 @@ test("#51 mechanical checks: memory write, missing question, fire, wrong project
 
 // --- I. Release boundary --------------------------------------------------------------------------------------------
 
-test("#51 release: the same unresolved r30 candidate (served as r30 since #56); #51 adds no release, Agent version, tool or pin", () => {
-  assert.equal(SERVING_RELEASE, RELEASES.r30);
+test("#51 release: the same unresolved r30 candidate (resolved as r30; r31 served since #65); #51 adds no release, Agent version, tool or pin", () => {
+  assert.equal(SERVING_RELEASE, RELEASES.r31, "#65: r31 carries r30's #51 Skill pins unchanged (asserted below)");
   // r30 exists only as #55's resolution of this same candidate; no further release follows from #51.
   assert.equal(RELEASES.r30?.id, "r30");
   // r31 (#64) is #59/#62 only: its other Skill pins are exactly r30's, so it carries nothing new of #51.

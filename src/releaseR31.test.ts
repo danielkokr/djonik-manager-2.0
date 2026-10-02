@@ -12,7 +12,7 @@ import { R30_SYSTEM_PROMPT, SOURCE_SYSTEM_PROMPT, agentVersionFixture, r30SkillS
 
 // #64 (docs/102): r31 is the remote-constructed, attested resolution of RELEASE_R31_CANDIDATE — Agent v31, two new
 // byte-verified Skill versions (#59 task-management, #62 work-review), the #59 prompt and the #62 trello_project_time tool.
-// Constructed WITHOUT a cutover: this revision still serves r30, which is also the immediate rollback.
+// Constructed WITHOUT a cutover; #65 (docs/103) made it this revision's serving release. r30 is the immediate rollback.
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const skillSource = (name: string) => readFileSync(join(repoRoot, ".claude", "skills", name, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
@@ -28,11 +28,11 @@ const explicit = (skill: ReleaseSkill) => {
   return skill.pin as Extract<ReleaseSkill["pin"], { kind: "explicit" }>;
 };
 
-test("r31 is a reviewed, attestable release but NOT the serving release; r30 serves and stays the rollback", () => {
+test("r31 is a reviewed, attestable release and the serving release of this revision (#65); r30 is the rollback", () => {
   assert.equal(RELEASES.r31, RELEASE_R31);
-  assert.equal(SERVING_RELEASE, RELEASE_R30, "#64 constructs r31 without a source cutover");
-  assert.equal(RELEASES[SERVING_RELEASE.id], RELEASE_R30, "the default `release:check` still checks r30");
-  assert.equal(RELEASES.r30, RELEASE_R30);
+  assert.equal(SERVING_RELEASE, RELEASE_R31, "#65 source cutover");
+  assert.equal(RELEASES[SERVING_RELEASE.id], RELEASE_R31, "the default `release:check` checks r31");
+  assert.equal(RELEASES.r30, RELEASE_R30, "r30 stays a reviewed rollback release");
   assert.deepEqual(RELEASE_R31.agent, { id: RELEASE_R30.agent.id, version: 31 });
   assert.equal(RELEASE_R30.agent.version, 30, "r30 stays pinned to immutable Agent v30");
   assert.equal(RELEASE_R31_CANDIDATE.agent.version, null, "the candidate stays unresolved provenance");
