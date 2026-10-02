@@ -79,11 +79,11 @@ test("built-in toolset is an allowlist: file tools for Skills and Memory only â€
   assert.doesNotMatch(block, /\b(bash|web_fetch|web_search)\b/);
 });
 
-test("source exposes exactly the r30 custom tools, each byte-for-byte the definition the client executes", async () => {
+test("source exposes exactly the r31 custom tools, each byte-for-byte the definition the client executes", async () => {
   const { SUPPORTED_CUSTOM_TOOLS, canonicalJsonSha256 } = await import("./releaseAttestation.js");
   const custom = [...frontmatter.matchAll(/^  - type: custom\n    name: (\S+)\n    description: (.+)\n    input_schema: (.+)$/gm)];
-  // #36 work history, #47 board snapshot, #50 focus budget. The dormant #54 `reminder` is not exposed.
-  assert.deepEqual(custom.map((entry) => entry[1]), ["trello_work_history", "trello_board_snapshot", "focus_budget"]);
+  // #36 work history, #47 board snapshot, #50 focus budget, #62 project time (Agent v31, #64). The dormant #54 `reminder` is not exposed.
+  assert.deepEqual(custom.map((entry) => entry[1]), ["trello_work_history", "trello_board_snapshot", "focus_budget", "trello_project_time"]);
   for (const [, name, description, schema] of custom) {
     assert.equal(JSON.parse(description), SUPPORTED_CUSTOM_TOOLS[name].description, name);
     assert.equal(canonicalJsonSha256(JSON.parse(schema)), canonicalJsonSha256(SUPPORTED_CUSTOM_TOOLS[name].input_schema), name);

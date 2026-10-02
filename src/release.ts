@@ -645,7 +645,43 @@ export const RELEASE_R31_CANDIDATE: DjonikReleaseCandidate = {
   session: RELEASE_R30.session,
 };
 
-export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_R25, r26: RELEASE_R26, r27: RELEASE_R27, r28: RELEASE_R28, r29: RELEASE_R29, r30: RELEASE_R30 };
+// --- r31 (#64 remote construction, no cutover) ---------------------------------------------------------------------
+
+/**
+ * r31 — `RELEASE_R31_CANDIDATE` with its real identifiers (#64, docs/102): Agent v31, created 2026-10-02 from v30 by ONE
+ * `buildCandidateUpdateBody` update under a `version: 30` precondition and read back exactly. Two new immutable Skill
+ * versions were created on their existing Skill identities from committed main and downloaded byte-identical
+ * (task-management `fce799a3…`, work-review `d1b2a223…`; no identical earlier version existed). The update replaced the
+ * prompt (#59, `569999b5…`), Skills and tools (+ `trello_project_time`, #62); model, roster (none), MCP servers and every
+ * other tool and policy are r30's, preserved by omission or re-sent unchanged. The two new `sessionVersion`s were read
+ * from the snapshot of zero-event inspection Session `sesn_01KBpyKTVamwzvTwtJTUk3HX` (pinned @31, Memory `read_only`,
+ * 0 events), never derived from a timestamp; the other three pins show their known r30 spellings there. Written out, not
+ * derived at import; `releaseR31.test.ts` proves it equals the resolved candidate.
+ *
+ * Constructed WITHOUT a cutover: r30 stays this revision's serving release and the immediate rollback (Agent v30).
+ */
+export const RELEASE_R31: DjonikRelease = {
+  id: "r31",
+  agent: { id: COORDINATOR_ID, version: 31 },
+  model: MODEL,
+  systemSha256: "569999b5da22d075940af44d8acbabb397c1567e418348a98194fced0a3e8859",
+  skills: [
+    { name: "task-management", skillId: "skill_01WS6JtY1GMu3rGZaKCVR9w1", pin: { kind: "explicit", version: "skver_017sbYxMKd3NoUytYFwadrgD", sessionVersion: "1790934141493830" } },
+    RELEASE_R30.skills.find((skill) => skill.name === "planning-and-focus")!,
+    RELEASE_R30.skills.find((skill) => skill.name === "studio-intake")!,
+    { name: "work-review", skillId: WORK_REVIEW_SKILL.skillId, pin: { kind: "explicit", version: "skver_0155j1qEvdXYq286L8x6vBFF", sessionVersion: "1790934146362297" } },
+    RELEASE_R30.skills.find((skill) => skill.name === "pm-rhythm")!,
+  ],
+  specialist: null,
+  builtInTools: RELEASE_R30.builtInTools,
+  customTools: ["trello_work_history", "trello_board_snapshot", "focus_budget", "trello_project_time"],
+  mcpServers: RELEASE_R30.mcpServers,
+  mcpToolsets: RELEASE_R30.mcpToolsets,
+  confirmationRequired: RELEASE_R30.confirmationRequired,
+  session: SESSION,
+};
+
+export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_R25, r26: RELEASE_R26, r27: RELEASE_R27, r28: RELEASE_R28, r29: RELEASE_R29, r30: RELEASE_R30, r31: RELEASE_R31 };
 
 /**
  * The one release this application revision serves. Changing it is the application half of a cutover
@@ -657,6 +693,7 @@ export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_
  * #55 constructed and attested r30 (Agent v30) remotely WITHOUT a cutover (docs/92). #56 flips this to `r30`
  * (docs/93): the Product Owner replaced a paid pre-deploy benchmark with manual Telegram validation after a controlled
  * deploy. The host keeps serving its deployed r29 revision until that deploy; r29 is the immediate rollback.
+ * #64 constructed and attested r31 (Agent v31) remotely WITHOUT a cutover (docs/102): this stays `r30`.
  * This is deliberately not an environment variable:
  * the reviewed revision, not host configuration, decides what is served.
  */

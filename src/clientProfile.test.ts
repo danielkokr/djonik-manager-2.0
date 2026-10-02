@@ -273,7 +273,8 @@ test("#51 release: the same unresolved r30 candidate (served as r30 since #56); 
   assert.equal(SERVING_RELEASE, RELEASES.r30);
   // r30 exists only as #55's resolution of this same candidate; no further release follows from #51.
   assert.equal(RELEASES.r30?.id, "r30");
-  assert.equal(RELEASES.r31, undefined);
+  // r31 (#64) is #59/#62 only: its other Skill pins are exactly r30's, so it carries nothing new of #51.
+  assert.deepEqual(RELEASES.r31?.skills.filter((entry) => !["task-management", "work-review"].includes(entry.name)), RELEASES.r30!.skills.filter((entry) => !["task-management", "work-review"].includes(entry.name)));
   assert.equal(RELEASE_R30_CANDIDATE.agent.version, null);
   const unresolved = RELEASE_R30_CANDIDATE.skills.filter((entry) => entry.pin.kind === "unresolved");
   assert.deepEqual(unresolved.map((entry) => entry.name).sort(), ["planning-and-focus", "pm-rhythm", "studio-intake", "task-management"]);

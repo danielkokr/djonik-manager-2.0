@@ -68,7 +68,7 @@ const R30_TEST_PINS = Object.fromEntries(["planning-and-focus", "pm-rhythm", "ta
 /** Test-only resolution of the candidate: invented ids never leave this file (the real r30 has no Agent version yet). */
 const resolvedR30 = () => resolveReleaseCandidate(RELEASE_R30_CANDIDATE, { skills: R30_TEST_PINS, agentVersion: 30 });
 
-test("#44 topology: r25–r29 pin specialist v4 unchanged; the r30 candidate has no specialist; no r31; r30 serves (#56)", () => {
+test("#44 topology: r25–r29 pin specialist v4 unchanged; the r30 candidate has no specialist; r31 is attestable, r30 serves (#56)", () => {
   for (const release of [RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28, RELEASE_R29]) {
     assert.deepEqual(release.specialist, {
       id: PROJECT_HEALTH_SPECIALIST_AGENT_ID,
@@ -79,8 +79,9 @@ test("#44 topology: r25–r29 pin specialist v4 unchanged; the r30 candidate has
   assert.equal(RELEASE_R30_CANDIDATE.specialist, null, "absence is explicit, not a missing field");
   assert.ok("specialist" in RELEASE_R30_CANDIDATE);
   assert.equal(RELEASE_R30_CANDIDATE.agent.version, null, "the candidate never carries an Agent version; RELEASE_R30 does (#55)");
-  assert.deepEqual(Object.keys(RELEASES), ["r25", "r26", "r27", "r28", "r29", "r30"], "r30 is attestable (#55); no r31");
+  assert.deepEqual(Object.keys(RELEASES), ["r25", "r26", "r27", "r28", "r29", "r30", "r31"], "r30 is attestable (#55); r31 too (#64), not served");
   assert.equal(RELEASE_R30.specialist, null);
+  assert.equal(RELEASES.r31!.specialist, null, "r31 keeps the coordinator-only topology");
   assert.equal(SERVING_RELEASE, RELEASE_R30);
   assert.equal(SERVING_RELEASE.specialist, null, "the served topology is coordinator-only");
   assert.equal(RELEASE_R30_CANDIDATE.model, RELEASE_R29.model, "#44 changes neither model nor effort");

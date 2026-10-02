@@ -41,7 +41,7 @@ function revertEdits(prompt: string, edits: ReadonlyArray<{ before: string; afte
 }
 
 /** The #59 coordinator-prompt edit (project names resolve through the brief before any Trello use), exact text
- *  before → after, applied on top of r30. Source only: no Agent version carries it yet, so r30 (Agent v30, serving)
+ *  before → after, applied on top of r30. Synced into Agent v31 (r31, #64, docs/102); r30 (Agent v30, still serving)
  *  stores the source minus this edit (docs/99). */
 export const ISSUE_59_PROMPT_EDITS: ReadonlyArray<{ before: string; after: string }> = [
   {
@@ -56,10 +56,10 @@ export const ISSUE_59_PROMPT_EDITS: ReadonlyArray<{ before: string; after: strin
   },
 ];
 
-/** The prompt r30 (Agent v30, serving since #56) stores: the source minus the unsynced #59 edit. */
+/** The prompt r30 (Agent v30, serving since #56) stores: the source (= r31) minus the #59 edit. */
 export const R30_SYSTEM_PROMPT = revertEdits(SOURCE_SYSTEM_PROMPT, ISSUE_59_PROMPT_EDITS, "#59");
 
-/** The #59 task-management edit (Project label step 2), exact text before → after. Source only (docs/99). */
+/** The #59 task-management edit (Project label step 2), exact text before → after. Synced into r31 (#64); r30 pins the source minus it (docs/99). */
 export const ISSUE_59_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ before: string; after: string }>>> = {
   "task-management": [
     {
@@ -74,8 +74,8 @@ export const ISSUE_59_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ befor
   ],
 };
 
-/** The #62 work-review edit (time questions go to `trello_project_time`), exact text before → after. Source only
- *  (docs/100): r30 pins work-review at its r29 version, whose bytes are the source minus this edit. */
+/** The #62 work-review edit (time questions go to `trello_project_time`), exact text before → after. Synced into
+ *  r31 (#64); r30 pins work-review at its r29 version, whose bytes are the source minus this edit (docs/100). */
 export const ISSUE_62_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ before: string; after: string }>>> = {
   "work-review": [
     {
@@ -88,7 +88,7 @@ export const ISSUE_62_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ befor
   ],
 };
 
-/** A Skill's committed source as its r30 pin stores it: the repo source minus any unsynced #59/#62 edit. */
+/** A Skill's committed source as its r30 pin stores it: the repo source (= the r31 pin) minus any #59/#62 edit. */
 export function r30SkillSource(name: string): string {
   const source = readFileSync(join(repoRoot, ".claude", "skills", name, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
   return revertEdits(revertEdits(source, ISSUE_62_SKILL_EDITS[name] ?? [], `#62 ${name}`), ISSUE_59_SKILL_EDITS[name] ?? [], `#59 ${name}`);

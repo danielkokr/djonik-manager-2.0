@@ -9,7 +9,7 @@ import { fakeGrader } from "./pmGrader.js";
 import { S49_RHYTHM, labelsForScenario, memoriesForScenario } from "./pmFixture.js";
 import { resolveProjectName } from "./projectIdentityOracle.js";
 import { parseRhythmConfig } from "./rhythmConfig.js";
-import { RELEASE_R30, RELEASE_R31_CANDIDATE, RELEASES, SERVING_RELEASE, UnresolvedReleaseCandidateError } from "./release.js";
+import { RELEASE_R30, RELEASE_R31, RELEASE_R31_CANDIDATE, RELEASES, SERVING_RELEASE, UnresolvedReleaseCandidateError } from "./release.js";
 import { buildCandidateUpdateBody } from "./releasePlan.js";
 import { SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
 import { ISSUE_62_SKILL_EDITS, SOURCE_SYSTEM_PROMPT, r30SkillSource } from "./releaseFixtures.test-helpers.js";
@@ -108,12 +108,12 @@ test("work-review routes time questions to the tool; its accepted #36 contract i
   assert.doesNotMatch(SOURCE_SYSTEM_PROMPT, /trello_project_time/);
 });
 
-test("release: the tool exists only on the unresolved r31 candidate; r30 stays immutable and serving", () => {
+test("release: the tool exists only on the r31 candidate and its #64 resolution r31 (not served); r30 stays immutable and serving", () => {
   assert.equal(SERVING_RELEASE, RELEASE_R30);
   assert.deepEqual(RELEASE_R30.customTools, ["trello_work_history", "trello_board_snapshot", "focus_budget"]);
-  for (const release of Object.values(RELEASES)) assert.ok(!release.customTools.includes("trello_project_time"), release.id);
+  assert.deepEqual(Object.values(RELEASES).filter((release) => release.customTools.includes("trello_project_time")).map((release) => release.id), ["r31"]);
   assert.ok(!Object.values(RELEASES).includes(RELEASE_R31_CANDIDATE as never));
-  assert.equal(RELEASES.r31, undefined);
+  assert.equal(RELEASES.r31, RELEASE_R31, "#64 resolved the candidate remotely (Agent v31) without a cutover");
   assert.equal(RELEASE_R31_CANDIDATE.agent.fromVersion, 30);
   assert.equal(RELEASE_R31_CANDIDATE.agent.version, null, "no invented Agent version");
   assert.deepEqual(RELEASE_R31_CANDIDATE.customTools, ["trello_work_history", "trello_board_snapshot", "focus_budget", "trello_project_time"]);
@@ -143,8 +143,8 @@ test("release: the tool exists only on the unresolved r31 candidate; r30 stays i
   const time = custom.find((tool) => tool.name === "trello_project_time")!;
   assert.equal(time.description, SUPPORTED_CUSTOM_TOOLS.trello_project_time.description);
   assert.deepEqual(time.input_schema, SUPPORTED_CUSTOM_TOOLS.trello_project_time.input_schema);
-  // The Agent source file still describes the serving r30 (no remote sync happened).
-  assert.doesNotMatch(read("managed-agents", "djonik.md"), /trello_project_time/);
+  // #64: the Agent source file declares Agent v31 (r31), which exposes the tool; serving stays r30.
+  assert.match(read("managed-agents", "djonik.md"), /\n    name: trello_project_time\n/);
 });
 
 test("no second time algorithm: the allocation exists once, and no Skill or prompt carries time arithmetic", () => {
