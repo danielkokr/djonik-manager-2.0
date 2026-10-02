@@ -74,10 +74,24 @@ export const ISSUE_59_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ befor
   ],
 };
 
-/** A Skill's committed source as its r30 pin stores it: the repo source minus any unsynced #59 edit. */
+/** The #62 work-review edit (time questions go to `trello_project_time`), exact text before → after. Source only
+ *  (docs/100): r30 pins work-review at its r29 version, whose bytes are the source minus this edit. */
+export const ISSUE_62_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ before: string; after: string }>>> = {
+  "work-review": [
+    {
+      before: "It is read-only and Trello's action log is the source of truth for those events.\n\n",
+      after:
+        "It is read-only and Trello's action log is the source of truth for those events.\n\n" +
+        "How much time or how many hours went into a project is not a review: call `trello_project_time` with the project's " +
+        "current label instead. Its result is final, `unavailable` included — never use this tool's moves to estimate effort.\n\n",
+    },
+  ],
+};
+
+/** A Skill's committed source as its r30 pin stores it: the repo source minus any unsynced #59/#62 edit. */
 export function r30SkillSource(name: string): string {
   const source = readFileSync(join(repoRoot, ".claude", "skills", name, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
-  return revertEdits(source, ISSUE_59_SKILL_EDITS[name] ?? [], `#59 ${name}`);
+  return revertEdits(revertEdits(source, ISSUE_62_SKILL_EDITS[name] ?? [], `#62 ${name}`), ISSUE_59_SKILL_EDITS[name] ?? [], `#59 ${name}`);
 }
 
 /** The prompt r29 (Agent v29, the rollback since #56) stores: the r30 prompt minus the #44 edit. */

@@ -4,7 +4,9 @@ import { pathToFileURL } from "node:url";
 import { connectToDjonik, type DjonikCustomToolExecutor, type DjonikTurnTelemetry } from "./djonikClient.js";
 import { executeTrelloBoardSnapshot } from "./trelloBoardSnapshot.js";
 import { executeTrelloWorkHistory, TrelloWorkHistoryClient } from "./trelloWorkHistory.js";
-import { EVAL_BOARD_NAME, resetEvalFixture, resetEvalMemory } from "./pmFixture.js";
+import { EVAL_BOARD_NAME, memoriesForScenario, resetEvalFixture, resetEvalMemory } from "./pmFixture.js";
+import { createProjectTimeExecutor } from "./projectTimeTool.js";
+import { parseRhythmConfig } from "./rhythmConfig.js";
 import { TrelloEvalBoardDriver } from "./pmTrelloFixture.js";
 import { makeReport, renderSummary, renderTable, runBenchmark, type BenchmarkMode, type CandidateFactory } from "./pmBenchmark.js";
 import { fakeGrader } from "./pmGrader.js";
@@ -91,10 +93,15 @@ async function main(): Promise<void> {
     // earlier read-only scenarios keep their original fixture semantics.
     const memoryAccess = Number(scenario.id.slice(1)) >= 31 ? "read_write" : "read_only";
     let telemetry: DjonikTurnTelemetry | undefined;
+    // #62: the eval executor reads the scenario's /rhythm.md from the same fixture text the eval Memory store was reset to
+    // (no second Memory API path), and the dedicated eval board through the GET-only reader.
+    const projectTime = createProjectTimeExecutor({ reader: evalReader, now: () => new Date(fixedClock),
+      readConfig: async () => parseRhythmConfig(memoriesForScenario(scenario)["/rhythm.md"] ?? null).config });
     const evalCustomTools: DjonikCustomToolExecutor = async (toolInput, context) =>
       context.name === "trello_board_snapshot" ? executeTrelloBoardSnapshot(toolInput, evalReader, new Date(fixedClock))
         : context.name === "trello_work_history" ? executeTrelloWorkHistory(toolInput, evalReader, new Date(fixedClock))
-          : { isError: true, content: JSON.stringify({ error: { message: "This custom tool is unavailable in the eval Session." } }) };
+          : context.name === "trello_project_time" ? projectTime(toolInput)
+            : { isError: true, content: JSON.stringify({ error: { message: "This custom tool is unavailable in the eval Session." } }) };
     const connection = await connectToDjonik(client,
       agentId, environmentId, memoryStore, vaultId,
       undefined, (record) => {

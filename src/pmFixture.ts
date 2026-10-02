@@ -32,7 +32,9 @@ export const EVAL_CARDS: readonly EvalCard[] = [
  * the briefs. An older unused «Azov» label may remain on the dedicated eval board from other scenarios; it is not a name
  * the brief records, so the contract still selects «A1» (a near-miss distractor, never a second match).
  */
-export const PROJECT_ALIAS_SCENARIOS = ["S42", "S43", "S44", "S45", "S46", "S47"];
+export const PROJECT_ALIAS_SCENARIOS = ["S42", "S43", "S44", "S45", "S46", "S47", "S48", "S49"];
+/** #62 S49: Daniel's configured working day. S48 has no `/rhythm.md` at all — the production 2026-10-01 case. */
+export const S49_RHYTHM = "work_hours: 10:00-18:00\n";
 const isAliasScenario = (scenario: Scenario) => PROJECT_ALIAS_SCENARIOS.includes(scenario.id);
 export function labelsForScenario(scenario: Scenario): EvalCard["project"][] {
   return isAliasScenario(scenario) ? ["Seqthera", "Extract", "A1", "Limen", "Cossack Labs"] : ["Seqthera", "Extract", "Azov", "Limen", "Cossack Labs"];
@@ -139,6 +141,7 @@ export function memoriesForScenario(scenario: Scenario): Record<string, string> 
     // #59: the approved #17 brief excerpts carry each project's title and Aliases line; nothing else changes.
     for (const [slug, brief] of Object.entries(ISSUE_17_BRIEF_EXCERPTS)) memories[`/projects/${slug}.md`] = brief;
     if (scenario.id === "S47") memories["/projects/azov-fund.md"] = S47_SECOND_AZOV_BRIEF;
+    if (scenario.id === "S49") memories["/rhythm.md"] = S49_RHYTHM;
   }
   if (scenario.id === "S6") {
     memories["/commitments/extract.md"] = "Eval fixture only. Accepted external commitment: send Extract packaging review on Monday 28 September 2026. Daniel now says not to touch Extract today.";

@@ -19,6 +19,9 @@ export interface DecisionTrace {
   /** #59: each `trello_work_history` scope as `board` or `project:<SHA-256 of the label>` — which label the tool got,
    *  never its text. Present only when such a call was observed. */
   historyScopes?: string[];
+  /** #62: each `trello_project_time` label as `project:<SHA-256 of the label>` (same digest as `historyScopes`), never
+   *  its text. Present only when such a call was observed. */
+  projectTimeScopes?: string[];
 }
 
 /** #59: the content-free trace form of a project label (trimmed, as the tool itself compares it). */
@@ -74,6 +77,11 @@ export class DecisionTraceCollector {
 
   custom(name: string, input?: unknown): void {
     addUnique(this.value.toolNames, `custom:${name}`);
+    if (name === "trello_project_time" && input && typeof input === "object") {
+      const label = (input as { project_label?: unknown }).project_label;
+      if (typeof label === "string" && label.trim()) addUnique(this.value.projectTimeScopes ??= [], historyScopeDigest(label));
+      return;
+    }
     if (name !== "trello_work_history" || !input || typeof input !== "object") return;
     const scope = (input as { scope?: { kind?: unknown; label?: unknown } }).scope;
     const value = scope?.kind === "board" ? "board"

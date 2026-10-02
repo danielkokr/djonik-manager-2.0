@@ -175,7 +175,7 @@ test("Friday review: work-history facts → deterministic time block → Claude'
   const commentary = "⏸ Не рухалось: сайт Limen.\n💭 Azov — 20 год, це забагато.";
   const h = harness({
     now: FRIDAY_REVIEW, state: fridayState(),
-    weeklyTime: async () => ({ status: "ok", block: BLOCK, allocation: { totals: [], countedMs: 0, unionMs: 0, parallelMs: 0, cappedDays: 0, rough: false } }),
+    weeklyTime: async () => ({ status: "ok", block: BLOCK, allocation: { totals: [], cards: [], countedMs: 0, unionMs: 0, parallelMs: 0, cappedDays: 0, rough: false } }),
     reply: () => ({ reply: `${HISTORY}\n\n---\nPM-висновок:\n${commentary}`, workHistoryAnswerText: HISTORY, toolUses: [{ kind: "custom", name: "trello_work_history" }] }),
   });
   await createRhythmScheduler(h.deps).tick();
@@ -198,7 +198,7 @@ test("Friday review: an unavailable report is said honestly by code; no reporter
 });
 
 test("Friday review: a blocked autonomous write sends only the fixed notice (no time block, no model text)", async () => {
-  const h = harness({ now: FRIDAY_REVIEW, state: fridayState(), weeklyTime: async () => ({ status: "ok", block: BLOCK, allocation: { totals: [], countedMs: 0, unionMs: 0, parallelMs: 0, cappedDays: 0, rough: false } }),
+  const h = harness({ now: FRIDAY_REVIEW, state: fridayState(), weeklyTime: async () => ({ status: "ok", block: BLOCK, allocation: { totals: [], cards: [], countedMs: 0, unionMs: 0, parallelMs: 0, cappedDays: 0, rough: false } }),
     reply: () => ({ reply: "Переніс картки.", toolUses: [{ kind: "mcp", name: "trelloWriteCard" }] }) });
   await createRhythmScheduler(h.deps).tick();
   assert.equal(h.sends[0].text, AUTONOMOUS_WRITE_NOTICE);

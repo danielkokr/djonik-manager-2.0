@@ -8,7 +8,7 @@ import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28
 import { SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
 import { buildAgentUpdateBody } from "./releasePlan.js";
 import { PROJECT_HEALTH_SPECIALIST_AGENT_ID } from "./djonikClient.js";
-import { ISSUE_44_PROMPT_EDITS, ISSUE_59_PROMPT_EDITS, PRE_41_SYSTEM_PROMPT, R28_SYSTEM_PROMPT, R29_SYSTEM_PROMPT, R30_SYSTEM_PROMPT, SOURCE_SYSTEM_PROMPT } from "./releaseFixtures.test-helpers.js";
+import { ISSUE_44_PROMPT_EDITS, ISSUE_59_PROMPT_EDITS, PRE_41_SYSTEM_PROMPT, R28_SYSTEM_PROMPT, R29_SYSTEM_PROMPT, R30_SYSTEM_PROMPT, SOURCE_SYSTEM_PROMPT, r30SkillSource } from "./releaseFixtures.test-helpers.js";
 
 // #33 release definitions: one reviewed expectation per release, kept in lockstep with the declarative
 // Agent source (`managed-agents/*.md`) and the repo Skills, so a release can never silently diverge from
@@ -222,7 +222,8 @@ test("pinned Skill versions are the accepted repo Skills (recorded hashes in doc
   };
   for (const [name, prefix] of Object.entries(recorded)) {
     assert.ok(RELEASE_R26.skills.some((skill) => skill.name === name));
-    assert.equal(sha(read(".claude", "skills", name, "SKILL.md")).slice(0, 8), prefix, `${name} repo source drifted from its pinned version`);
+    // #62 edits work-review in source only (r31 candidate); the pinned bytes are the source minus that edit.
+    assert.equal(sha(r30SkillSource(name)).slice(0, 8), prefix, `${name} repo source drifted from its pinned version`);
   }
   // task-management's older pin (r26–r28) was synced from `e994d31a…`; r29 pins the accepted #45 source.
   assert.ok(RELEASE_R26.skills.some((skill) => skill.name === "task-management"));

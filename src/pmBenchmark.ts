@@ -7,7 +7,7 @@ import type { Signal } from "./rhythmSignals.js";
 export const BENCHMARK_REVISION = "pm-quality-5";
 export const FIXTURE_REVISION = "djonik-eval-1";
 export const FIXED_CLOCK = "2026-09-28T09:00:00.000Z";
-export const CRITICAL_IDS = ["S2", "S4", "S5", "S11", "S14", "S15", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28", "S29", "S30", "S31", "S32", "S33", "S34", "S35", "S36", "S37", "S38", "S39", "S40", "S41", "S42", "S43", "S44", "S45", "S46", "S47"] as const;
+export const CRITICAL_IDS = ["S2", "S4", "S5", "S11", "S14", "S15", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28", "S29", "S30", "S31", "S32", "S33", "S34", "S35", "S36", "S37", "S38", "S39", "S40", "S41", "S42", "S43", "S44", "S45", "S46", "S47", "S48", "S49"] as const;
 export type ScenarioId = `S${number}`;
 export type Check = "one_main" | "no_duration" | "no_date" | "no_missing_due_inference" | "only_seqthera" | "verified_write" | "zero_write" | "silent" | "non_silent" | "concise"
   /** #50: exact SILENT, or one short message (≤ 4 non-empty lines). */
@@ -29,6 +29,13 @@ export type Check = "one_main" | "no_duration" | "no_date" | "no_missing_due_inf
   | "history_scope"
   /** #59: a recorded alias is resolved, not confirmed back — no «ти мав на увазі A1?»-style question. */
   | "no_alias_question"
+  /** #62: every `trello_project_time` call in the scored turn gets exactly `expectedTimeLabel` (content-free digest);
+   *  none at all fails — the deterministic time tool, not model reasoning, must answer a time question. */
+  | "time_scope"
+  /** #62: `trello_work_history` is not used in a time question (no effort estimate from raw moves). */
+  | "no_history_effort"
+  /** #62: the reply leads with the code-owned time answer for `expectedTimeLabel` (total or unavailable sentence). */
+  | "time_relay"
   | "remember_offer" | "no_remember_offer" | "no_second_remember_offer" | "working_style_only" | "no_preferences_write"
   | "style_review" | "no_style_review";
 export interface Scenario {
@@ -47,6 +54,8 @@ export interface Scenario {
   expectedProject?: readonly string[];
   /** #59: the current Trello label the known project word must reach the work-history tool as. */
   expectedHistoryLabel?: string;
+  /** #62: the canonical current label the time question must reach `trello_project_time` as (after #59 resolution). */
+  expectedTimeLabel?: string;
   /** Optional scenario clock for rhythm turns; earlier scenarios retain FIXED_CLOCK. */
   fixedClock?: string;
   /** #52: checks on the first turn of a multi-turn approval/rejection scenario. */
@@ -201,6 +210,15 @@ export const SCENARIOS: readonly Scenario[] = [
     checks: ["asks_question", "zero_write", "no_memory_write"], evidence: base, passTarget: "pass^3", rubricFocus: ["decision", "evidence"] },
   { id: "S47", title: "A word recorded in two briefs stays ambiguous: one question, zero write", turns: ["Створи задачу по Азову: банер на збір."],
     checks: ["asks_question", "zero_write", "no_memory_write"], evidence: base, passTarget: "pass^3", rubricFocus: ["decision", "evidence"] },
+  // #62: a time question about a project. #59 resolves «Азов» → A1 through the brief; the deterministic
+  // `trello_project_time` tool answers with code-owned numbers, never `trello_work_history` narrated as effort.
+  // S48 has no work_hours in /rhythm.md (the production 2026-10-01 case); S49 has them.
+  { id: "S48", title: "Time on an aliased project without work_hours: one compact unavailable answer, no raw history", turns: ["Скільки часу цього тижня я витратив на Азов?"],
+    checks: ["time_scope", "no_history_effort", "time_relay", "no_hours_restated", "no_alias_question", "zero_write", "no_memory_write", "concise"], evidence: base,
+    passTarget: "pass^3", rubricFocus: ["evidence", "usefulness"], expectedTimeLabel: "A1" },
+  { id: "S49", title: "Time on an aliased project with work_hours: the code-owned total and per-card breakdown", turns: ["Скільки часу цього тижня я витратив на Азов?"],
+    checks: ["time_scope", "no_history_effort", "time_relay", "no_alias_question", "zero_write", "no_memory_write", "concise"], evidence: base,
+    passTarget: "pass^3", rubricFocus: ["evidence", "usefulness"], expectedTimeLabel: "A1" },
 ];
 
 export type BenchmarkMode = "full" | "critical" | ScenarioId;
@@ -261,6 +279,16 @@ function checks(scenario: Scenario, turn: CandidateTurn, findings: ClaimFinding[
       const scopes = turn.trace.historyScopes ?? [];
       const expected = scenario.expectedHistoryLabel === undefined ? null : historyScopeDigest(scenario.expectedHistoryLabel);
       if (expected === null || scopes.length === 0 || scopes.some((scope) => scope !== expected)) failed.push(check);
+    }
+    if (check === "time_scope") {
+      const scopes = turn.trace.projectTimeScopes ?? [];
+      const expected = scenario.expectedTimeLabel === undefined ? null : historyScopeDigest(scenario.expectedTimeLabel);
+      if (expected === null || scopes.length === 0 || scopes.some((scope) => scope !== expected)) failed.push(check);
+    }
+    if (check === "no_history_effort" && turn.trace.toolNames.includes("custom:trello_work_history")) failed.push(check);
+    if (check === "time_relay") {
+      const label = scenario.expectedTimeLabel;
+      if (label === undefined || !(reply.startsWith(`${label} — `) || reply.startsWith(`Час по ${label} `))) failed.push(check);
     }
     if (check === "no_alias_question" && /(?:мав|маєш|мали|маєте)\s+на\s+увазі|(?:^|[\s(«"])A1\s*[?？]/iu.test(reply)) failed.push(check);
     if (check === "only_seqthera" && /(?:займись|роби|візьми|почни|працюй\s+над)\s+(?:Extract|Limen|Azov|Азов|Cossack Labs)\b/iu.test(reply)) failed.push(check);

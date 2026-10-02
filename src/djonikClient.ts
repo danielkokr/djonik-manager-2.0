@@ -37,6 +37,7 @@ import { executeTrelloBoardSnapshotFromEnvironment } from "./trelloBoardSnapshot
 import { CustomToolResolution } from "./customToolResolution.js";
 import { isReadOnlyReminderInput, REMINDER_TOOL_NAME, reminderConfirmationOf } from "./reminderTool.js";
 import { FOCUS_BUDGET_TOOL_NAME } from "./focusBudgetTool.js";
+import { PROJECT_TIME_TOOL_NAME } from "./projectTimeTool.js";
 import { ToolConfirmationLifecycle, type ConfirmationRecord, type ConfirmationRequest } from "./toolConfirmation.js";
 import { mutationAuthorityFor, type MutationAuthority, type TurnOrigin } from "./turnAuthority.js";
 import { buildClockHeader } from "./turnClock.js";
@@ -60,8 +61,9 @@ const BOARD_SNAPSHOT_TOOL = "trello_board_snapshot";
 /** The custom tools this client settles. `reminder` (#54) is side-effecting; it meets the docs/01 §13 admission
  *  rule itself: its executor keys a durable outcome record on the `custom_tool_use_id` in the same atomic write as
  *  the mutation, verifies the result by a fresh read, and refuses mutations without human authority. `focus_budget`
- *  (#50) follows the same rule for its code-owned focus budget. */
-export const SUPPORTED_CLIENT_CUSTOM_TOOLS = [WORK_HISTORY_TOOL, BOARD_SNAPSHOT_TOOL, REMINDER_TOOL_NAME, FOCUS_BUDGET_TOOL_NAME] as const;
+ *  (#50) follows the same rule for its code-owned focus budget. `trello_project_time` (#62) is read-only like the two
+ *  Trello reads: GET-only Trello plus the existing `/rhythm.md` reader, no write. */
+export const SUPPORTED_CLIENT_CUSTOM_TOOLS = [WORK_HISTORY_TOOL, BOARD_SNAPSHOT_TOOL, REMINDER_TOOL_NAME, FOCUS_BUDGET_TOOL_NAME, PROJECT_TIME_TOOL_NAME] as const;
 
 /** What a custom-tool executor learns about the call besides its input (#54). */
 export interface CustomToolCallContext {
@@ -499,7 +501,13 @@ export type DjonikTraceEvent =
   /** Content-free (#36): this turn engaged `trello_work_history` but no single successful, correlated
    *  result with a usable `answer_text` could be established, so no exact relay was composed — the
    *  coordinator's own reply (which may explain the failure itself) is used unchanged. */
-  | { type: "work_history_relay_skipped" };
+  | { type: "work_history_relay_skipped" }
+  /** Content-free (#62): this turn's one verified `trello_project_time` `answer_text` leads the visible reply (after a
+   *  verified work-history block, if any). `mode` says what happened to the model's own text. */
+  | { type: "project_time_relay_composed"; mode: ProjectTimeCompositionMode }
+  /** Content-free (#62): `trello_project_time` was engaged but no single accepted result with a usable `answer_text`
+   *  exists, so nothing was relayed and the coordinator's reply is used unchanged. */
+  | { type: "project_time_relay_skipped" };
 
 /**
  * Session-specific guidance shown to the agent alongside the memory store's
@@ -1007,6 +1015,28 @@ export function composeWorkHistoryReply(commentary: string, answerText: string):
 }
 
 /**
+ * Issue #62: the same provenance boundary for the read-only `trello_project_time` tool. Its `answer_text` (project
+ * total, per-card lines, or the unavailable sentence) is code-computed and leads the reply byte for byte, so no model
+ * wording can change a number in it. The model's own text may follow — but a model-only text that states an hour
+ * quantity of its own is withheld: in a time answer such a figure can only restate or recompute the code's numbers
+ * (number drift). Code-owned text in the commentary (a verified write, a reminder or focus confirmation) is never
+ * withheld: the caller passes `modelOnly: false` whenever the turn produced any.
+ */
+export type ProjectTimeCompositionMode = "answer_only" | "with_commentary" | "commentary_withheld";
+
+const HOUR_QUANTITY = /\d+(?:[.,]\d+)?\s*(?:год|h\b)/iu;
+
+export function composeProjectTimeReply(
+  commentary: string,
+  answerText: string,
+  options: { modelOnly: boolean },
+): { text: string; mode: ProjectTimeCompositionMode } {
+  if (commentary.trim().length === 0) return { text: answerText, mode: "answer_only" };
+  if (options.modelOnly && HOUR_QUANTITY.test(commentary)) return { text: answerText, mode: "commentary_withheld" };
+  return { text: `${answerText}\n\n${commentary.trim()}`, mode: "with_commentary" };
+}
+
+/**
  * Issue #54: the code-resolved confirmation of a reminder change. The model is asked to quote the tool's
  * `confirmation` line; if its reply already contains every line verbatim nothing changes, otherwise the missing
  * lines lead the reply, so the date/time Daniel sees is always the one code stored — never a re-computed one.
@@ -1024,7 +1054,7 @@ export function composeReminderConfirmations(reply: string, lines: readonly stri
  * `answer_text` — the caller treats that exactly like an unsuccessful result, so a malformed payload
  * can never be substituted as the authoritative factual block (#36 §H12).
  */
-function extractWorkHistoryAnswerText(content: string): string | null {
+function extractAnswerText(content: string): string | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(content);
@@ -1061,6 +1091,11 @@ const FOCUS_BUDGET_UNAVAILABLE = JSON.stringify({
   error: { code: "unavailable", message: "Focus budgets are unavailable in this process; nothing was saved. Tell Daniel the timer is not set." },
 });
 
+const PROJECT_TIME_UNAVAILABLE = JSON.stringify({
+  ok: false,
+  error: { code: "unavailable", message: "Project time is unavailable in this process; nothing was counted. Do not estimate hours." },
+});
+
 /** A side-effecting executor bound by the serving adapter; it receives the call's id and observed authority. */
 export type SideEffectingToolExecutor = (input: unknown, context: { toolUseId: string; authority: MutationAuthority }) => Promise<CustomToolExecutionResult>;
 
@@ -1077,6 +1112,8 @@ export function createCustomToolRouter(
     /** Test seams; production uses the environment-backed read-only executors. */
     workHistory?: (input: unknown) => Promise<CustomToolExecutionResult>;
     boardSnapshot?: (input: unknown) => Promise<CustomToolExecutionResult>;
+    /** #62 read-only project time; it needs the serving `/rhythm.md` source, so the adapter binds it (no env default). */
+    projectTime?: (input: unknown) => Promise<CustomToolExecutionResult>;
   } = {},
 ): DjonikCustomToolExecutor {
   const workHistory = bound.workHistory ?? executeTrelloWorkHistoryFromEnvironment;
@@ -1092,6 +1129,8 @@ export function createCustomToolRouter(
         return bound.reminder ? bound.reminder(input, call) : { isError: true, content: REMINDERS_UNAVAILABLE };
       case FOCUS_BUDGET_TOOL_NAME:
         return bound.focusBudget ? bound.focusBudget(input, call) : { isError: true, content: FOCUS_BUDGET_UNAVAILABLE };
+      case PROJECT_TIME_TOOL_NAME:
+        return bound.projectTime ? bound.projectTime(input) : { isError: true, content: PROJECT_TIME_UNAVAILABLE };
       default:
         return { isError: true, content: JSON.stringify({ ok: false, error: { code: "unknown_tool", message: "This custom tool is not executable by this application; nothing was done." } }) };
     }
@@ -1321,7 +1360,13 @@ export async function connectToDjonik(
    *  ids (even byte-identical), an error or malformed result, a result never accepted — is `unverified`:
    *  never guessed between, and the coordinator's own reply is used exactly as before. */
   function workHistoryVerdict(): WorkHistoryVerdict {
-    const ids = turnCustomToolUseIds.filter((id) => customTools.name(id) === WORK_HISTORY_TOOL);
+    return exactRelayVerdict(WORK_HISTORY_TOOL);
+  }
+
+  /** #62: the same single-unambiguous-call rule for `trello_project_time`, one tool at a time — never a generic
+   *  "every custom-tool result is an exact reply" path. */
+  function exactRelayVerdict(toolName: typeof WORK_HISTORY_TOOL | typeof PROJECT_TIME_TOOL_NAME): WorkHistoryVerdict {
+    const ids = turnCustomToolUseIds.filter((id) => customTools.name(id) === toolName);
     if (ids.length === 0) return { status: "none" };
     if (ids.length > 1) return { status: "unverified" };
     const [id] = ids;
@@ -1330,7 +1375,7 @@ export async function connectToDjonik(
     if (result === undefined || result.isError || (state !== "SUBMITTED" && state !== "RESOLVED")) {
       return { status: "unverified" };
     }
-    const answerText = extractWorkHistoryAnswerText(result.content);
+    const answerText = extractAnswerText(result.content);
     return answerText === null ? { status: "unverified" } : { status: "verified", answerText };
   }
 
@@ -1519,7 +1564,7 @@ export async function connectToDjonik(
           if (!customToolAuthority.has(event.id)) customToolAuthority.set(event.id, turnAuthority);
           if (!turnCustomToolUseIds.includes(event.id)) turnCustomToolUseIds.push(event.id);
           turnToolUses.push(
-            event.name === BOARD_SNAPSHOT_TOOL ||
+            event.name === BOARD_SNAPSHOT_TOOL || event.name === PROJECT_TIME_TOOL_NAME ||
               (event.name === REMINDER_TOOL_NAME && isReadOnlyReminderInput(event.input))
               ? { kind: "custom", name: event.name, readOnly: true }
               : { kind: "custom", name: event.name },
@@ -1625,12 +1670,15 @@ export async function connectToDjonik(
           // #36: a verified trello_work_history result is likewise a complete answer on its own —
           // the coordinator may legitimately have nothing to add after it.
           const workHistoryVerified = workHistoryVerdict().status === "verified";
+          // #62: so is a verified project-time result (its answer_text is the whole answer to "скільки часу?").
+          const projectTimeVerified = exactRelayVerdict(PROJECT_TIME_TOOL_NAME).status === "verified";
           // #54: so is a successful reminder change — its code-resolved confirmation is the answer.
           const reminderConfirmed = codeConfirmations().length > 0 || codeConfirmations(FOCUS_BUDGET_TOOL_NAME).length > 0;
           if (
             !reply &&
             idleVerdict !== "unverified" &&
             !workHistoryVerified &&
+            !projectTimeVerified &&
             !reminderConfirmed &&
             (idleVerdict !== "verified" || ledger.outcomes().length > 0)
           ) {
@@ -1850,14 +1898,29 @@ export async function connectToDjonik(
       // always leads the visible reply, unconditionally. Everything else this turn produced — a PH
       // relay/withhold notice, a mutation report, or plain coordinator prose — becomes the commentary
       // that follows the fixed separator (#32C mixed-intent: never suppressed, only relocated).
+      // Issue #62: a verified `trello_project_time` result is likewise code-owned and leads the reply (right after a
+      // verified work-history block when the turn has both). A model-only hour figure after it is withheld.
+      const projectTime = exactRelayVerdict(PROJECT_TIME_TOOL_NAME);
+      if (projectTime.status === "unverified") onTrace?.({ type: "project_time_relay_skipped" });
+      let factualLead: string | null = null;
+      if (projectTime.status === "verified") {
+        const modelOnly = specialistText === null && outcomes.length === 0 && reminderLines.length === 0 && focusLines.length === 0;
+        const composedTime = composeProjectTimeReply(commentary, projectTime.answerText, { modelOnly });
+        onTrace?.({ type: "project_time_relay_composed", mode: composedTime.mode });
+        factualLead = projectTime.answerText;
+        commentary = composedTime.mode === "with_commentary" ? commentary.trim() : "";
+      }
+
       const workHistory = workHistoryVerdict();
       if (workHistory.status === "unverified") onTrace?.({ type: "work_history_relay_skipped" });
       if (workHistory.status === "verified") {
-        const composedHistory = composeWorkHistoryReply(commentary, workHistory.answerText);
+        const lead = factualLead === null ? workHistory.answerText : `${workHistory.answerText}\n\n${factualLead}`;
+        const composedHistory = composeWorkHistoryReply(commentary, lead);
         onTrace?.({ type: "work_history_relay_composed", mode: composedHistory.mode });
         turnWorkHistoryAnswer = workHistory.answerText;
         return composedHistory.text;
       }
+      if (factualLead !== null) return commentary.length === 0 ? factualLead : `${factualLead}\n\n${commentary}`;
 
       return commentary;
     } finally {

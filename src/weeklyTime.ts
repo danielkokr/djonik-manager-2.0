@@ -25,7 +25,9 @@ import { workingWindows } from "./workingTime.js";
  * 3. Within a day, every elementary segment is split equally between the cards In progress during it.
  * 4. If a day's counted time (the union of In-progress time) exceeds `daily_time_cap`, every card's share of that
  *    day is scaled down by the same factor (proportional cap), and the report says how many days were capped.
- * 5. Shares are summed per project label (current label, as in #36); none → «без проєкту», several → «кілька міток».
+ * 5. Shares are summed per card (#62), and each project total is the sum of its cards' shares (current label, as in
+ *    #36); none → «без проєкту», several → «кілька міток». One pass yields both levels, so a project total equals the
+ *    exact sum of its card totals before display rounding.
  */
 
 export const UNLABELLED_PROJECT = "без проєкту";
@@ -160,9 +162,18 @@ export interface ProjectTime {
   ms: number;
 }
 
+/** One card's share of the counted time (#62). Its project is the card's current label bucket. */
+export interface CardTime {
+  cardId: string;
+  project: string;
+  ms: number;
+}
+
 export interface WeeklyTimeAllocation {
-  /** Per project, largest first; the unlabelled buckets last. */
+  /** Per project, largest first; the unlabelled buckets last. Each is the sum of its `cards` in their order. */
   totals: ProjectTime[];
+  /** Per card, from the same segment shares (equal split, then the day's cap factor); never shown with its id. */
+  cards: CardTime[];
   /** Counted time after the daily cap. */
   countedMs: number;
   /** Working time with at least one card In progress, before the cap. */
@@ -174,14 +185,17 @@ export interface WeeklyTimeAllocation {
   rough: boolean;
 }
 
-/** Equal split per elementary segment, per-day proportional cap, per-project sums. Pure (exported for tests). */
+/**
+ * Equal split per elementary segment, per-day proportional cap, per-card sums, per-project sums of those cards. Pure
+ * (exported for tests). There is one allocation: the project level is derived from the card level, never recomputed.
+ */
 export function allocateWeeklyTime(
   intervals: readonly InProgressInterval[],
   window: Pick<HistoryWindow, "from" | "to">,
   config: Pick<RhythmConfig, "workHours" | "workdays" | "dailyTimeCapMinutes">,
 ): WeeklyTimeAllocation {
   const capMs = config.dailyTimeCapMinutes * 60_000;
-  const byProject = new Map<string, number>();
+  const byCard = new Map<string, CardTime>();
   let countedMs = 0;
   let unionMs = 0;
   let parallelMs = 0;
@@ -206,15 +220,24 @@ export function allocateWeeklyTime(
     unionMs += dayUnion;
     const factor = dayUnion > capMs ? capMs / dayUnion : 1;
     if (factor < 1) cappedDays += 1;
-    for (const [interval, ms] of share) byProject.set(interval.project, (byProject.get(interval.project) ?? 0) + ms * factor);
+    for (const [interval, ms] of share) {
+      const card = byCard.get(interval.cardId) ?? { cardId: interval.cardId, project: interval.project, ms: 0 };
+      card.ms += ms * factor;
+      byCard.set(interval.cardId, card);
+    }
     countedMs += dayUnion * factor;
   }
   const bucketLast = (project: string) => (project === UNLABELLED_PROJECT || project === MULTI_LABEL_PROJECT ? 1 : 0);
+  const cards = [...byCard.values()]
+    .filter((card) => card.ms > 0)
+    .sort((a, b) => b.ms - a.ms || a.cardId.localeCompare(b.cardId));
+  // Each project total is the sum of its cards, in `cards` order: the same additions a reader of `cards` would make.
+  const byProject = new Map<string, number>();
+  for (const card of cards) byProject.set(card.project, (byProject.get(card.project) ?? 0) + card.ms);
   const totals = [...byProject.entries()]
     .map(([project, ms]) => ({ project, ms }))
-    .filter((entry) => entry.ms > 0)
     .sort((a, b) => bucketLast(a.project) - bucketLast(b.project) || b.ms - a.ms || a.project.localeCompare(b.project, "uk"));
-  return { totals, countedMs, unionMs, parallelMs, cappedDays, rough: unionMs > 0 && parallelMs / unionMs >= ROUGH_PARALLEL_SHARE };
+  return { totals, cards, countedMs, unionMs, parallelMs, cappedDays, rough: unionMs > 0 && parallelMs / unionMs >= ROUGH_PARALLEL_SHARE };
 }
 
 /** Rounded to half an hour, Ukrainian decimal comma: `14 год`, `7,5 год`, `< 0,5 год`. */
@@ -280,6 +303,150 @@ export function computeWeeklyTime(input: {
   if (input.coverage.truncated || !input.coverage.oldestActionReached) return weeklyTimeUnavailable("history_incomplete");
   const allocation = allocateWeeklyTime(inProgressIntervals(input), input.window, input.config);
   return { status: "ok", block: renderWeeklyTimeBlock(allocation, input.config), allocation };
+}
+
+// --- #62: one project's time this week, with its per-card breakdown -------------------------------------------------
+
+/** Cards listed by name before the rest are folded into one «ще N задач» line. */
+export const PROJECT_TIME_MAX_CARDS = 12;
+const CARD_NAME_MAX = 80;
+
+export type ProjectTimeUnavailableReason = WeeklyTimeUnavailableReason | "project_not_found" | "config_unavailable";
+
+export interface ProjectTimeCard {
+  /** The card's current Trello name from the same fresh card read; never its id. */
+  name: string;
+  ms: number;
+}
+
+export type ProjectTimeOutcome =
+  | {
+      status: "ok";
+      project: string;
+      /** `allocation.totals` for this project: the exact sum of `cards[].ms` (unrounded). */
+      totalMs: number;
+      cards: ProjectTimeCard[];
+      /** Time of cards that carry this label AND another one (the «кілька міток» bucket); never added to `totalMs`. */
+      multiLabelMs: number;
+      answerText: string;
+    }
+  | { status: "unavailable"; project: string; reason: ProjectTimeUnavailableReason; answerText: string };
+
+function displayName(name: string | undefined): string {
+  const flat = (name ?? "").replace(/\s+/g, " ").trim();
+  if (flat.length === 0) return "картка без назви";
+  return flat.length > CARD_NAME_MAX ? `${flat.slice(0, CARD_NAME_MAX - 1).trimEnd()}…` : flat;
+}
+
+/** `≈ 3 год`; a share under a quarter hour keeps the plain `< 0,5 год`. */
+function approxHours(ms: number): string {
+  const text = formatReportHours(ms);
+  return text.startsWith("<") ? text : `≈ ${text}`;
+}
+
+function tasksWord(n: number): string {
+  const mod100 = n % 100;
+  const mod10 = n % 10;
+  if (mod10 === 1 && mod100 !== 11) return "задача";
+  if (mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)) return "задачі";
+  return "задач";
+}
+
+const PROJECT_TIME_UNAVAILABLE_TEXT: Record<Exclude<ProjectTimeUnavailableReason, "project_not_found" | "work_hours_missing">, string> = {
+  history_incomplete: "історію Trello за тиждень не вдалося прочитати повністю",
+  history_unavailable: "історія Trello зараз недоступна",
+  config_unavailable: "не вдалося прочитати налаштування робочих годин (/rhythm.md)",
+};
+
+/** The code-owned answer when the time cannot be counted. It never carries a number of hours. */
+export function renderProjectTimeUnavailable(project: string, reason: ProjectTimeUnavailableReason): string {
+  if (reason === "project_not_found") return `Мітки «${project}» на дошці Trello не знайшов, тож час не рахую.`;
+  if (reason === "work_hours_missing") {
+    return `Час по ${project} цього тижня не можу оцінити: у /rhythm.md не задані work_hours.\nЯкщо хочеш — задамо робочі години.`;
+  }
+  return `Час по ${project} цього тижня не можу оцінити: ${PROJECT_TIME_UNAVAILABLE_TEXT[reason]}. Годин не вгадую.`;
+}
+
+export function projectTimeUnavailable(project: string, reason: ProjectTimeUnavailableReason): ProjectTimeOutcome {
+  return { status: "unavailable", project, reason, answerText: renderProjectTimeUnavailable(project, reason) };
+}
+
+/**
+ * The compact Ukrainian answer: the project total, then its cards by name, then the approximation label. Each line is
+ * rounded on its own (half an hour), so the listed cards may differ from the total only by that rounding — the
+ * footer says so. Board-wide caveats (parallel split, daily cap) are kept because they shape these numbers.
+ */
+export function renderProjectTimeAnswer(
+  outcome: Omit<Extract<ProjectTimeOutcome, { status: "ok" }>, "answerText">,
+  allocation: Pick<WeeklyTimeAllocation, "rough" | "cappedDays">,
+  config: Pick<RhythmConfig, "workHours" | "dailyTimeCapMinutes">,
+): string {
+  const hours = config.workHours ? ` (робочі години ${formatLocalTime(config.workHours.start)}–${formatLocalTime(config.workHours.end)})` : "";
+  const lines: string[] = [];
+  if (outcome.cards.length === 0) {
+    lines.push(`${outcome.project} — цього тижня в робочі години в In progress нічого не було.`);
+  } else {
+    lines.push(`${outcome.project} — ${approxHours(outcome.totalMs)} цього тижня`, "", "По задачах:");
+    const shown = outcome.cards.slice(0, PROJECT_TIME_MAX_CARDS);
+    for (const card of shown) lines.push(`• ${card.name} — ${approxHours(card.ms)}`);
+    const rest = outcome.cards.slice(PROJECT_TIME_MAX_CARDS);
+    if (rest.length > 0) {
+      lines.push(`• ще ${rest.length} ${tasksWord(rest.length)} — ${approxHours(rest.reduce((sum, card) => sum + card.ms, 0))}`);
+    }
+  }
+  const notes: string[] = [];
+  if (outcome.multiLabelMs > 0) notes.push(`Окремо ${approxHours(outcome.multiLabelMs)} — задачі з ${outcome.project} і ще іншою міткою; у суму не входять.`);
+  if (outcome.cards.length > 0 && allocation.rough) notes.push("Часто в In progress було кілька карток одночасно — такий час поділено порівну, тож цифри грубі.");
+  if (outcome.cards.length > 0 && allocation.cappedDays > 0) {
+    notes.push(
+      `Ліміт ${formatReportHours(config.dailyTimeCapMinutes * 60_000)} на день урізав ${allocation.cappedDays} ${daysWord(allocation.cappedDays)}: ` +
+        "у такі дні час кожної задачі зменшено пропорційно.",
+    );
+  }
+  if (notes.length > 0) lines.push("", ...notes);
+  lines.push("", `${TIME_REPORT_LABEL}, з точністю до пів години${hours}`);
+  return lines.join("\n");
+}
+
+/**
+ * One project's time this week from one fresh read (pure; exported for tests). It runs the SAME
+ * `inProgressIntervals` → `allocateWeeklyTime` pass as the Friday report and only selects the requested label from it.
+ * `project` is the canonical current Trello label, already resolved by the coordinator (#59); it is matched exactly,
+ * as `trello_work_history` matches it. Unknown label, missing work hours or incomplete history: unavailable, no hours.
+ */
+export function computeProjectTime(input: {
+  project: string;
+  cards: readonly TrelloHistoryCard[];
+  lists: readonly TrelloList[];
+  actions: readonly TrelloAction[];
+  coverage: HistoryCoverage;
+  window: Pick<HistoryWindow, "from" | "to">;
+  config: Pick<RhythmConfig, "workHours" | "workdays" | "dailyTimeCapMinutes">;
+}): ProjectTimeOutcome {
+  const { project } = input;
+  if (input.config.workHours === null) return projectTimeUnavailable(project, "work_hours_missing");
+  if (!projectLabelExists(input.cards, project)) return projectTimeUnavailable(project, "project_not_found");
+  if (input.coverage.truncated || !input.coverage.oldestActionReached) return projectTimeUnavailable(project, "history_incomplete");
+  const allocation = allocateWeeklyTime(inProgressIntervals(input), input.window, input.config);
+  const byId = new Map(input.cards.map((card) => [card.id, card]));
+  const cards = allocation.cards
+    .filter((card) => card.project === project)
+    .map((card) => ({ name: displayName(byId.get(card.cardId)?.name), ms: card.ms }));
+  const totalMs = allocation.totals.find((entry) => entry.project === project)?.ms ?? 0;
+  const multiLabelMs = allocation.cards
+    .filter((card) => card.project === MULTI_LABEL_PROJECT && hasLabel(byId.get(card.cardId), project))
+    .reduce((sum, card) => sum + card.ms, 0);
+  const outcome = { status: "ok" as const, project, totalMs, cards, multiLabelMs };
+  return { ...outcome, answerText: renderProjectTimeAnswer(outcome, allocation, input.config) };
+}
+
+function hasLabel(card: Pick<TrelloHistoryCard, "labels"> | undefined, project: string): boolean {
+  return (card?.labels ?? []).some((label) => label.name?.trim() === project);
+}
+
+/** The #36 project-scope rule: some card on the board (archived included) carries exactly this label. */
+export function projectLabelExists(cards: readonly TrelloHistoryCard[], project: string): boolean {
+  return cards.some((card) => hasLabel(card, project));
 }
 
 /** The GET-only subset of `TrelloWorkHistoryClient` the report uses — the same client and action log as #36. */

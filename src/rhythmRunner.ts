@@ -137,12 +137,13 @@ const MUTATING_VERBS = "create|update|delete|remove|move|archive|send|write|patc
 const MUTATING_MCP_NAME = new RegExp(
   `^trelloWrite|(^|_)(${MUTATING_VERBS})(_|$)|[a-z](${MUTATING_VERBS.replace(/(^|\|)(\w)/g, (_m, sep: string, c: string) => sep + c.toUpperCase())})([A-Z]|$)`,
 );
-const READ_ONLY_CUSTOM_TOOLS = new Set(["trello_work_history"]);
+const READ_ONLY_CUSTOM_TOOLS = new Set(["trello_work_history", "trello_project_time"]);
 
 /**
  * Tools an autonomous turn must never use: any Trello write, any MCP tool with a mutating verb
  * (Calendar included), Memory `write`/`edit`, and any custom tool other than the read-only
- * `trello_work_history` or a call the client proved read-only from its input (#54 `reminder` `list`). This is the
+ * `trello_work_history` / `trello_project_time` (#62) or a call the client proved read-only from its input (#54
+ * `reminder` `list`). This is the
  * post-hoc detector: a violating turn's text is never delivered; a fixed notice tells Daniel instead. Under a
  * pre-execution release the same rule applies to a gated call the client denied
  * (`AutonomousTurnResult.autonomousMutationAttempt`): prevented, but still a violation. A `reminder` mutation in an

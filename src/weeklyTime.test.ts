@@ -169,7 +169,7 @@ test("rendering: half-hour rounding with a decimal comma; tiny shares are shown,
   assert.equal(formatReportHours(14 * H), "14 год");
   assert.equal(formatReportHours(7.4 * H), "7,5 год");
   assert.equal(formatReportHours(10 * 60_000), "< 0,5 год");
-  const block = renderWeeklyTimeBlock({ totals: [{ project: "Azov", ms: 14 * H }], countedMs: 14 * H, unionMs: 14 * H, parallelMs: 0, cappedDays: 3, rough: false }, WORK);
+  const block = renderWeeklyTimeBlock({ totals: [{ project: "Azov", ms: 14 * H }], cards: [{ cardId: "a", project: "Azov", ms: 14 * H }], countedMs: 14 * H, unionMs: 14 * H, parallelMs: 0, cappedDays: 3, rough: false }, WORK);
   assert.match(block, /Ліміт 8 год на день урізав 3 дні/);
 });
 

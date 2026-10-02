@@ -618,6 +618,33 @@ export const RELEASE_R30: DjonikRelease = {
   session: SESSION,
 };
 
+// --- r31 candidate (#59 + #62, source only) -------------------------------------------------------------------------
+
+/** #59/#62 source intent only. r30 (serving) and every older reviewed release remain immutable; nothing here has a
+ * remote identity. On top of r30 it carries exactly:
+ *  - #59: the coordinator prompt's project-name resolution paragraph (hence the source prompt's `systemSha256`, the
+ *    reviewed `managed-agents/djonik.md` body) and the `task-management` label step (docs/99);
+ *  - #62: the read-only `trello_project_time` custom tool (one project's approximate time this week, code-owned
+ *    `answer_text`) and the `work-review` line that routes time questions to it (docs/100).
+ * Model, built-in tools, MCP servers/toolsets, confirmation policy, roster (none) and Session resources are r30's. */
+export const RELEASE_R31_CANDIDATE: DjonikReleaseCandidate = {
+  candidateId: "r31-candidate",
+  becomes: "r31",
+  agent: { id: COORDINATOR_ID, fromVersion: 30, version: null },
+  model: RELEASE_R30.model,
+  systemSha256: "569999b5da22d075940af44d8acbabb397c1567e418348a98194fced0a3e8859",
+  skills: RELEASE_R30.skills.map((skill) => skill.name === "task-management" || skill.name === "work-review"
+    ? { name: skill.name, skillId: null, pin: { kind: "unresolved" as const, reason: "#59/#62 Skill source not remotely synced" } }
+    : skill),
+  specialist: null,
+  builtInTools: RELEASE_R30.builtInTools,
+  customTools: [...RELEASE_R30.customTools, "trello_project_time"],
+  mcpServers: RELEASE_R30.mcpServers,
+  mcpToolsets: RELEASE_R30.mcpToolsets,
+  confirmationRequired: RELEASE_R30.confirmationRequired!,
+  session: RELEASE_R30.session,
+};
+
 export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_R25, r26: RELEASE_R26, r27: RELEASE_R27, r28: RELEASE_R28, r29: RELEASE_R29, r30: RELEASE_R30 };
 
 /**

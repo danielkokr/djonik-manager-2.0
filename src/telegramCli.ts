@@ -47,6 +47,7 @@ import { TrelloWorkHistoryClient } from "./trelloWorkHistory.js";
 import { createReminderToolExecutor, REMINDER_TOOL_NAME } from "./reminderTool.js";
 import { createFocusBudgetExecutor, FOCUS_BUDGET_TOOL_NAME } from "./focusBudgetTool.js";
 import { createWeeklyTimeReporter } from "./weeklyTime.js";
+import { createProjectTimeExecutor } from "./projectTimeTool.js";
 import { trelloCardContext } from "./reminderDelivery.js";
 import { createCustomToolRouter, type DjonikCustomToolExecutor } from "./djonikClient.js";
 import { transcriberFromEnvironment } from "./openAiTranscription.js";
@@ -143,8 +144,15 @@ async function main(): Promise<number> {
     readConfig: reminderConfigReader(rhythmConfigSource),
     log: (line) => console.log(line),
   });
+  /** #62 read-only project time: the same `/rhythm.md` source and GET-only Trello client as the Friday time report. It
+   *  is bound unconditionally — a release that does not expose the tool simply never calls it. */
+  const projectTimeExecutor = createProjectTimeExecutor({
+    reader: trelloReader,
+    readConfig: reminderConfigReader(rhythmConfigSource),
+    log: (line) => console.log(line),
+  });
   // Every custom tool goes to its own executor by exact name; an unknown name fails closed (#50 regression fix).
-  const customToolExecutor: DjonikCustomToolExecutor = createCustomToolRouter({ reminder: reminderExecutor, focusBudget: focusBudgetExecutor });
+  const customToolExecutor: DjonikCustomToolExecutor = createCustomToolRouter({ reminder: reminderExecutor, focusBudget: focusBudgetExecutor, projectTime: projectTimeExecutor });
 
   const djonikSession = createSessionManager(async () => {
     try {

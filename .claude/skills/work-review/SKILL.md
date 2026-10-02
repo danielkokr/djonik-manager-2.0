@@ -7,6 +7,8 @@ description: Review Trello action history for a project or board over this week,
 
 Use `trello_work_history` for questions about a period: what moved to Done, returned from Done, was created, archived, or otherwise changed this/last week or in an explicit range. It is read-only and Trello's action log is the source of truth for those events.
 
+How much time or how many hours went into a project is not a review: call `trello_project_time` with the project's current label instead. Its result is final, `unavailable` included — never use this tool's moves to estimate effort.
+
 Request the narrowest scope that is clear: a project uses its **current Trello label**; otherwise review the whole board. Choose `concise` unless Daniel asks for detail.
 
 `answer_text` is the complete, already-correct factual report (any coverage caveat is already included in it). Djonik's client delivers it to Daniel verbatim on its own — do not repeat, rewrite, reformat, or summarize it in your reply. After a successful call, add only ONE short PM-level conclusion, recommendation, observation, or useful next question. Phrase an inference as judgement ("схоже", "варто перевірити", "я б звернув увагу...") and never invent an event, date, or entity beyond what the tool returned.

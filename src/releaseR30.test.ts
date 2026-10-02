@@ -1,8 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { RELEASE_R29, RELEASE_R30, RELEASE_R30_CANDIDATE, RELEASES, SERVING_RELEASE, resolveReleaseCandidate, type ReleaseSkill } from "./release.js";
 import { attestAgentVersion, attestServingSession, compareWithRelease, formatServingTuple, normalizeAgentConfig, sha256 } from "./releaseAttestation.js";
 import { buildCandidateUpdateBody, buildReleaseUpdateBody } from "./releasePlan.js";
@@ -13,8 +10,6 @@ import { R30_SYSTEM_PROMPT, agentVersionFixture, r30SkillSource, servingSessionF
 // #55 (docs/92): r30 is the remote-constructed, attested resolution of RELEASE_R30_CANDIDATE — Agent v30, four new
 // byte-verified Skill versions, no roster. #56 (docs/93): this revision serves it; the host serves r29 until deployed.
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const skillSource = (name: string) => readFileSync(join(root, ".claude", "skills", name, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
 
 /** Real identifiers as the provider returned them (docs/92 §7–§8, §22). Nothing here is derived. */
 const REAL = {
@@ -71,7 +66,7 @@ test("r30 Skill pins: four new explicit versions with measured Session spellings
     } else {
       assert.equal(skill.name, "work-review");
       assert.deepEqual(skill, prior, "work-review: remote bytes already equal the repo; the r29 pin is reused");
-      assert.equal(sha256(skillSource("work-review")).slice(0, 8), "c079d285");
+      assert.equal(sha256(r30SkillSource("work-review")).slice(0, 8), "c079d285", "work-review source minus the unsynced #62 edit = its r29/r30 pin");
     }
   }
 });
