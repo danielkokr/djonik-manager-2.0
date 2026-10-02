@@ -24,8 +24,14 @@ export function isAcceptanceText(text: string): boolean {
 export const VOICE_CONFIRMATION_REFUSED_TEXT =
   "Голосом пропозицію не підтверджую — натисни «✅ Внести» під нею або напиши «внести» текстом.";
 
+/**
+ * The final line must be exactly the two action labels (#61): only whitespace, at most one `·`/`•`/`|`
+ * separator between them, and an optional emoji variation selector on ✏ are tolerated.
+ */
+const PROPOSAL_FOOTER_RE = /(?:^|\n)\s*✅\s*Внести\s*(?:[·•|]\s*)?✏️?\s*Змінити\s*$/u;
+
 export function isProposalReply(text: string): boolean {
-  return text.length <= 3500 && /(?:^|\n)\s*✅\s*Внести\s+✏️\s*Змінити\s*$/u.test(text);
+  return text.length <= 3500 && PROPOSAL_FOOTER_RE.test(text);
 }
 
 export function proposalKeyboard(ref: string): TelegramInlineKeyboard {

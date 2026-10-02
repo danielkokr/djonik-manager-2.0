@@ -26,6 +26,26 @@ test("proposal binding requires the two actions as the final line", () => {
   assert.equal(isProposalReply("Картка: банер\n✅ Внести  ✏️ Змінити"), true);
 });
 
+test("#61: harmless footer typography variants are still proposals; prose and trailing text are not", () => {
+  const body = "Перенести картку з In progress → Waiting?\n\n";
+  assert.equal(isProposalReply(body + "✅ Внести  ✏️ Змінити"), true);
+  assert.equal(isProposalReply(body + "✅Внести · ✏️Змінити"), true);
+  assert.equal(isProposalReply(body + "✅ Внести · ✏️ Змінити"), true);
+  assert.equal(isProposalReply(body + "✅ Внести | ✏️ Змінити"), true);
+  assert.equal(isProposalReply(body + "✅ Внести · ✏ Змінити"), true);
+  assert.equal(isProposalReply(body + "✅ Внести · ✏️ Змінити  \n"), true);
+  assert.equal(isProposalReply("У джерелі сказано ✅ Внести і ✏️ Змінити, але ціль неясна."), false);
+  assert.equal(isProposalReply(body + "Напиши ✅Внести · ✏️Змінити"), false);
+  assert.equal(isProposalReply(body + "✅Внести · ✏️Змінити\nАбо скажи, якщо щось не так."), false);
+  assert.equal(isProposalReply(body + "✅Внести · ✏️Змінити — або напиши інакше"), false);
+  assert.equal(isProposalReply(body + "✅Внести"), false);
+  assert.equal(isProposalReply(body + "✏️Змінити"), false);
+  assert.equal(isProposalReply(body + "✅Внести · · ✏️Змінити"), false);
+  assert.equal(isProposalReply(body + "✅Внести і ✏️Змінити"), false);
+  assert.equal(isProposalReply(body + "Внести · Змінити"), false);
+  assert.equal(isProposalReply("x".repeat(3500) + "\n✅Внести · ✏️Змінити"), false);
+});
+
 test("typed confirmation applies only a current proposal; expiry and ambiguity fail closed", () => {
   let now = 0;
   const registry = new ProposalConfirmations(() => now);

@@ -11,6 +11,8 @@ import {
 import type { DjonikSessionManager } from "./telegramAdapter.js";
 import { MessageGroupBuffer } from "./messageGrouping.js";
 import { createGroupDispatchHandlers } from "./telegramDispatch.js";
+import { ProposalConfirmations } from "./proposalConfirmation.js";
+import type { GroupedIntake } from "./messageGrouping.js";
 
 /**
  * Integration-level coverage for #25 Product Lead follow-up point 6:
@@ -427,4 +429,63 @@ test("#38 delivery boundary: an interim message before a tool pause cannot becom
   );
 
   realSession.close();
+});
+
+/** #61: the proposal keyboard must not depend on exact model typography of the final action line. */
+async function dispatchReply(reply: string) {
+  const registry = new ProposalConfirmations(() => 0);
+  const proposalsSent: Array<{ chatId: number; text: string; keyboard: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } }> = [];
+  const sentMessages: string[] = [];
+  const session: DjonikSessionHandle = {
+    sessionId: "fake", send: async () => { throw new Error("legacy send"); }, close() {},
+    sendOrdered: async () => reply,
+  };
+  const { onDispatch } = createGroupDispatchHandlers({
+    djonikSession: createFakeSessionManager(session),
+    proposals: registry,
+    sendProposal: async (chatId, text, keyboard) => { proposalsSent.push({ chatId, text, keyboard }); return { message_id: 501 }; },
+    sendMessage: async (_chatId, text) => { sentMessages.push(text); },
+    logError: () => {},
+  });
+  const intake: GroupedIntake = {
+    text: "Пін азов закрив, поки чекаю фідбек", images: [], documents: [],
+    parts: [{ type: "text", text: "Пін азов закрив, поки чекаю фідбек" }],
+    fragmentCount: 1, textCount: 1, imageCount: 0, documentCount: 0, groupingReason: "single", groupingWaitMs: 0,
+  };
+  await onDispatch(3, 100, intake);
+  return { registry, proposalsSent, sentMessages };
+}
+
+const PIN_AZOV_BODY = "Зрозумів: «Пін Азов» — твоя частина готова, чекаєш фідбек, то не Done, а Waiting.\n\nПеренести картку з In progress → Waiting?\n\n";
+
+for (const footer of ["✅Внести · ✏️Змінити", "✅ Внести  ✏️ Змінити"]) {
+  test(`#61 dispatch: a reply ending in "${footer}" gets the real proposal keyboard, not plain sendMessage`, async () => {
+    const reply = PIN_AZOV_BODY + footer;
+    const { registry, proposalsSent, sentMessages } = await dispatchReply(reply);
+
+    assert.equal(proposalsSent.length, 1, "sendProposal exactly once");
+    assert.equal(sentMessages.length, 0, "ordinary sendMessage is not used for the proposal");
+    assert.equal(proposalsSent[0].chatId, 3);
+    assert.equal(proposalsSent[0].text, reply, "visible model text is delivered unchanged");
+    const buttons = proposalsSent[0].keyboard.inline_keyboard[0];
+    assert.deepEqual(buttons.map((b) => b.text), ["✅ Внести", "✏️ Змінити"]);
+    const ref = /^fp1:a:([a-f0-9]{16})$/.exec(buttons[0].callback_data)?.[1];
+    assert.ok(ref);
+    assert.equal(buttons[1].callback_data, `fp1:m:${ref}`);
+
+    assert.equal(registry.has(3, 100), true, "proposal registered for this chat/user");
+    assert.deepEqual(registry.click(buttons[0].callback_data, 3, 100, 999), { kind: "stale" }, "bound to the sent message id");
+    const accepted = registry.click(buttons[0].callback_data, 3, 100, 501);
+    assert.equal(accepted.kind, "apply");
+    assert.match(accepted.kind === "apply" ? accepted.text : "", /In progress → Waiting/);
+    assert.deepEqual(registry.click(buttons[0].callback_data, 3, 100, 501), { kind: "stale" }, "consumed once");
+  });
+}
+
+test("#61 dispatch: a non-proposal reply that merely mentions the labels still uses ordinary sendMessage", async () => {
+  const reply = "У джерелі сказано ✅ Внести і ✏️ Змінити, але ціль неясна.";
+  const { registry, proposalsSent, sentMessages } = await dispatchReply(reply);
+  assert.equal(proposalsSent.length, 0);
+  assert.deepEqual(sentMessages, [reply]);
+  assert.equal(registry.has(3, 100), false);
 });
