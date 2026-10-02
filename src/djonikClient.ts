@@ -1511,7 +1511,7 @@ export async function connectToDjonik(
           break;
         }
         case "agent.custom_tool_use":
-          decisionTrace?.custom(event.name);
+          decisionTrace?.custom(event.name, event.input);
           // `session_thread_id` can identify a cross-posted subagent event, but is informational.
           // Result routing is exclusively by the observed blocking custom-tool event id (#40 lifecycle).
           customTools.observeUse({ id: event.id, name: event.name, input: event.input });

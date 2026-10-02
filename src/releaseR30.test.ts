@@ -8,7 +8,7 @@ import { attestAgentVersion, attestServingSession, compareWithRelease, formatSer
 import { buildCandidateUpdateBody, buildReleaseUpdateBody } from "./releasePlan.js";
 import { readOnlyBoundaryFor } from "./rhythmRuntime.js";
 import { PROJECT_HEALTH_SPECIALIST_AGENT_ID } from "./djonikClient.js";
-import { SOURCE_SYSTEM_PROMPT, agentVersionFixture, servingSessionFixture } from "./releaseFixtures.test-helpers.js";
+import { R30_SYSTEM_PROMPT, agentVersionFixture, r30SkillSource, servingSessionFixture } from "./releaseFixtures.test-helpers.js";
 
 // #55 (docs/92): r30 is the remote-constructed, attested resolution of RELEASE_R30_CANDIDATE — Agent v30, four new
 // byte-verified Skill versions, no roster. #56 (docs/93): this revision serves it; the host serves r29 until deployed.
@@ -42,7 +42,7 @@ test("r30 is a reviewed, attestable release and the serving release of this revi
 
 test("r30 is exactly the candidate resolved with the real remote pins, measured Session spellings and Agent v30", () => {
   assert.deepEqual(resolveReleaseCandidate(RELEASE_R30_CANDIDATE, { skills: resolution, agentVersion: 30 }), RELEASE_R30);
-  assert.equal(RELEASE_R30.systemSha256, sha256(SOURCE_SYSTEM_PROMPT), "the reviewed managed-agents/djonik.md body");
+  assert.equal(RELEASE_R30.systemSha256, sha256(R30_SYSTEM_PROMPT), "the reviewed managed-agents/djonik.md body minus the unsynced #59 edit");
   assert.equal(RELEASE_R30.specialist, null, "coordinator-only topology (#44)");
   assert.deepEqual(RELEASE_R30.model, RELEASE_R29.model);
   assert.deepEqual(RELEASE_R30.builtInTools, RELEASE_R29.builtInTools);
@@ -67,7 +67,7 @@ test("r30 Skill pins: four new explicit versions with measured Session spellings
       assert.equal(pin.sessionVersion, real.sessionVersion);
       assert.notDeepEqual(skill.pin, prior.pin, `${skill.name} moves to its r30 version`);
       // The pinned version was downloaded byte-identical to this committed source (docs/92 §9).
-      assert.equal(sha256(skillSource(skill.name)), real.sha, `${skill.name} repo source drifted from its r30 pin`);
+      assert.equal(sha256(r30SkillSource(skill.name)), real.sha, `${skill.name} repo source (minus unsynced #59 edits) drifted from its r30 pin`);
     } else {
       assert.equal(skill.name, "work-review");
       assert.deepEqual(skill, prior, "work-review: remote bytes already equal the repo; the r29 pin is reused");
@@ -77,7 +77,7 @@ test("r30 Skill pins: four new explicit versions with measured Session spellings
 });
 
 test("the v29 → v30 update body regenerates exactly: prompt, Skills, tools, MCP servers and the roster clear together", () => {
-  const body = buildCandidateUpdateBody(RELEASE_R30_CANDIDATE, { skills: resolution }, SOURCE_SYSTEM_PROMPT);
+  const body = buildCandidateUpdateBody(RELEASE_R30_CANDIDATE, { skills: resolution }, R30_SYSTEM_PROMPT);
   assert.equal(body.version, 29, "optimistic-concurrency precondition on Agent v29");
   assert.deepEqual(Object.keys(body).sort(), ["mcp_servers", "multiagent", "skills", "system", "tools", "version"], "model, name, description and metadata preserved by omission");
   assert.ok("multiagent" in body && body.multiagent === null, "the roster is cleared explicitly, never preserved by omission");

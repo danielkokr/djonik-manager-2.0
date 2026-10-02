@@ -1,5 +1,5 @@
 import { lintConcreteClaims, type ClaimEvidence, type ClaimFinding } from "./pmClaimLint.js";
-import type { DecisionTrace } from "./decisionTrace.js";
+import { historyScopeDigest, type DecisionTrace } from "./decisionTrace.js";
 import { buildExceptionPrompt, buildRitualPrompt } from "./rhythmRunner.js";
 import { parseRhythmConfig } from "./rhythmConfig.js";
 import type { Signal } from "./rhythmSignals.js";
@@ -7,7 +7,7 @@ import type { Signal } from "./rhythmSignals.js";
 export const BENCHMARK_REVISION = "pm-quality-5";
 export const FIXTURE_REVISION = "djonik-eval-1";
 export const FIXED_CLOCK = "2026-09-28T09:00:00.000Z";
-export const CRITICAL_IDS = ["S2", "S4", "S5", "S11", "S14", "S15", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28", "S29", "S30", "S31", "S32", "S33", "S34", "S35", "S36", "S37", "S38", "S39", "S40", "S41"] as const;
+export const CRITICAL_IDS = ["S2", "S4", "S5", "S11", "S14", "S15", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28", "S29", "S30", "S31", "S32", "S33", "S34", "S35", "S36", "S37", "S38", "S39", "S40", "S41", "S42", "S43", "S44", "S45", "S46", "S47"] as const;
 export type ScenarioId = `S${number}`;
 export type Check = "one_main" | "no_duration" | "no_date" | "no_missing_due_inference" | "only_seqthera" | "verified_write" | "zero_write" | "silent" | "non_silent" | "concise"
   /** #50: exact SILENT, or one short message (≤ 4 non-empty lines). */
@@ -24,6 +24,11 @@ export type Check = "one_main" | "no_duration" | "no_date" | "no_missing_due_inf
   | "no_fire"
   /** #51: the reply names the one project the contact decoder resolves to (`expectedProject` aliases). */
   | "expected_project"
+  /** #59: every `trello_work_history` call in the scored turn is project-scoped to exactly `expectedHistoryLabel`
+   *  (compared as the trace's content-free digest); none at all fails. */
+  | "history_scope"
+  /** #59: a recorded alias is resolved, not confirmed back — no «ти мав на увазі A1?»-style question. */
+  | "no_alias_question"
   | "remember_offer" | "no_remember_offer" | "no_second_remember_offer" | "working_style_only" | "no_preferences_write"
   | "style_review" | "no_style_review";
 export interface Scenario {
@@ -40,6 +45,8 @@ export interface Scenario {
   origin?: "rhythm_exception" | "rhythm_ritual" | "forwarded_source";
   /** #51: aliases of the project the known-contact scenario must resolve to. */
   expectedProject?: readonly string[];
+  /** #59: the current Trello label the known project word must reach the work-history tool as. */
+  expectedHistoryLabel?: string;
   /** Optional scenario clock for rhythm turns; earlier scenarios retain FIXED_CLOCK. */
   fixedClock?: string;
   /** #52: checks on the first turn of a multi-turn approval/rejection scenario. */
@@ -174,6 +181,26 @@ export const SCENARIOS: readonly Scenario[] = [
       { type: "weekday", value: "вт", source: "trello" }, { type: "date", value: "29.09", source: "trello" },
       { type: "weekday", value: "пн", source: "clock" }, { type: "date", value: "28.09", source: "clock" },
     ] }, passTarget: "pass^3", rubricFocus: ["evidence", "usefulness"] },
+  // #59: Daniel's word «Азов» names the project whose live Trello label is «A1» (pmFixture PROJECT_ALIAS_SCENARIOS: the
+  // real #17 brief excerpt `Aliases: Азов, A1.`, Azov cards labelled A1). Identity resolves through the brief before any
+  // Trello use — read, history or write; unknown and ambiguous words are never guessed. The oracle is
+  // projectIdentityOracle.resolveProjectName over the same fixture data.
+  { id: "S42", title: "A recorded alias in a history question reaches work history as the current label, unasked", turns: ["Які в мене задачі за цей тиждень були по азову?"],
+    checks: ["history_scope", "no_alias_question", "zero_write", "no_memory_write", "non_silent"], evidence: base, passTarget: "pass^3",
+    rubricFocus: ["evidence", "usefulness"], expectedHistoryLabel: "A1" },
+  { id: "S43", title: "A recorded alias in a project view reads the A1-labelled cards as that project", turns: ["Що зараз по Азову?"],
+    checks: ["no_alias_question", "zero_write", "no_memory_write", "concise"], evidence: base, passTarget: "pass^3",
+    rubricFocus: ["evidence", "usefulness"] },
+  { id: "S44", title: "A recorded alias in a create request gets the fresh A1 label through the verified flow, unasked", turns: ["Створи задачу по Азову: макет сторіз-анонсу збору."],
+    checks: ["verified_write", "no_alias_question", "no_memory_write"], evidence: base, passTarget: "2/3",
+    rubricFocus: ["decision", "evidence"] },
+  { id: "S45", title: "The canonical label itself still works unchanged", turns: ["Які задачі за цей тиждень були по A1?"],
+    checks: ["history_scope", "no_alias_question", "zero_write", "no_memory_write", "non_silent"], evidence: base, passTarget: "pass^3",
+    rubricFocus: ["evidence", "usefulness"], expectedHistoryLabel: "A1" },
+  { id: "S46", title: "An unrecorded partial name is not mapped: ask, zero write", turns: ["Створи задачу по Аз: оновити шапку сторінки збору."],
+    checks: ["asks_question", "zero_write", "no_memory_write"], evidence: base, passTarget: "pass^3", rubricFocus: ["decision", "evidence"] },
+  { id: "S47", title: "A word recorded in two briefs stays ambiguous: one question, zero write", turns: ["Створи задачу по Азову: банер на збір."],
+    checks: ["asks_question", "zero_write", "no_memory_write"], evidence: base, passTarget: "pass^3", rubricFocus: ["decision", "evidence"] },
 ];
 
 export type BenchmarkMode = "full" | "critical" | ScenarioId;
@@ -230,6 +257,12 @@ function checks(scenario: Scenario, turn: CandidateTurn, findings: ClaimFinding[
     if (check === "asks_question" && !/[?？]/u.test(reply)) failed.push(check);
     if (check === "no_fire" && reply.includes("🔥")) failed.push(check);
     if (check === "expected_project" && !(scenario.expectedProject ?? []).some((alias) => reply.includes(alias))) failed.push(check);
+    if (check === "history_scope") {
+      const scopes = turn.trace.historyScopes ?? [];
+      const expected = scenario.expectedHistoryLabel === undefined ? null : historyScopeDigest(scenario.expectedHistoryLabel);
+      if (expected === null || scopes.length === 0 || scopes.some((scope) => scope !== expected)) failed.push(check);
+    }
+    if (check === "no_alias_question" && /(?:мав|маєш|мали|маєте)\s+на\s+увазі|(?:^|[\s(«"])A1\s*[?？]/iu.test(reply)) failed.push(check);
     if (check === "only_seqthera" && /(?:займись|роби|візьми|почни|працюй\s+над)\s+(?:Extract|Limen|Azov|Азов|Cossack Labs)\b/iu.test(reply)) failed.push(check);
     // "one main" is judged by the rubric: enumeration and a single choice are not mechanically equivalent.
   }

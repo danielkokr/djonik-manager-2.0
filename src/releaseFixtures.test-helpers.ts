@@ -40,8 +40,48 @@ function revertEdits(prompt: string, edits: ReadonlyArray<{ before: string; afte
   }, prompt);
 }
 
-/** The prompt r29 (Agent v29, the rollback since #56) stores: the r30 source minus the #44 edit. */
-export const R29_SYSTEM_PROMPT = revertEdits(SOURCE_SYSTEM_PROMPT, ISSUE_44_PROMPT_EDITS, "#44");
+/** The #59 coordinator-prompt edit (project names resolve through the brief before any Trello use), exact text
+ *  before → after, applied on top of r30. Source only: no Agent version carries it yet, so r30 (Agent v30, serving)
+ *  stores the source minus this edit (docs/99). */
+export const ISSUE_59_PROMPT_EDITS: ReadonlyArray<{ before: string; after: string }> = [
+  {
+    before: "never live task state.\n\n",
+    after:
+      "never live task state.\n\n" +
+      "A project's names are its brief's title and `Aliases:` line (`projects/<slug>.md`). Before any Trello read, history or " +
+      "write for a project Daniel names, resolve his word — in any grammatical form, case aside — through those names without " +
+      "asking, then use the one fresh board label equal to one of them. A word that is itself a label needs no brief. A word " +
+      "neither records stays unknown: never guess from a similar name. A word naming two projects, or two matching labels: one " +
+      "question, no write.\n\n",
+  },
+];
+
+/** The prompt r30 (Agent v30, serving since #56) stores: the source minus the unsynced #59 edit. */
+export const R30_SYSTEM_PROMPT = revertEdits(SOURCE_SYSTEM_PROMPT, ISSUE_59_PROMPT_EDITS, "#59");
+
+/** The #59 task-management edit (Project label step 2), exact text before → after. Source only (docs/99). */
+export const ISSUE_59_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ before: string; after: string }>>> = {
+  "task-management": [
+    {
+      before:
+        "2. Find the one existing label whose name is the anchored project's name (case and spacing aside). An alias only counts " +
+        "when it plainly names that same project and no other label could be meant — never a partial or \"close enough\" name.",
+      after:
+        "2. Find the one existing label whose name is one of the anchored project's names — Daniel's word or a name its brief " +
+        "records (title or `Aliases:`), case and spacing aside. A recorded alias needs no confirmation from Daniel; never a " +
+        "partial, unrecorded or \"close enough\" name.",
+    },
+  ],
+};
+
+/** A Skill's committed source as its r30 pin stores it: the repo source minus any unsynced #59 edit. */
+export function r30SkillSource(name: string): string {
+  const source = readFileSync(join(repoRoot, ".claude", "skills", name, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
+  return revertEdits(source, ISSUE_59_SKILL_EDITS[name] ?? [], `#59 ${name}`);
+}
+
+/** The prompt r29 (Agent v29, the rollback since #56) stores: the r30 prompt minus the #44 edit. */
+export const R29_SYSTEM_PROMPT = revertEdits(R30_SYSTEM_PROMPT, ISSUE_44_PROMPT_EDITS, "#44");
 
 /** The #45 coordinator-prompt edits (factual grounding), exact text before → after, applied on top of r28.
  *  r29 serves them; reversing these still reconstructs the immutable r28 prompt. */
@@ -134,7 +174,7 @@ export const PRE_41_SYSTEM_PROMPT = revertEdits(PRE_42_SYSTEM_PROMPT, ISSUE_41_P
 /** The prompt text whose SHA-256 a release pins. */
 export function systemPromptFor(release: Pick<DjonikRelease, "systemSha256">): string {
   const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
-  const match = [SOURCE_SYSTEM_PROMPT, R29_SYSTEM_PROMPT, R28_SYSTEM_PROMPT, PRE_41_SYSTEM_PROMPT].find((prompt) => sha(prompt) === release.systemSha256);
+  const match = [SOURCE_SYSTEM_PROMPT, R30_SYSTEM_PROMPT, R29_SYSTEM_PROMPT, R28_SYSTEM_PROMPT, PRE_41_SYSTEM_PROMPT].find((prompt) => sha(prompt) === release.systemSha256);
   if (match === undefined) throw new Error(`no fixture prompt for system ${release.systemSha256.slice(0, 12)}`);
   return match;
 }

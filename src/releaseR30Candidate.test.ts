@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28, RELEASE_R29, RELEASE_R30, RELEASE_R30_CANDIDATE, RELEASES, SERVING_RELEASE, UnresolvedReleaseCandidateError, resolveReleaseCandidate } from "./release.js";
 import { buildCandidateUpdateBody, buildReleaseUpdateBody } from "./releasePlan.js";
 import { SUPPORTED_CUSTOM_TOOLS, attestAgentVersion, attestServingSession, formatServingTuple, normalizeAgentConfig } from "./releaseAttestation.js";
-import { SOURCE_SYSTEM_PROMPT, agentVersionFixture, servingSessionFixture } from "./releaseFixtures.test-helpers.js";
+import { R30_SYSTEM_PROMPT, agentVersionFixture, servingSessionFixture } from "./releaseFixtures.test-helpers.js";
 import { PROJECT_HEALTH_SPECIALIST_AGENT_ID } from "./djonikClient.js";
 
 test("#47/#48/#50 candidate preserves immutable r29 and remains unresolved", () => {
@@ -32,14 +32,14 @@ test("candidate update would replace MCP servers and tools together, with no inv
     "pm-rhythm": { skillId: "skill_TEST2", version: "skver_TEST2" },
     "task-management": { skillId: "skill_TEST3", version: "skver_TEST3" },
     "studio-intake": { skillId: "skill_TEST4", version: "skver_TEST4" },
-  } }, SOURCE_SYSTEM_PROMPT);
+  } }, R30_SYSTEM_PROMPT);
   assert.equal(body.version, 29);
   assert.deepEqual((body.mcp_servers as Array<{ name: string }>).map((server) => server.name), ["trello"]);
   assert.deepEqual((body.tools as Array<{ type: string; name?: string; mcp_server_name?: string }>).filter((tool) => tool.type === "custom").map((tool) => tool.name), ["trello_work_history", "trello_board_snapshot", "focus_budget"]);
   assert.ok(!(body.tools as Array<{ name?: string }>).some((tool) => tool.name === "reminder"));
   // #44: the r30 prompt drops the Project Health delegation, so the reviewed body travels with the Skills/tools,
   // and the roster is cleared in the same update.
-  assert.equal(body.system, SOURCE_SYSTEM_PROMPT);
+  assert.equal(body.system, R30_SYSTEM_PROMPT);
   assert.equal(body.multiagent, null);
   assert.equal(SUPPORTED_CUSTOM_TOOLS.trello_board_snapshot?.description.length > 0, true);
 });
@@ -56,7 +56,7 @@ test("#50: focus_budget exists only on the r30 candidate and its resolution r30 
   assert.equal(RELEASE_R30_CANDIDATE.agent.version, null, "no invented Agent v30");
   assert.ok(RELEASE_R30_CANDIDATE.skills.filter((skill) => skill.pin.kind === "unresolved").every((skill) => skill.skillId === null), "no invented remote Skill ids");
   assert.deepEqual(RELEASE_R30_CANDIDATE.skills.filter((skill) => skill.pin.kind === "unresolved").map((skill) => skill.name).sort(), ["planning-and-focus", "pm-rhythm", "studio-intake", "task-management"]);
-  const body = buildCandidateUpdateBody(RELEASE_R30_CANDIDATE, { skills: Object.fromEntries(["planning-and-focus", "pm-rhythm", "task-management", "studio-intake"].map((name) => [name, { skillId: `skill_TEST${name.length}`, version: "skver_TEST" }])) }, SOURCE_SYSTEM_PROMPT);
+  const body = buildCandidateUpdateBody(RELEASE_R30_CANDIDATE, { skills: Object.fromEntries(["planning-and-focus", "pm-rhythm", "task-management", "studio-intake"].map((name) => [name, { skillId: `skill_TEST${name.length}`, version: "skver_TEST" }])) }, R30_SYSTEM_PROMPT);
   const focus = (body.tools as Array<{ type: string; name?: string; input_schema?: unknown }>).find((tool) => tool.name === "focus_budget");
   assert.deepEqual(focus?.input_schema, SUPPORTED_CUSTOM_TOOLS.focus_budget.input_schema);
 });
@@ -121,7 +121,7 @@ test("#44 attestation: r30 requires NO roster; the retired specialist or any oth
 
 test("#44 plan: the r30 update body clears the roster, and applied to v29 it attests as r30 (no partial update)", () => {
   const r30 = resolvedR30();
-  const body = buildCandidateUpdateBody(RELEASE_R30_CANDIDATE, { skills: R30_TEST_PINS }, SOURCE_SYSTEM_PROMPT);
+  const body = buildCandidateUpdateBody(RELEASE_R30_CANDIDATE, { skills: R30_TEST_PINS }, R30_SYSTEM_PROMPT);
   assert.ok("multiagent" in body && body.multiagent === null, "omitting multiagent would silently keep specialist v4");
   const v29 = agentVersionFixture(RELEASE_R29);
   const v30 = { ...v29, version: 30, skills: body.skills, tools: body.tools, system: body.system, mcp_servers: body.mcp_servers, multiagent: body.multiagent };
@@ -132,6 +132,6 @@ test("#44 plan: the r30 update body clears the roster, and applied to v29 it att
   assert.throws(() => buildReleaseUpdateBody({ ...RELEASE_R29, id: "r29-no-specialist", agent: { ...RELEASE_R29.agent, version: 30 }, specialist: null }, 29),
     /changes the specialist roster/);
   // Adding or repinning a specialist is not a reviewed transition.
-  assert.throws(() => buildCandidateUpdateBody({ ...RELEASE_R30_CANDIDATE, specialist: { ...RELEASE_R29.specialist!, version: 5 } }, { skills: R30_TEST_PINS }, SOURCE_SYSTEM_PROMPT),
+  assert.throws(() => buildCandidateUpdateBody({ ...RELEASE_R30_CANDIDATE, specialist: { ...RELEASE_R29.specialist!, version: 5 } }, { skills: R30_TEST_PINS }, R30_SYSTEM_PROMPT),
     /changes the specialist roster/);
 });

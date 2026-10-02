@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { FIXTURE_REVISION, type Scenario } from "./pmBenchmark.js";
 
 export interface EvalCard {
-  key: string; title: string; project: "Seqthera" | "Extract" | "Azov" | "Limen" | "Cossack Labs";
+  key: string; title: string; project: "Seqthera" | "Extract" | "Azov" | "A1" | "Limen" | "Cossack Labs";
   list: "To do" | "In progress" | "Waiting" | "Done";
   due?: string; size?: "S" | "M" | "XL"; checklist?: { done: number; total: number };
 }
@@ -26,7 +26,21 @@ export const EVAL_CARDS: readonly EvalCard[] = [
   { key: "cl-doc", title: "[EVAL] Cossack Labs — документ", project: "Cossack Labs", list: "Done" },
   { key: "seq-followup", title: "[EVAL] Seqthera — фідбек клієнта", project: "Seqthera", list: "Waiting" },
 ];
+/**
+ * #59: project-alias scenarios. Production names the Азов project with the Trello label «A1», not «Azov», and Daniel
+ * says «Азов». In these scenarios the Azov cards carry «A1» and the real #17 brief excerpts (`Aliases: Азов, A1.`) are
+ * the briefs. An older unused «Azov» label may remain on the dedicated eval board from other scenarios; it is not a name
+ * the brief records, so the contract still selects «A1» (a near-miss distractor, never a second match).
+ */
+export const PROJECT_ALIAS_SCENARIOS = ["S42", "S43", "S44", "S45", "S46", "S47"];
+const isAliasScenario = (scenario: Scenario) => PROJECT_ALIAS_SCENARIOS.includes(scenario.id);
+export function labelsForScenario(scenario: Scenario): EvalCard["project"][] {
+  return isAliasScenario(scenario) ? ["Seqthera", "Extract", "A1", "Limen", "Cossack Labs"] : ["Seqthera", "Extract", "Azov", "Limen", "Cossack Labs"];
+}
+/** #59 S47: a second project whose recorded aliases also include «Азов» — the word then names two projects. */
+export const S47_SECOND_AZOV_BRIEF = "# Фонд Азов\nEval fixture only; a second project whose recorded aliases share «Азов».\nAliases: Фонд Азов, Азов.\n";
 export function cardsForScenario(scenario: Scenario): readonly EvalCard[] {
+  if (isAliasScenario(scenario)) return EVAL_CARDS.map((card) => card.project === "Azov" ? { ...card, project: "A1" } : card);
   if (scenario.id === "S1") return EVAL_CARDS.map((card) =>
     card.key === "az-banner-a" || card.key === "cl-deck" ? { ...card, list: "To do" } : card);
   if (scenario.id === "S2") return EVAL_CARDS.map(({ size: _size, ...card }) => card);
@@ -121,6 +135,11 @@ export function memoriesForScenario(scenario: Scenario): Record<string, string> 
     memories["/priorities.md"] = "Eval fixture only. No accepted commitments. Cossack Labs, Seqthera, Extract and Azov have comparable priority this week.";
     if (scenario.id === "S30") Object.assign(memories, S30_COMMITMENTS);
   }
+  if (isAliasScenario(scenario)) {
+    // #59: the approved #17 brief excerpts carry each project's title and Aliases line; nothing else changes.
+    for (const [slug, brief] of Object.entries(ISSUE_17_BRIEF_EXCERPTS)) memories[`/projects/${slug}.md`] = brief;
+    if (scenario.id === "S47") memories["/projects/azov-fund.md"] = S47_SECOND_AZOV_BRIEF;
+  }
   if (scenario.id === "S6") {
     memories["/commitments/extract.md"] = "Eval fixture only. Accepted external commitment: send Extract packaging review on Monday 28 September 2026. Daniel now says not to touch Extract today.";
   }
@@ -153,7 +172,7 @@ export async function resetEvalFixture(driver: EvalBoardDriver, scenario: Scenar
   const cards = cardsForScenario(scenario);
   await driver.assertDedicatedBoard(EVAL_BOARD_NAME);
   await driver.ensureLists(EVAL_LISTS);
-  await driver.ensureProjectLabels(["Seqthera", "Extract", "Azov", "Limen", "Cossack Labs"]);
+  await driver.ensureProjectLabels(labelsForScenario(scenario));
   await driver.ensureSizeField();
   await driver.resetCards(cards);
   await driver.verify(cards);

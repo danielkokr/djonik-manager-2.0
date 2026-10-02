@@ -8,7 +8,7 @@ import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28
 import { SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
 import { buildAgentUpdateBody } from "./releasePlan.js";
 import { PROJECT_HEALTH_SPECIALIST_AGENT_ID } from "./djonikClient.js";
-import { ISSUE_44_PROMPT_EDITS, PRE_41_SYSTEM_PROMPT, R28_SYSTEM_PROMPT, R29_SYSTEM_PROMPT, SOURCE_SYSTEM_PROMPT } from "./releaseFixtures.test-helpers.js";
+import { ISSUE_44_PROMPT_EDITS, ISSUE_59_PROMPT_EDITS, PRE_41_SYSTEM_PROMPT, R28_SYSTEM_PROMPT, R29_SYSTEM_PROMPT, R30_SYSTEM_PROMPT, SOURCE_SYSTEM_PROMPT } from "./releaseFixtures.test-helpers.js";
 
 // #33 release definitions: one reviewed expectation per release, kept in lockstep with the declarative
 // Agent source (`managed-agents/*.md`) and the repo Skills, so a release can never silently diverge from
@@ -95,7 +95,10 @@ test("the serving release r30 (Agent v30) equals the declarative coordinator sou
   // ISSUE_44_PROMPT_EDITS gives the r29 (rollback) prompt, so nothing else hides behind #44.
   assert.equal(SERVING_RELEASE, RELEASE_R30);
   const release = SERVING_RELEASE;
-  assert.equal(release.systemSha256, sha(SOURCE_SYSTEM_PROMPT), "r30 prompt SHA = djonik.md body");
+  // #59 (docs/99) adds one unsynced source paragraph; reverting exactly ISSUE_59_PROMPT_EDITS gives the served r30 body.
+  assert.equal(release.systemSha256, sha(R30_SYSTEM_PROMPT), "r30 prompt SHA = djonik.md body minus the unsynced #59 edit");
+  assert.equal(ISSUE_59_PROMPT_EDITS.length, 1);
+  assert.notEqual(sha(SOURCE_SYSTEM_PROMPT), release.systemSha256, "#59 is source-only until a reviewed release syncs it");
   assert.equal(RELEASE_R30_CANDIDATE.systemSha256, release.systemSha256, "the reviewed candidate prompt is the synced one");
   assert.equal(RELEASE_R29.systemSha256, sha(R29_SYSTEM_PROMPT), "r29 prompt = djonik.md body minus the #44 edit");
   assert.equal(ISSUE_44_PROMPT_EDITS.length, 1);
@@ -121,7 +124,7 @@ test("the r29 rollback differs from the served declaration (r30) by exactly the 
   assert.equal(RELEASES.r29, RELEASE_R29, "r29 stays a reviewed rollback release");
   const rollback = surfaceOf(RELEASE_R29);
   assert.notDeepEqual(rollback, declaredSurface);
-  assert.notEqual(RELEASE_R29.systemSha256, sha(SOURCE_SYSTEM_PROMPT), "prompt: #44");
+  assert.notEqual(RELEASE_R29.systemSha256, sha(R30_SYSTEM_PROMPT), "prompt: #44");
   assert.ok(RELEASE_R29.specialist && declared.multiagent === null, "roster: specialist v4 → none");
   assert.deepEqual(RELEASE_R29.mcpServers.map((server) => server.name), ["trello", "google-calendar-calendarmcp"]);
   assert.deepEqual((declared.mcp_servers as Array<Record<string, string>>).map((server) => server.name), ["trello"], "MCP: Calendar removed");

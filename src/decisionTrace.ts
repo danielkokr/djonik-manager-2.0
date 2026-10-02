@@ -16,6 +16,14 @@ export interface DecisionTrace {
   answerKind?: "planning" | "task" | "rhythm" | "project_health";
   /** SHA-256 of the successful model-facing snapshot, never its text. */
   snapshotDigest?: string;
+  /** #59: each `trello_work_history` scope as `board` or `project:<SHA-256 of the label>` — which label the tool got,
+   *  never its text. Present only when such a call was observed. */
+  historyScopes?: string[];
+}
+
+/** #59: the content-free trace form of a project label (trimmed, as the tool itself compares it). */
+export function historyScopeDigest(label: string): string {
+  return `project:${createHash("sha256").update(label.trim(), "utf8").digest("hex")}`;
 }
 
 function normalizedPath(input: unknown): { kind: "skill" | "memory"; path: string } | null {
@@ -64,7 +72,14 @@ export class DecisionTraceCollector {
     addUnique(isTrelloWriteTool(server, name) ? this.value.cardIdsWritten : this.value.cardIdsRead, id);
   }
 
-  custom(name: string): void { addUnique(this.value.toolNames, `custom:${name}`); }
+  custom(name: string, input?: unknown): void {
+    addUnique(this.value.toolNames, `custom:${name}`);
+    if (name !== "trello_work_history" || !input || typeof input !== "object") return;
+    const scope = (input as { scope?: { kind?: unknown; label?: unknown } }).scope;
+    const value = scope?.kind === "board" ? "board"
+      : scope?.kind === "project" && typeof scope.label === "string" && scope.label.trim() ? historyScopeDigest(scope.label) : null;
+    if (value) addUnique(this.value.historyScopes ??= [], value);
+  }
 
   snapshot(modelFacingContent: string): void {
     this.value.snapshotDigest = createHash("sha256").update(modelFacingContent, "utf8").digest("hex");
@@ -103,7 +118,7 @@ export function explainRecordedTurn(events: readonly Record<string, unknown>[], 
     }
     if (!collecting) continue;
     if (event.type === "agent.tool_use") collecting.builtIn(String(event.name ?? ""), (event.input ?? {}) as Record<string, unknown>);
-    if (event.type === "agent.custom_tool_use") collecting.custom(String(event.name ?? ""));
+    if (event.type === "agent.custom_tool_use") collecting.custom(String(event.name ?? ""), event.input);
     if (event.type === "agent.mcp_tool_use") {
       const server = String(event.mcp_server_name ?? "");
       const name = String(event.name ?? "");

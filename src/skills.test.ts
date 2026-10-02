@@ -582,7 +582,8 @@ test("task-management Skill (#37): missing label → no creation, one question, 
   assert.match(section, /No match → never create or rename a label and never attach a different one/);
   assert.match(section, /Zero write until Daniel answers/);
   assert.match(section, /More than one plausible match → ask which one\. Zero write until it's resolved/);
-  assert.match(section, /never a partial or "close enough" name/);
+  // #59: a recorded brief alias counts; a partial, unrecorded or near name still never does.
+  assert.match(section, /never a partial, unrecorded or "close enough" name/);
 });
 
 test("task-management Skill (#37): unverified label after a create is a partial result, never full success or a duplicate", () => {
