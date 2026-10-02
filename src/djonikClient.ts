@@ -873,7 +873,7 @@ export class DjonikUnverifiedMutationError extends Error {
   constructor(outcomes: MutationOutcome[], modelReply: string, specialistSection: string | null = null) {
     super(
       "Djonik mutated Trello but did not verify the write with an independent read in this turn.\n" +
-        describeMutationOutcomes(outcomes, describeDueForUser) +
+        describeMutationOutcomes(outcomes, describeDueForUser, "diagnostic") +
         (specialistSection === null ? "" : specialistSection),
     );
     this.name = "DjonikUnverifiedMutationError";
@@ -968,7 +968,7 @@ export function finalizeMutationReplyWithMode(
     : effective
       .map((outcome) => {
         const line = outcome.due ? describeDueForUser(outcome.due) : "Зміни підтверджено читанням картки.";
-        return `${describeMutationTarget(outcome)}: ${line}`;
+        return `${describeMutationTarget(outcome, outcomes)}: ${line}`;
       })
       .join("\n");
   const block = checklistBlock === null ? dueBlock : `${dueBlock}\n${buildChecklistConfirmation(outcomes, false)}`;

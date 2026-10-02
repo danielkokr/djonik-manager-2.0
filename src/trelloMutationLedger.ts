@@ -774,28 +774,63 @@ export class TrelloMutationLedger {
 // Honest reporting (deterministic, user-facing Ukrainian; never derived from model prose)
 // ---------------------------------------------------------------------------------------------
 
-function describeCard(outcome: MutationOutcome): string {
+/**
+ * Who reads a mutation report (#63). `user` text can reach Telegram, so it names cards and checklists only by
+ * human-readable names, never by provider ids (Trello MCP ids are opaque ARIs, `ari:cloud:trello::card/…`).
+ * `diagnostic` keeps the ids for the internal unverified-mutation diagnostic (logs/traces only). The ids stay
+ * on `MutationOutcome` for correlation and verification either way.
+ */
+export type MutationReportAudience = "user" | "diagnostic";
+
+/** Display only (#63): a card name this turn's own outcomes already state for the same card — a card write's
+ *  requested name, or the card name a checklist create's verified read named. Never affects status. */
+function knownCardName(outcome: MutationOutcome, all: readonly MutationOutcome[]): string | null {
+  if (outcome.label !== null && !outcome.checklist) return outcome.label;
+  const ids = outcome.targetCardIds;
+  const sameCard = (other: MutationOutcome) =>
+    other.targetCardIds.some((otherId) => ids.some((id) => identifiersMatch(id, otherId)));
+  const named = all.find((other) => !other.checklist && other.label !== null && sameCard(other));
+  if (named) return named.label;
+  return all.find((other) => other.checklist?.action === "create" && other.checklist.cardName && sameCard(other))
+    ?.checklist?.cardName ?? null;
+}
+
+function describeCard(outcome: MutationOutcome, all: readonly MutationOutcome[], audience: MutationReportAudience): string {
+  if (audience === "user") {
+    const name = knownCardName(outcome, all);
+    return name !== null ? `«${name}»` : "картка";
+  }
   const id = outcome.targetCardIds[0];
   if (outcome.label !== null) return id ? `«${outcome.label}» (${id})` : `«${outcome.label}»`;
   return id ? `картка ${id}` : "картка без відомого ID";
 }
 
 /** #37: a project-label write is reported as that label change on its card, never as the card write. */
-function describeTarget(outcome: MutationOutcome): string {
+function describeTargetFor(outcome: MutationOutcome, all: readonly MutationOutcome[], audience: MutationReportAudience): string {
   if (outcome.checklist) {
-    const target = outcome.checklist.action === "create" ? `картці ${outcome.targetCardIds[0] ?? "без відомого ID"}` :
-      `чеклісті ${outcome.checklist.checklistId ?? "без відомого ID"}`;
-    return outcome.checklist.action === "create" ? `чекліст «${outcome.checklist.name}» у ${target}` :
-      `пункт «${outcome.checklist.name}» у ${target}`;
+    const checklist = outcome.checklist;
+    let target: string;
+    if (audience === "user") {
+      const cardName = checklist.action === "create" ? (checklist.cardName ?? knownCardName(outcome, all)) : null;
+      target = checklist.action === "create"
+        ? (cardName ? `картці «${cardName}»` : "картці")
+        : (checklist.checklistName ? `чеклісті «${checklist.checklistName}»` : "чеклісті");
+    } else {
+      target = checklist.action === "create" ? `картці ${outcome.targetCardIds[0] ?? "без відомого ID"}` :
+        `чеклісті ${checklist.checklistId ?? "без відомого ID"}`;
+    }
+    return checklist.action === "create" ? `чекліст «${checklist.name}» у ${target}` : `пункт «${checklist.name}» у ${target}`;
   }
   const projectLabel = outcome.projectLabel;
-  if (!projectLabel) return describeCard(outcome);
+  if (!projectLabel) return describeCard(outcome, all, audience);
   const id = outcome.targetCardIds[0];
-  const card = outcome.label !== null ? describeCard(outcome) : (id ?? "без відомого ID");
+  const card = audience === "user"
+    ? (knownCardName(outcome, all) !== null ? ` ${describeCard(outcome, all, audience)}` : "")
+    : ` ${outcome.label !== null ? describeCard(outcome, all, audience) : (id ?? "без відомого ID")}`;
   const name = projectLabel.name !== null ? ` «${projectLabel.name}»` : "";
   return projectLabel.action === "attach"
-    ? `label проєкту${name} на картці ${card}`
-    : `зняття label${name} з картки ${card}`;
+    ? `label проєкту${name} на картці${card}`
+    : `зняття label${name} з картки${card}`;
 }
 
 const FIELD_LABEL_UK: Record<CheckedField, string> = {
@@ -853,9 +888,14 @@ const describeDueFallback: DueDescriber = (due) => `дедлайн у Trello: ${
  * Multi-line report of every mutation, derived purely from tool events: what Trello confirmed
  * (`✅`), confirmed-but-different deadline or unconfirmed (`⚠️`), and what the tool rejected
  * (`❌`, with the tool's own bounded error text). `describeDue` renders a due line and must state
- * only the verified Trello due.
+ * only the verified Trello due. `audience` defaults to the id-free `user` report (#63).
  */
-export function describeMutationOutcomes(outcomes: MutationOutcome[], describeDue: DueDescriber = describeDueFallback): string {
+export function describeMutationOutcomes(
+  outcomes: MutationOutcome[],
+  describeDue: DueDescriber = describeDueFallback,
+  audience: MutationReportAudience = "user",
+): string {
+  const describeTarget = (outcome: MutationOutcome) => describeTargetFor(outcome, outcomes, audience);
   const lines: string[] = [];
   for (const outcome of outcomes) {
     if (outcome.status === "verified") {
@@ -934,6 +974,8 @@ export function nudgeTargetIds(outcomes: MutationOutcome[]): string[] {
   return verificationReadsFor(outcomes).flatMap((read) => (read.kind === "card" ? [read.cardId] : []));
 }
 
-export function describeMutationTarget(outcome: MutationOutcome): string {
-  return describeTarget(outcome);
+/** User-facing, id-free (#63) name of one mutation's target. `all` is the turn's outcomes, consulted only for a
+ *  card name another outcome already states for the same card. */
+export function describeMutationTarget(outcome: MutationOutcome, all: readonly MutationOutcome[] = [outcome]): string {
+  return describeTargetFor(outcome, all, "user");
 }

@@ -570,7 +570,7 @@ test("a rejected due-clear write (is_error) is not nudged and is reported from t
 
   const reply = await session.send("Прибери дедлайн з картки A");
 
-  assert.equal(reply, "❌ Не виконано (помилка інструмента): картка card_A — due must be a non-empty ISO 8601 string");
+  assert.equal(reply, "❌ Не виконано (помилка інструмента): картка — due must be a non-empty ISO 8601 string");
   assert.equal(sendCalls.length, 1, "no corrective nudge should be sent for a failed write");
   session.close();
 });
@@ -1904,7 +1904,8 @@ test("#28 7b: a failed (is_error) Trello write attempt also keeps the mutation t
   // The model's text never reaches the user: the mutation outcome is the tool outcome (#31); the verified,
   // read-only specialist result is preserved verbatim after it (#32).
   const reply = await session.send("Онови картку A");
-  assert.ok(reply.startsWith("❌ Не виконано (помилка інструмента): картка card_A"));
+  assert.ok(reply.startsWith("❌ Не виконано (помилка інструмента): картка"));
+  assert.ok(!reply.includes("card_A"), "#63: the user-visible report names no provider id");
   assert.ok(!reply.includes("Не вдалося оновити картку."), "model prose is still not used for a failed write");
   assert.ok(reply.includes("SPECIALIST EXACT"));
   session.close();
@@ -2447,7 +2448,7 @@ test("#31 partial failure: a tool-errored write plus a verified write return a d
   assert.equal(sendCalls.length, 1, "a failed write is not retried or nudged");
   assert.equal(
     reply,
-    ["❌ Не виконано (помилка інструмента): «Alpha»", "✅ Підтверджено читанням картки: «Bravo» (B)"].join("\n"),
+    ["❌ Не виконано (помилка інструмента): «Alpha»", "✅ Підтверджено читанням картки: «Bravo»"].join("\n"),
   );
   assert.doesNotMatch(reply, /Створив Alpha/, "the model's claim that Alpha was created never reaches the user");
   session.close();
@@ -2552,8 +2553,8 @@ test("#31 #23: several verified mutations with due dates get one deterministic l
   assert.equal(
     reply,
     [
-      `«Alpha» (A): Готово. Trello підтвердив дедлайн: ${DUE_KYIV_A}.`,
-      "«Bravo» (B): Готово. Trello підтвердив дедлайн: субота, 19 вересня 2026, 22:00 за Києвом.",
+      `«Alpha»: Готово. Trello підтвердив дедлайн: ${DUE_KYIV_A}.`,
+      "«Bravo»: Готово. Trello підтвердив дедлайн: субота, 19 вересня 2026, 22:00 за Києвом.",
     ].join("\n"),
   );
   session.close();
@@ -2573,7 +2574,7 @@ test("#31: a verified due write next to an unrelated failed write is reported de
   const reply = await session.send("Дедлайн A і створи Zed");
   assert.equal(
     reply,
-    [`✅ картка A: Готово. Trello підтвердив дедлайн: ${DUE_KYIV_A}.`, "❌ Не виконано (помилка інструмента): «Zed»"].join("\n"),
+    [`✅ картка: Готово. Trello підтвердив дедлайн: ${DUE_KYIV_A}.`, "❌ Не виконано (помилка інструмента): «Zed»"].join("\n"),
   );
   session.close();
 });
@@ -2675,7 +2676,7 @@ test("#31 failed write: a trivial model reply is irrelevant to the failure repor
     msg("."),
     IDLE,
   ]);
-  assert.equal(await session.send("Онови A"), "❌ Не виконано (помилка інструмента): «n» (A)");
+  assert.equal(await session.send("Онови A"), "❌ Не виконано (помилка інструмента): «n»");
   session.close();
 });
 
@@ -2694,8 +2695,8 @@ test("#31 failed + verified: only the deterministic report reaches the user; a m
   assert.equal(
     reply,
     [
-      "❌ Не виконано (помилка інструмента): «Alpha» (A) — card locked",
-      "✅ Підтверджено читанням картки: «Bravo» (B)",
+      "❌ Не виконано (помилка інструмента): «Alpha» — card locked",
+      "✅ Підтверджено читанням картки: «Bravo»",
     ].join("\n"),
   );
   assert.equal(sendCalls.length, 1);
@@ -2751,8 +2752,8 @@ test("#31 failed write: a write REPLAYED during the corrective nudge is a new mu
     reply,
     [
       "❌ Не виконано (помилка інструмента): «Alpha» — temporary error",
-      "✅ Підтверджено читанням картки: «Charlie» (C)",
-      "✅ Підтверджено читанням картки: «Alpha» (A2)",
+      "✅ Підтверджено читанням картки: «Charlie»",
+      "✅ Підтверджено читанням картки: «Alpha»",
     ].join("\n"),
   );
   session.close();
@@ -2825,7 +2826,7 @@ test("#31 #23 due mismatch next to a failed write: report shows the verified due
   assert.equal(
     reply,
     [
-      `⚠️ «Alpha» (A): Картку оновлено, але Trello підтвердив дедлайн: ${DUE_KYIV_A}. Це відрізняється від значення, яке було відправлено.`,
+      `⚠️ «Alpha»: Картку оновлено, але Trello підтвердив дедлайн: ${DUE_KYIV_A}. Це відрізняється від значення, яке було відправлено.`,
       "❌ Не виконано (помилка інструмента): «Zed»",
     ].join("\n"),
   );
@@ -2869,8 +2870,8 @@ test("#31 #23 due mismatch: several mutations — a differing due gets its own d
   assert.equal(
     reply,
     [
-      `«Alpha» (A): Картку оновлено, але Trello підтвердив дедлайн: ${DUE_KYIV_A}. Це відрізняється від значення, яке було відправлено.`,
-      "«Bravo» (B): Готово. Trello підтвердив дедлайн: субота, 19 вересня 2026, 22:00 за Києвом.",
+      `«Alpha»: Картку оновлено, але Trello підтвердив дедлайн: ${DUE_KYIV_A}. Це відрізняється від значення, яке було відправлено.`,
+      "«Bravo»: Готово. Trello підтвердив дедлайн: субота, 19 вересня 2026, 22:00 за Києвом.",
     ].join("\n"),
   );
   assert.equal(sendCalls.length, 1);
@@ -2955,8 +2956,8 @@ test("#37: create verified + attach_label tool error → deterministic partial r
   assert.equal(
     reply,
     [
-      `✅ Підтверджено читанням картки: «Hero банер» (${L37_CARD})`,
-      `❌ Не виконано (помилка інструмента): label проєкту на картці «Hero банер» (${L37_CARD}) — TrelloAddLabelToCard failed`,
+      `✅ Підтверджено читанням картки: «Hero банер»`,
+      `❌ Не виконано (помилка інструмента): label проєкту на картці «Hero банер» — TrelloAddLabelToCard failed`,
       "⚠️ Картку створено, але належність до проєкту (label) НЕ підтверджено — поки що вона без проєкту.",
     ].join("\n"),
   );
@@ -3069,5 +3070,52 @@ test("#38: a turn that never reaches end_turn rejects instead of returning its l
       return true;
     },
   );
+  session.close();
+});
+
+// ---------------------------------------------------------------------------------------------
+// #63: provider resource ids (Trello MCP ARIs) never reach the user-visible reply. Production shape
+// (2026-10-01): create «Мерч Азов…» + a same-card due/desc update + direct read, all on live ARI shapes.
+// The code-owned multi-write block used to render each target as `«title» (ari:cloud:trello::card/…)`.
+// ---------------------------------------------------------------------------------------------
+
+const AZOV = "Мерч Азов: лонгслів + свічка";
+const AZOV_DUE = "2026-10-05T15:00:00.000Z"; // Monday 18:00 Kyiv (EEST)
+const AZOV_DESC = "Лонгслів + свічка в один набір.";
+const AZOV_EVENTS = [
+  mcpToolUse("c", "trelloWriteCard", { action: "create", listId: L37_LIST, name: AZOV }),
+  mcpToolResult("c", false, liveCardContent({ name: AZOV })),
+  mcpToolUse("u", "trelloWriteCard", { action: "update", cardId: L37_CARD, due: AZOV_DUE, desc: AZOV_DESC }),
+  mcpToolResult("u", false, liveCardContent({ name: AZOV, due: AZOV_DUE, desc: AZOV_DESC })),
+  mcpToolUse("r", "trelloReadCard", { action: "get", cardIdOrUrl: L37_CARD }),
+  mcpToolResult("r", false, liveCardContent({ name: AZOV, due: AZOV_DUE, desc: AZOV_DESC })),
+];
+const AZOV_BLOCK = [
+  `«${AZOV}»: Зміни підтверджено читанням картки.`,
+  `«${AZOV}»: Готово. Trello підтвердив дедлайн: понеділок, 5 жовтня 2026, 18:00 за Києвом.`,
+].join("\n");
+
+test("#63: verified create + due update on live ARI shapes → code-owned block names the card, never its ARI", async () => {
+  const { session, sendCalls } = await connect([...AZOV_EVENTS, msg("Готово."), IDLE]);
+  const reply = await session.send("Створи задачу по Азову: мерч, дедлайн понеділок 18:00, короткий опис");
+  assert.equal(reply, AZOV_BLOCK, "the verified facts are unchanged; only the provider id is gone");
+  assert.doesNotMatch(reply, /ari:cloud/);
+  assert.doesNotMatch(reply, /6aad12eb1d878e89bdc4a657|5f1a2b3c4d5e6f708192a3b4/, "no bare object/workspace id either");
+  assert.equal(sendCalls.length, 1, "verification is unchanged: the direct read settles both writes, no nudge");
+  session.close();
+});
+
+test("#63: the unverified-mutation diagnostic still carries provider ids internally; outcomes keep them for correlation", async () => {
+  const { session } = await connect([
+    mcpToolUse("c", "trelloWriteCard", { action: "create", listId: L37_LIST, name: AZOV }),
+    mcpToolResult("c", false, liveCardContent({ name: AZOV })),
+    msg("Готово."),
+    IDLE,
+    msg("Готово."),
+    IDLE,
+  ]);
+  const error = await unverified(session.send("Створи задачу по Азову"));
+  assert.ok(error.message.includes(`«${AZOV}» (${L37_CARD})`), "internal diagnostic only (logs/traces)");
+  assert.deepEqual(error.outcomes[0].targetCardIds, [L37_CARD]);
   session.close();
 });

@@ -6,11 +6,13 @@ import { MessageGroupBuffer } from "./messageGrouping.js";
 import { toTelegramReplyMarkup } from "./rhythmActions.js";
 import { classifySendError, createTelegramProactiveSender } from "./rhythmTelegram.js";
 import { createGroupDispatchHandlers } from "./telegramDispatch.js";
+import { ProposalConfirmations } from "./proposalConfirmation.js";
 import {
   createFormattedTextSender,
   isEntityParseError,
   renderTelegramHtml,
   sendFormattedMessage,
+  stripProviderResourceIds,
   type TelegramTextApi,
 } from "./telegramFormat.js";
 
@@ -211,4 +213,88 @@ test("ordinary reply and error notice via dispatch + createFormattedTextSender r
   await buffer.whenIdle();
   assert.equal(calls.length, 2, "one user-facing error notice, one send");
   assert.deepEqual(calls[1].other, { parse_mode: "HTML" });
+});
+
+// --- #63: provider resource ids (ARIs) never reach Telegram -------------------------------------------
+
+const WS = "6aa00b1e1ea493a95808aa9d";
+const CARD_ARI = `ari:cloud:trello::card/workspace/${WS}/6aad27a85ca581b8c2c9c95e`;
+const LIST_ARI = `ari:cloud:trello::list/workspace/${WS}/68c0a1b2c3d4e5f60718293a`;
+const AZOV = "Мерч Азов: лонгслів + свічка";
+const AZOV_DUE_LINE = "Готово. Trello підтвердив дедлайн: понеділок, 5 жовтня 2026, 18:00 за Києвом.";
+
+test("#63 (1): production-shaped reply — the title stays, the ARI is gone", () => {
+  const visible = stripProviderResourceIds(`«${AZOV}» (${CARD_ARI}). ${AZOV_DUE_LINE}\nЗміни підтверджено читанням картки.`);
+  assert.equal(visible, `«${AZOV}». ${AZOV_DUE_LINE}\nЗміни підтверджено читанням картки.`);
+  assert.doesNotMatch(visible, /ari:cloud:trello::/);
+});
+
+test("#63 (2): several references — parenthesized, bare, backticked, bracketed, comma-listed — are all removed", () => {
+  const visible = stripProviderResourceIds(
+    `«${AZOV}» (${CARD_ARI}) у списку ${LIST_ARI}.\nКартка \`${CARD_ARI}\`, список [${LIST_ARI}], обидва (${CARD_ARI}, ${LIST_ARI}).\n` +
+      `${CARD_ARI}: ${AZOV_DUE_LINE}`,
+  );
+  assert.equal(visible, `«${AZOV}» у списку.\nКартка, список, обидва.\n: ${AZOV_DUE_LINE}`);
+  assert.doesNotMatch(visible, /ari:cloud/);
+  assert.doesNotMatch(visible, new RegExp(WS));
+});
+
+test("#63 (3): ordinary URLs — Google Docs, Drive, Figma, trello.com — are unchanged, even one carrying an ARI", () => {
+  const text = [
+    "Бриф: https://docs.google.com/document/d/1AbC-dEf_ghI/edit?usp=sharing",
+    "Папка: https://drive.google.com/drive/folders/1xYz",
+    "Макет: https://www.figma.com/design/AbCdEf/Azov-merch?node-id=1-2",
+    "Картка: https://trello.com/c/hu6lbfoV/60-test-27-source-context-final",
+    "(https://trello.com/c/TJ11ldeK)",
+    `Дивно, але так: https://example.com/open?ref=${CARD_ARI}`,
+  ].join("\n");
+  assert.equal(stripProviderResourceIds(text), text);
+});
+
+test("#63 (4): ordinary parentheses and prose are untouched", () => {
+  const text =
+    "Пріоритет (за твоїм рішенням) — Azov. Розмір: M (2–3 год). Ціна (ARI-ставка) не змінилась; ari: це не id. " +
+    "Пінг (див. вище) і «Назва (чернетка)» лишаються.";
+  assert.equal(stripProviderResourceIds(text), text);
+});
+
+test("#63 (5): a verified due confirmation is identical apart from the removed provider id", () => {
+  const block = `«${AZOV}»: Зміни підтверджено читанням картки.\n«${AZOV}»: ${AZOV_DUE_LINE}`;
+  assert.equal(stripProviderResourceIds(block), block, "the code-owned block is already id-free and passes through unchanged");
+  assert.equal(stripProviderResourceIds(`«${AZOV}» (${CARD_ARI}): ${AZOV_DUE_LINE}`), `«${AZOV}»: ${AZOV_DUE_LINE}`);
+});
+
+test("#63 (10): Telegram delivery — sendMessage, its parse-error fallback and sendProposal never carry an ARI", async () => {
+  // Plain reply through dispatch + createFormattedTextSender (the exact telegramCli wiring); the first send is
+  // refused for entities so the raw-text fallback is exercised too.
+  const { api, calls } = fakeApi([parseError(), "ok", "ok"]);
+  let reply = `**«${AZOV}»** (${CARD_ARI}). ${AZOV_DUE_LINE}`;
+  const session: DjonikSessionHandle = { sessionId: "s", send: async () => "", sendOrdered: async () => reply, close: () => {} };
+  const registry = new ProposalConfirmations(() => 0);
+  const { onDispatch, onFailure } = createGroupDispatchHandlers({
+    djonikSession: { getSession: async () => session, closeIfOpen: () => {}, invalidate: () => {} },
+    sendMessage: createFormattedTextSender(api),
+    sendProposal: (chatId, text, keyboard) => sendFormattedMessage(api, chatId, text, keyboard),
+    proposals: registry,
+    logError: () => {},
+  });
+  const buffer = new MessageGroupBuffer({ adjacentWindowMs: 5, albumSettleWindowMs: 5, onDispatch, onFailure });
+  buffer.addFragment({ chatId: CHAT, userId: CHAT, messageId: 1, text: "Створи задачу по Азову" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await buffer.whenIdle();
+  assert.deepEqual(calls.map((call) => call.text), [
+    `<b>«${AZOV}»</b>. ${AZOV_DUE_LINE}`,
+    `**«${AZOV}»**. ${AZOV_DUE_LINE}`,
+  ]);
+
+  // Proposal reply: the keyboard is still attached and bound; only the visible text loses the ARI.
+  reply = `Перенести «${AZOV}» (${CARD_ARI}) з In progress → Waiting?\n\n✅ Внести · ✏️ Змінити`;
+  buffer.addFragment({ chatId: CHAT, userId: CHAT, messageId: 2, text: "Азов чекає фідбек" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await buffer.whenIdle();
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2].text, `Перенести «${AZOV}» з In progress → Waiting?\n\n✅ Внести · ✏️ Змінити`);
+  assert.ok(calls[2].other?.reply_markup, "the proposal keyboard is unchanged");
+  assert.equal(registry.has(CHAT, CHAT), true, "the proposal is still bound");
+  for (const call of calls) assert.doesNotMatch(call.text, /ari:cloud/);
 });

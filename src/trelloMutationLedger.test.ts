@@ -442,7 +442,12 @@ test("failed write: carries a bounded, whitespace-collapsed tool error and a dis
   assert.equal(isUnresolved(outcome), false);
   assert.equal(isNudgeable(outcome), false);
   assert.deepEqual(nudgeTargetIds(s.ledger.outcomes()), [], "a failed write is never asked to be re-read or replayed");
-  assert.match(describeMutationOutcomes(s.ledger.outcomes()), /^❌ Не виконано \(помилка інструмента\): «n» \(A\) — Trello rejected it$/);
+  assert.match(describeMutationOutcomes(s.ledger.outcomes()), /^❌ Не виконано \(помилка інструмента\): «n» — Trello rejected it$/);
+  assert.match(
+    describeMutationOutcomes(s.ledger.outcomes(), undefined, "diagnostic"),
+    /^❌ Не виконано \(помилка інструмента\): «n» \(A\) — Trello rejected it$/,
+    "#63: only the internal diagnostic keeps provider ids",
+  );
   const capped = new Script().write("w", { action: "create", name: "n" }, [{ type: "text", text: "y".repeat(500) }], true);
   assert.equal(capped.outcome().errorText?.length, 201);
 });
@@ -502,8 +507,9 @@ test("partial success: failed A + verified B + unresolved C are reported indepen
   assert.deepEqual(s.statuses(), ["failed", "verified", "awaiting_read"]);
   const report = describeMutationOutcomes(s.ledger.outcomes());
   assert.match(report, /❌ Не виконано.*«Alpha»/);
-  assert.match(report, /✅ Підтверджено.*«Bravo» \(B\)/);
-  assert.match(report, /⚠️ НЕ підтверджено.*«Charlie» \(C\)/);
+  assert.match(report, /✅ Підтверджено.*«Bravo»$/m);
+  assert.match(report, /⚠️ НЕ підтверджено.*«Charlie» — /);
+  assert.doesNotMatch(report, /\((?:A|B|C)\)/, "#63: no provider ids in the user report");
 });
 
 test("non-Trello MCP tools and unrelated Trello tools are ignored by the ledger", () => {
@@ -661,8 +667,8 @@ test("#37: create + attach_label + a later direct read of that card showing the 
   assert.equal(
     describeMutationOutcomes(s.outcomes()),
     [
-      `✅ Підтверджено читанням картки: «Hero банер» (${CARD_NEW})`,
-      `✅ Підтверджено читанням картки: label проєкту «Extract» на картці «Hero банер» (${CARD_NEW})`,
+      `✅ Підтверджено читанням картки: «Hero банер»`,
+      `✅ Підтверджено читанням картки: label проєкту «Extract» на картці «Hero банер»`,
     ].join("\n"),
   );
 });
@@ -695,8 +701,8 @@ test("#37: a valid direct read without the expected label is NOT plain verified 
   assert.equal(
     describeMutationOutcomes(s.outcomes()),
     [
-      `✅ Підтверджено читанням картки: «Hero банер» (${CARD_NEW})`,
-      `⚠️ НЕ підтверджено: label проєкту на картці «Hero банер» (${CARD_NEW}) — Trello після запису показує інші значення: label проєкту`,
+      `✅ Підтверджено читанням картки: «Hero банер»`,
+      `⚠️ НЕ підтверджено: label проєкту на картці «Hero банер» — Trello після запису показує інші значення: label проєкту`,
       "⚠️ Картку створено, але належність до проєкту (label) НЕ підтверджено — поки що вона без проєкту.",
     ].join("\n"),
   );
@@ -820,7 +826,7 @@ test("#37: a detach is confirmed only when that label is absent from the card's 
   assert.equal(stillThere.outcomes()[0].status, "field_mismatch");
   assert.equal(
     describeMutationOutcomes(stillThere.outcomes()),
-    `⚠️ НЕ підтверджено: зняття label «Extract» з картки ${CARD_NEW} — Trello після запису показує інші значення: label проєкту`,
+    `⚠️ НЕ підтверджено: зняття label «Extract» з картки — Trello після запису показує інші значення: label проєкту`,
   );
 });
 
@@ -851,8 +857,8 @@ test("#37: create verified + attach tool error → the card is reported created,
   assert.equal(
     describeMutationOutcomes(s.outcomes()),
     [
-      `✅ Підтверджено читанням картки: «Hero банер» (${CARD_NEW})`,
-      `❌ Не виконано (помилка інструмента): label проєкту на картці «Hero банер» (${CARD_NEW}) — ${ATTACH_ERROR_RESULT[0].text}`,
+      `✅ Підтверджено читанням картки: «Hero банер»`,
+      `❌ Не виконано (помилка інструмента): label проєкту на картці «Hero банер» — ${ATTACH_ERROR_RESULT[0].text}`,
       "⚠️ Картку створено, але належність до проєкту (label) НЕ підтверджено — поки що вона без проєкту.",
     ].join("\n"),
   );
@@ -885,4 +891,34 @@ test("#37 (#40): a same-id replay of the attach tool use/result after its result
   s.result("l", [{ type: "text", text: "late duplicate" }], true);
   assert.deepEqual(s.outcomes(), before);
   assert.equal(s.outcomes()[1].status, "verified");
+});
+
+test("#63: the user report names cards/checklists by name only; ids stay on the outcomes and in the diagnostic", () => {
+  const CARD = `ari:cloud:trello::card/workspace/${WS}/6aad12eb1d878e89bdc4a657`;
+  const CHECK = `ari:cloud:trello::checklist/workspace/${WS}/6aad12eb1d878e89bdc4a6aa`;
+  const base = { status: "verified" as const, unconfirmedFields: [], superseded: false, errorText: null };
+  const outcomes = [
+    { ...base, toolUseId: "c", targetCardIds: [CARD], label: "Мерч Азов", isCreate: true },
+    // An update that carried no name borrows the name the create stated for the SAME card (display only).
+    { ...base, toolUseId: "u", targetCardIds: [CARD], label: null },
+    { ...base, toolUseId: "k", targetCardIds: [CARD], label: "Кроки",
+      checklist: { action: "create" as const, checklistId: CHECK, itemId: null, name: "Кроки", cardName: "Мерч Азов" } },
+    { ...base, toolUseId: "i", targetCardIds: [CARD], label: "Друк",
+      checklist: { action: "add_item" as const, checklistId: CHECK, itemId: null, name: "Друк" } },
+    { ...base, status: "failed" as const, toolUseId: "x", targetCardIds: [`ari:cloud:trello::card/workspace/${WS}/6aad12eb1d878e89bdc4a6ff`], label: null, errorText: "locked" },
+  ] as unknown as MutationOutcome[];
+  const user = describeMutationOutcomes(outcomes);
+  assert.equal(
+    user,
+    [
+      "✅ Підтверджено читанням картки: «Мерч Азов»",
+      "✅ Підтверджено читанням картки: «Мерч Азов»",
+      "✅ Підтверджено читанням чекліста: чекліст «Кроки» у картці «Мерч Азов»",
+      "✅ Підтверджено читанням чекліста: пункт «Друк» у чеклісті",
+      "❌ Не виконано (помилка інструмента): картка — locked",
+    ].join("\n"),
+  );
+  assert.doesNotMatch(user, /ari:cloud|6aad12eb/);
+  assert.match(describeMutationOutcomes(outcomes, undefined, "diagnostic"), new RegExp(`картці ${CARD.replace(/[.]/g, "\.")}`));
+  assert.deepEqual(outcomes[1].targetCardIds, [CARD], "the provider id remains available internally");
 });
