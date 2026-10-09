@@ -4,6 +4,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { APIConnectionError, BadRequestError, InternalServerError } from "@anthropic-ai/sdk";
 import {
   connectToDjonik,
+  createCustomToolRouter,
   DjonikSessionDeadError,
   DjonikSpecialistUnverifiedError,
   DjonikTurnIncompleteError,
@@ -15,6 +16,7 @@ import {
   type DjonikTurnTelemetry,
 } from "./djonikClient.js";
 import { EXECUTOR_EXCEPTION_CONTENT } from "./customToolResolution.js";
+import { TrelloWorkHistoryClient, executeTrelloWorkHistory } from "./trelloWorkHistory.js";
 import { RELEASE_R29, RELEASE_R30_CANDIDATE, resolveReleaseCandidate } from "./release.js";
 import { servingSessionFixture } from "./releaseFixtures.test-helpers.js";
 
@@ -1637,5 +1639,110 @@ test("#44: generic #32 guarantees hold on an r30 Session — incomplete stops, u
   );
   await assert.rejects(session.send("Перейменуй A"), DjonikUnverifiedMutationError, "#31: an unverified write fails closed after one nudge");
   assert.equal(sendCalls.length, 4, "three turns plus exactly one verification nudge");
+  session.close();
+});
+
+// ---------------------------------------------------------------------------------------------
+// #66 at the real composition boundary: connectToDjonik → the serving router → the real work-history executor
+// (fake Trello HTTP) → the #36 exact relay. The scripted model asks for `response_format: detailed` exactly as it did
+// in production; what Daniel sees is decided by the turn, not by that choice.
+// ---------------------------------------------------------------------------------------------
+
+const HISTORY_NOW = new Date("2026-03-25T12:00:00Z");
+const CL_DONE = ["Whitepaper PDF", "Футболка", "RDAS", "Пост в LinkedIn", "Google Slides V3", "Банер", "Лендинг"];
+const historyCards = [
+  ...CL_DONE.map((name, index) => ({ id: `cl_${index}`, name, due: "2026-03-27T16:00:00Z", labels: [{ name: "Cossack Labs" }] })),
+  { id: "cl_new", name: "Нова картка CL", labels: [{ name: "Cossack Labs" }] },
+  { id: "ex_done", name: "Брендбук", labels: [{ name: "Extract" }] },
+];
+const doneMove = (id: string, card: string, hour: number) => ({
+  id, type: "updateCard", date: `2026-03-23T${String(hour).padStart(2, "0")}:00:00Z`,
+  data: { card: { id: card }, listBefore: { name: "In progress" }, listAfter: { name: "Done" } },
+});
+const historyActions = [
+  ...CL_DONE.map((_name, index) => doneMove(`d_${index}`, `cl_${index}`, index + 1)),
+  { id: "back", type: "updateCard", date: "2026-03-23T10:00:00Z", data: { card: { id: "cl_1" }, listBefore: { name: "Done" }, listAfter: { name: "In progress" } } },
+  doneMove("again", "cl_1", 11),
+  { id: "new", type: "createCard", date: "2026-03-23T12:00:00Z", data: { card: { id: "cl_new" } } },
+  doneMove("ex", "ex_done", 13),
+];
+/** The serving router with the real executor over a fake, GET-only Trello. */
+function realHistoryRouter(): DjonikCustomToolExecutor {
+  const trello = new TrelloWorkHistoryClient({
+    apiKey: "k", readToken: "t",
+    fetch: async (url) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/boards")) return Response.json([{ id: "board_1", name: "Djonik" }]);
+      return Response.json(path.endsWith("/cards/all") ? historyCards : historyActions);
+    },
+  });
+  return createCustomToolRouter({ workHistory: (input, policy) => executeTrelloWorkHistory(input, trello, HISTORY_NOW, policy) });
+}
+const DETAILED_BOARD = { window: { kind: "this_week" }, scope: { kind: "board" }, response_format: "detailed" };
+const DETAILED_CL = { window: { kind: "this_week" }, scope: { kind: "project", label: "Cossack Labs" }, response_format: "detailed" };
+/** What only the event chronology contains: an action timestamp, a due value, a per-event sentence. */
+const EVENT_DUMP = /\d{2}:\d{2}|due |У Done перейшла|Створено «/;
+const BOARD_OVERVIEW =
+  "Цього тижня на дошці:\n\n" +
+  "- **Перейшло в Done:** 9 — «Whitepaper PDF», «Футболка», «RDAS», «Пост в LinkedIn» та «Google Slides V3» (ще 3)\n" +
+  "- **Повернулось з Done:** 1 — «Футболка»\n" +
+  "- **Створено:** 1 картка";
+const historyTurn = (id: string, input: Record<string, unknown>, commentary: string): unknown[] => [
+  customUse(id, "trello_work_history", input), idleWith("requires_action", { event_ids: [id] }), msg(commentary), IDLE_OK,
+];
+
+test("#66 Friday review: an autonomous rhythm turn that asks for `detailed` still delivers the compact overview, then the PM text", async () => {
+  const { session, push, sendCalls } = await open(undefined, false, realHistoryRouter());
+  push(...historyTurn("h1", DETAILED_BOARD, "⏸ Не рухалось з плану тижня: Limen."));
+  const reply = await session.sendOrdered([{ type: "text", text: "[Робочий ритм · автоматичний хід · пʼятничний огляд · пт 27.03, 16:00]\nСклади повідомлення. Розпиши детально." }], "rhythm_ritual");
+  assert.equal(reply, `${BOARD_OVERVIEW}${PM_SEPARATOR}⏸ Не рухалось з плану тижня: Limen.`);
+  assert.doesNotMatch(reply, EVENT_DUMP);
+  // The model is told why, in the tool result only; the note never reaches Daniel.
+  const [result] = sentCustomResults(sendCalls);
+  assert.match(JSON.parse(result.content[0].text).detail_note, /not produced/);
+  assert.doesNotMatch(reply, /not produced|detail_note/);
+  session.close();
+});
+
+test("#66 interactive weekly review and its follow-up: `detailed` by the model's choice alone never becomes an event dump", async () => {
+  const { session, push } = await open(undefined, false, realHistoryRouter());
+  push(...historyTurn("h1", DETAILED_BOARD, "Схоже, Cossack Labs закрито майже повністю."));
+  const review = await session.send("Дай огляд тижня");
+  assert.equal(review, `${BOARD_OVERVIEW}${PM_SEPARATOR}Схоже, Cossack Labs закрито майже повністю.`);
+  push(...historyTurn("h2", DETAILED_BOARD, "Я б сказав, що так: головне закрито."));
+  const followUp = await session.send("тобто цей тиждень успішний?");
+  assert.ok(followUp.startsWith(`${BOARD_OVERVIEW}${PM_SEPARATOR}`));
+  for (const reply of [review, followUp]) assert.doesNotMatch(reply, EVENT_DUMP);
+  session.close();
+});
+
+test("#66 narrow question «По CL, які задачі було закрито»: the deduplicated list — under the released input shape and the next one", async () => {
+  const { session, push } = await open(undefined, false, realHistoryRouter());
+  // Agent v31 (released schema): the model can only narrow by scope and still asks for `detailed`.
+  push(...historyTurn("h1", DETAILED_CL, "Одна картка поверталась із Done."));
+  const released = await session.send("По CL, які задачі було закрито");
+  assert.ok(released.startsWith("Цього тижня по Cossack Labs:\n\n- **Перейшло в Done:** 8 — «Whitepaper PDF», «Футболка», «RDAS», «Пост в LinkedIn», «Google Slides V3», «Банер» та «Лендинг»\n"));
+  assert.doesNotMatch(released, EVENT_DUMP);
+  assert.doesNotMatch(released, /Брендбук/, "another project's card never enters a scoped answer");
+  // Next Agent version: `focus: completed` is exactly the requested slice.
+  push(...historyTurn("h2", { ...DETAILED_CL, focus: "completed" }, ""));
+  const next = await session.send("По CL, які задачі було закрито");
+  assert.equal(next, `Cossack Labs — закрито цього тижня:\n${CL_DONE.map((name) => `• ${name}`).join("\n")}\n7 унікальних карток. Одна картка заходила в Done двічі.`);
+  session.close();
+});
+
+test("#66 explicit detailed request: Daniel's own words open the chronology, for that turn only", async () => {
+  const { session, push } = await open(undefined, false, realHistoryRouter());
+  push(...historyTurn("h1", DETAILED_CL, ""));
+  const detailed = await session.send("Покажи детально всі переміщення по CL за тиждень");
+  assert.match(detailed, /^У Done перейшло 8 подій\. У Done перейшла «Whitepaper PDF» — пн 23\.03, 03:00, due пт 27\.03, 18:00\./);
+  assert.match(detailed, /«Футболка» — пн 23\.03, 13:00 \(2 рази\)/);
+  assert.match(detailed, /Створено «Нова картка CL» — пн 23\.03, 14:00\.$/);
+  // The permission belongs to the turn that asked: the next ordinary question is compact again.
+  push(...historyTurn("h2", DETAILED_CL, ""));
+  assert.doesNotMatch(await session.send("А що по CL закрито?"), EVENT_DUMP);
+  // Without the model asking for `detailed`, Daniel's word alone changes nothing either.
+  push(...historyTurn("h3", { window: { kind: "this_week" }, scope: { kind: "board" } }, ""));
+  assert.equal(await session.send("детально"), BOARD_OVERVIEW);
   session.close();
 });

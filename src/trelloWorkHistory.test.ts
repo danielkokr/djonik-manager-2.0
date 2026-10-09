@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  TRELLO_WORK_HISTORY_TOOL,
+  TRELLO_WORK_HISTORY_TOOL_NEXT,
   TrelloWorkHistoryClient,
   TrelloWorkHistoryError,
+  asksForDetailedHistory,
   buildWorkHistoryAnswer,
   buildWorkHistoryCategories,
+  executeTrelloWorkHistory,
   executeTrelloWorkHistoryFromEnvironment,
   formatKyivDateTime,
   resolveHistoryWindow,
@@ -102,13 +106,14 @@ test("#36 detailed answer_text names every item and never emits an omitted-examp
   );
 });
 
+// #66: the five-name cut is the BOARD overview's; a project overview names its cards (see the #66 tests below).
 test("#36 concise Variant B limits named completions to five, folds the omitted count into the same bullet, and shows a coverage warning ONLY for a real truncated/partial retrieval", () => {
   const manyCards = Array.from({ length: 6 }, (_, index) => ({ id: `id_${index}`, name: `Картка ${index}`, labels: [{ name: "Extract" }] }));
   const manyActions = manyCards.map((card, index) => action(`a_${index}`, `2026-03-23T0${index}:00:00Z`, "updateCard", { card, listBefore: { name: "In progress" }, listAfter: { name: "Done" } }));
-  const answer = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" } }, manyActions, manyCards, { pagesRead: 1, truncated: true, oldestActionReached: false }, NOW);
+  const answer = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: { kind: "board" } }, manyActions, manyCards, { pagesRead: 1, truncated: true, oldestActionReached: false }, NOW);
   assert.equal(
     answer.answer_text,
-    "Цього тижня по Extract:\n\n" +
+    "Цього тижня на дошці:\n\n" +
       "- **Перейшло в Done:** 6 — «Картка 0», «Картка 1», «Картка 2», «Картка 3» та «Картка 4» (ще 1)\n\n" +
       "Історія за цей період може бути неповною: частину дій не вдалося прочитати повністю.",
   );
@@ -116,11 +121,11 @@ test("#36 concise Variant B limits named completions to five, folds the omitted 
 
   // The same 6-card shape with COMPLETE coverage must never show that warning — concise mode's
   // ordinary 5-item example cap is not a data-coverage limitation (requirement #9).
-  const complete = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" } }, manyActions, manyCards, { pagesRead: 1, truncated: false, oldestActionReached: true }, NOW);
+  const complete = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: { kind: "board" } }, manyActions, manyCards, { pagesRead: 1, truncated: false, oldestActionReached: true }, NOW);
   assert.doesNotMatch(complete.answer_text, /може бути неповною|не всі|not all/i);
   assert.equal(
     complete.answer_text,
-    "Цього тижня по Extract:\n\n- **Перейшло в Done:** 6 — «Картка 0», «Картка 1», «Картка 2», «Картка 3» та «Картка 4» (ще 1)",
+    "Цього тижня на дошці:\n\n- **Перейшло в Done:** 6 — «Картка 0», «Картка 1», «Картка 2», «Картка 3» та «Картка 4» (ще 1)",
   );
 });
 
@@ -367,4 +372,165 @@ test("#36 turns missing and expired read credentials into safe tool errors with 
   const safe = await executeTrelloWorkHistoryFromEnvironment({ nope: true });
   assert.equal(safe.isError, true);
   assert.doesNotMatch(safe.content, /TRELLO_API_KEY|token/i);
+});
+
+// ---------------------------------------------------------------------------------------------
+// #66: the smallest deterministic answer for the question asked. Production evidence: the weekly review, a
+// follow-up and «По CL, які задачі було закрито» all led with the `detailed` event dump (timestamps, `due`,
+// Created/moved lines) — the only mode that named every card. A narrow question now has its own deduplicated
+// answer, a project overview names its cards, and `detailed` needs Daniel's own request, established by the client.
+// ---------------------------------------------------------------------------------------------
+
+const CL_NAMES = ["Whitepaper PDF", "Футболка", "RDAS", "Пост в LinkedIn", "Google Slides V3", "Банер", "Лендинг", "Іконки", "Презентація", "Стікери", "Мерч"];
+const clCards: TrelloHistoryCard[] = [
+  ...CL_NAMES.map((name, index) => ({ id: `cl_${index}`, name, due: "2026-03-27T16:00:00Z", labels: [{ name: "Cossack Labs" }] })),
+  { id: "cl_new", name: "Нова картка CL", labels: [{ name: "Cossack Labs" }] },
+  { id: "cl_moved", name: "Бриф", labels: [{ name: "Cossack Labs" }] },
+  { id: "other_done", name: "Чужа картка", labels: [{ name: "Extract" }] },
+];
+const toDone = (id: string, card: string, hour: number) =>
+  action(id, `2026-03-23T${String(hour).padStart(2, "0")}:00:00Z`, "updateCard", { card: { id: card }, listBefore: { name: "In progress" }, listAfter: { name: "Done" } });
+const clActions: TrelloAction[] = [
+  ...CL_NAMES.map((_name, index) => toDone(`d_${index}`, `cl_${index}`, index + 1)),
+  // «Футболка» goes Done → In progress → Done: two Done events, one card.
+  action("back", "2026-03-23T13:00:00Z", "updateCard", { card: { id: "cl_1" }, listBefore: { name: "Done" }, listAfter: { name: "In progress" } }),
+  toDone("again", "cl_1", 14),
+  action("new", "2026-03-23T15:00:00Z", "createCard", { card: { id: "cl_new" } }),
+  action("move", "2026-03-23T16:00:00Z", "updateCard", { card: { id: "cl_moved" }, listBefore: { name: "Backlog" }, listAfter: { name: "In progress" } }),
+  toDone("other", "other_done", 17),
+];
+const FULL: Parameters<typeof buildWorkHistoryAnswer>[3] = { pagesRead: 1, truncated: false, oldestActionReached: true };
+const CL = { kind: "project", label: "Cossack Labs" } as const;
+/** What only the event chronology contains: an action timestamp, a due value, a per-event sentence. */
+const CHRONOLOGY = /\d{2}:\d{2}|due |У Done перейшла|Створено «/;
+
+test("#66 narrow project Done question: exactly the deduplicated closed cards and the unique count — no other category, timestamp or due", () => {
+  const answer = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: CL, focus: "completed" }, clActions, clCards, FULL, NOW);
+  assert.equal(
+    answer.answer_text,
+    "Cossack Labs — закрито цього тижня:\n" +
+      CL_NAMES.map((name) => `• ${name}`).join("\n") +
+      "\n11 унікальних карток. Одна картка заходила в Done двічі.",
+  );
+  assert.doesNotMatch(answer.answer_text, CHRONOLOGY);
+  assert.doesNotMatch(answer.answer_text, /Нова картка CL|Бриф|Чужа картка|Створено|переміщ|Повернулось/i, "nothing but the requested slice");
+  assert.equal(answer.detail_note, undefined);
+});
+
+test("#66 every focus is its own slice; an empty slice is one line; board scope and an explicit range have honest headings", () => {
+  const focused = (focus: "returned" | "created" | "archived" | "moved") =>
+    buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: CL, focus }, clActions, clCards, FULL, NOW).answer_text;
+  assert.equal(focused("returned"), "Cossack Labs — повернулось із Done цього тижня:\n• Футболка");
+  assert.equal(focused("created"), "Cossack Labs — створено цього тижня:\n• Нова картка CL");
+  assert.equal(focused("moved"), "Cossack Labs — переміщено між списками цього тижня:\n• Бриф (Backlog → In progress)");
+  assert.equal(focused("archived"), "Cossack Labs — архівовано цього тижня: нічого.");
+  const board = buildWorkHistoryAnswer({ window: { kind: "last_week" }, scope: { kind: "board" }, focus: "completed" }, clActions, clCards, FULL, new Date("2026-04-01T12:00:00Z")).answer_text;
+  assert.match(board, /^Дошка — закрито минулого тижня:\n/);
+  assert.match(board, /• Чужа картка\n12 унікальних карток\. Одна картка заходила в Done двічі\.$/);
+  const ranged = buildWorkHistoryAnswer({ window: { kind: "explicit", from: "2026-03-23", to: "2026-03-24" }, scope: CL, focus: "created" }, clActions, clCards, FULL, NOW).answer_text;
+  assert.equal(ranged, "Cossack Labs — створено за період пн 23.03, 00:00 – вт 24.03, 00:00:\n• Нова картка CL");
+});
+
+test("#66 a long focused list is cut at 30 with an explicit remainder; the count still covers every card", () => {
+  const many = Array.from({ length: 33 }, (_, index) => ({ id: `m_${index}`, name: `К${index}`, labels: [{ name: "Extract" }] }));
+  const moves = many.map((card, index) => action(`mm_${index}`, `2026-03-23T08:${String(index).padStart(2, "0")}:00Z`, "updateCard", { card: { id: card.id }, listBefore: { name: "In progress" }, listAfter: { name: "Done" } }));
+  const text = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: { kind: "board" }, focus: "completed" }, moves, many, FULL, NOW).answer_text;
+  assert.equal(text.split("\n").filter((line) => line.startsWith("• К")).length, 30);
+  assert.match(text, /\n• … ще 3\n33 унікальні картки\.$/);
+});
+
+test("#66 default weekly overview stays the compact Variant B: a board names five, a project names its closed cards — never chronology", () => {
+  const board = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: { kind: "board" } }, clActions, clCards, FULL, NOW).answer_text;
+  assert.equal(
+    board,
+    "Цього тижня на дошці:\n\n" +
+      "- **Перейшло в Done:** 13 — «Whitepaper PDF», «Футболка», «RDAS», «Пост в LinkedIn» та «Google Slides V3» (ще 7)\n" +
+      "- **Повернулось з Done:** 1 — «Футболка»\n" +
+      "- **Створено:** 1 картка\n" +
+      "- **Інші переміщення:** 1 картка",
+  );
+  const project = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: CL }, clActions, clCards, FULL, NOW).answer_text;
+  for (const name of CL_NAMES) assert.ok(project.includes(`«${name}»`), `a project overview names ${name}`);
+  assert.doesNotMatch(project, /\(ще \d+\)/);
+  assert.equal(project.split("\n").length, 6, "heading, blank line and four category bullets");
+  for (const text of [board, project]) assert.doesNotMatch(text, CHRONOLOGY);
+});
+
+test("#66 `detailed` without Daniel's own request is withheld: the compact answer plus a model-only note; with it, the chronology is unchanged", () => {
+  const input = { window: { kind: "this_week" }, scope: CL, response_format: "detailed" } as const;
+  const withheld = buildWorkHistoryAnswer(input, clActions, clCards, FULL, NOW, { detailRequested: false });
+  assert.equal(withheld.answer_text, buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: CL }, clActions, clCards, FULL, NOW).answer_text);
+  assert.doesNotMatch(withheld.answer_text, CHRONOLOGY);
+  assert.match(withheld.detail_note ?? "", /not produced[\s\S]*Daniel's own message[\s\S]*Do not narrate events/);
+  assert.ok(!withheld.answer_text.includes(withheld.detail_note!), "the note is for the model, never part of what Daniel sees");
+
+  const delivered = buildWorkHistoryAnswer(input, clActions, clCards, FULL, NOW, { detailRequested: true });
+  assert.equal(delivered.detail_note, undefined);
+  assert.match(delivered.answer_text, /^У Done перейшло 12 подій\. У Done перейшла «Whitepaper PDF» — пн 23\.03, 03:00, due пт 27\.03, 18:00\./);
+  assert.match(delivered.answer_text, /«Футболка» — пн 23\.03, 16:00 \(2 рази\)/);
+  assert.match(delivered.answer_text, /Створено «Нова картка CL» — пн 23\.03, 17:00\./);
+  // A focused detailed request narrows the chronology to that kind of change.
+  const focused = buildWorkHistoryAnswer({ ...input, focus: "created" }, clActions, clCards, FULL, NOW, { detailRequested: true }).answer_text;
+  assert.equal(focused, "Створено 1 картка. Створено «Нова картка CL» — пн 23.03, 17:00.");
+});
+
+test("#66 coverage/truncation semantics are unchanged in every new shape: the warning is kept, never invented", () => {
+  const partial = { pagesRead: 20, truncated: true, oldestActionReached: false };
+  const WARNING = "Історія за цей період може бути неповною: частину дій не вдалося прочитати повністю.";
+  const shapes = [
+    { window: { kind: "this_week" }, scope: CL, focus: "completed" },
+    { window: { kind: "this_week" }, scope: CL, focus: "archived" },
+    { window: { kind: "this_week" }, scope: CL, response_format: "detailed" },
+    { window: { kind: "this_week" }, scope: { kind: "board" } },
+  ] as const;
+  for (const input of shapes) {
+    const cut = buildWorkHistoryAnswer(input, clActions, clCards, partial, NOW, { detailRequested: false });
+    assert.ok(cut.answer_text.endsWith(`\n\n${WARNING}`), JSON.stringify(input));
+    assert.deepEqual(cut.coverage, partial);
+    assert.ok(!buildWorkHistoryAnswer(input, clActions, clCards, FULL, NOW, { detailRequested: false }).answer_text.includes(WARNING));
+  }
+  // The explicitly requested chronology keeps its own closing warning too.
+  assert.ok(buildWorkHistoryAnswer(shapes[2], clActions, clCards, partial, NOW, { detailRequested: true }).answer_text.endsWith(` ${WARNING}`));
+});
+
+test("#66 the executor is closed by default and accepts the released input shape and the next one; a bad focus is a safe error", async () => {
+  const client = new TrelloWorkHistoryClient({
+    apiKey: "k", readToken: "t",
+    fetch: async (url) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/boards")) return Response.json([{ id: "board_1", name: "Djonik" }]);
+      return Response.json(path.endsWith("/cards/all") ? clCards : clActions);
+    },
+  });
+  const run = async (input: unknown, policy?: { detailRequested: boolean }) => JSON.parse((await executeTrelloWorkHistory(input, client, NOW, policy)).content);
+  const released = { window: { kind: "this_week" }, scope: CL, response_format: "detailed" };
+  assert.doesNotMatch((await run(released)).answer_text, CHRONOLOGY, "no policy → no chronology");
+  assert.ok((await run(released)).detail_note);
+  assert.match((await run(released, { detailRequested: true })).answer_text, /^У Done перейшло 12 подій\./);
+  assert.match((await run({ window: { kind: "this_week" }, scope: CL, focus: "completed" })).answer_text, /^Cossack Labs — закрито цього тижня:\n• Whitepaper PDF\n/);
+  for (const focus of ["everything", "toString", 5, null]) {
+    const bad = await executeTrelloWorkHistory({ window: { kind: "this_week" }, scope: CL, focus }, client, NOW);
+    assert.equal(bad.isError, true, String(focus));
+  }
+});
+
+test("#66 an explicit request for detail is a short list of plain phrasings; ordinary review questions are not one", () => {
+  for (const text of ["покажи детально", "Дай всі переміщення по CL", "повна історія за тиждень", "дай повну історію", "Розпиши детальніше (огляд тижня від пт 09.10).", "хочу хронологію", "покажи кожну подію", "докладно, будь ласка"]) {
+    assert.equal(asksForDetailedHistory(text), true, text);
+  }
+  for (const text of ["По CL, які задачі було закрито", "тобто цей тиждень успішний?", "огляд тижня", "Що по Extract минулого тижня?", "яка історія з Limen?", "що рухалось цього тижня"]) {
+    assert.equal(asksForDetailedHistory(text), false, text);
+  }
+});
+
+test("#66 the next tool definition only adds `focus`; the released definition (Agent v26–v31) is untouched", () => {
+  assert.deepEqual(Object.keys(TRELLO_WORK_HISTORY_TOOL.input_schema.properties), ["window", "scope", "response_format"]);
+  assert.doesNotMatch(TRELLO_WORK_HISTORY_TOOL.description, /focus/);
+  const { focus, ...rest } = TRELLO_WORK_HISTORY_TOOL_NEXT.input_schema.properties;
+  assert.deepEqual(rest, TRELLO_WORK_HISTORY_TOOL.input_schema.properties);
+  assert.deepEqual(focus, { enum: ["overview", "completed", "returned", "created", "archived", "moved"] });
+  assert.deepEqual(TRELLO_WORK_HISTORY_TOOL_NEXT.input_schema.required, ["window", "scope"], "focus and response_format stay optional: the default is the overview");
+  assert.equal(TRELLO_WORK_HISTORY_TOOL_NEXT.name, "trello_work_history");
+  assert.match(TRELLO_WORK_HISTORY_TOOL_NEXT.description, /only when Daniel's own message asks for detail/);
+  assert.match(TRELLO_WORK_HISTORY_TOOL_NEXT.description, /never request it to gather material/);
 });

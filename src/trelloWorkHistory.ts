@@ -16,11 +16,20 @@ export type WorkHistoryWindowInput =
 
 export type WorkHistoryScope = { kind: "board" } | { kind: "project"; label: string };
 export type WorkHistoryFormat = "concise" | "detailed";
+/** What Daniel asked about (#66): the whole period, or one kind of change only. */
+export type WorkHistoryFocus = "overview" | "completed" | "returned" | "created" | "archived" | "moved";
 
 export interface TrelloWorkHistoryInput {
   window: WorkHistoryWindowInput;
   scope: WorkHistoryScope;
   response_format?: WorkHistoryFormat;
+  focus?: WorkHistoryFocus;
+}
+
+/** Decided by the client from the turn, never by the model's input (#66). */
+export interface WorkHistoryDeliveryPolicy {
+  /** The event-by-event chronology is rendered only when Daniel's own message of this turn asked for it. */
+  detailRequested: boolean;
 }
 
 export interface HistoryWindow {
@@ -127,6 +136,8 @@ export interface WorkHistoryAnswer {
   scope: { kind: "board" } | { kind: "project"; label: string };
   coverage: HistoryCoverage;
   answer_text: string;
+  /** Present only when `detailed` was requested but not delivered (#66); for the model, never shown to Daniel. */
+  detail_note?: string;
 }
 
 export const TRELLO_WORK_HISTORY_TOOL = {
@@ -163,6 +174,26 @@ export const TRELLO_WORK_HISTORY_TOOL = {
         ],
       },
       response_format: { enum: ["concise", "detailed"] },
+    },
+  },
+};
+
+/**
+ * #66 source intent for the next Agent version; NOT what any reviewed release exposes. Agent v26–v31 carry
+ * `TRELLO_WORK_HISTORY_TOOL` above byte for byte (attestation compares against it), so that definition stays frozen
+ * until a release-construction issue ships this one together with the #66 `work-review` Skill edit. It adds the
+ * explicit `focus` and says what `detailed` is for. The executor already accepts both input shapes.
+ */
+export const TRELLO_WORK_HISTORY_TOOL_NEXT = {
+  type: "custom" as const,
+  name: TRELLO_WORK_HISTORY_TOOL.name,
+  description:
+    "Read a compact, read-only Trello board-action digest for a requested week or explicit Kyiv date range. The client shows its `answer_text` to Daniel verbatim, so request exactly what he asked. `focus`: `overview` (default) for a week or project review; one kind of change (`completed` = moved into Done, `returned` = came back from Done, `created`, `archived`, `moved`) for a narrow question — the answer is then only that deduplicated card list. `response_format: detailed` is the event-by-event chronology: code delivers it only when Daniel's own message asks for detail, so never request it to gather material for your own summary. It computes Kyiv dates, counts, current-label project scope, and coverage itself; do not use it for current Project Health, writes, effort, or work outside Trello.",
+  input_schema: {
+    ...TRELLO_WORK_HISTORY_TOOL.input_schema,
+    properties: {
+      ...TRELLO_WORK_HISTORY_TOOL.input_schema.properties,
+      focus: { enum: ["overview", "completed", "returned", "created", "archived", "moved"] },
     },
   },
 };
@@ -268,13 +299,19 @@ function isDone(name: string | undefined): boolean {
   return name?.trim().toLocaleLowerCase("uk-UA") === "done";
 }
 
+/** Named cards per category in an overview. A project is the narrow scope, so its names are not cut at five (#66):
+ *  that cut made a full `detailed` dump the only way to learn which cards a project closed. */
+const OVERVIEW_NAMED_LIMIT = { board: 5, project: 15 } as const;
+/** Cards listed by a single-focus answer before "ще N". */
+const FOCUS_LIST_LIMIT = 30;
+
 function categoryFor(
   items: WorkHistoryItem[],
   total_kind: WorkHistoryCategory["total_kind"],
-  format: WorkHistoryFormat,
+  limit: number | null,
 ): WorkHistoryCategory | undefined {
   if (items.length === 0) return undefined;
-  const shownItems = format === "concise" ? items.slice(0, 5) : items;
+  const shownItems = limit === null ? items : items.slice(0, limit);
   const total = total_kind === "event_occurrences" ? items.reduce((count, item) => count + (item.occurrences ?? 1), 0) : items.length;
   const shown = total_kind === "event_occurrences" ? shownItems.reduce((count, item) => count + (item.occurrences ?? 1), 0) : shownItems.length;
   return { total, total_kind, shown, omitted: total - shown, items: shownItems };
@@ -444,6 +481,66 @@ function buildVariantBAnswerText(categories: WorkHistoryCategories, input: Trell
   return [heading, "", ...activeKeys.map((key) => buildVariantBBullet(key, categories[key]!))].join("\n");
 }
 
+const FOCUS_CATEGORY: Record<Exclude<WorkHistoryFocus, "overview">, CategoryKey> = {
+  completed: "reached_done",
+  returned: "returned_from_done",
+  created: "created",
+  archived: "archived",
+  moved: "moved",
+};
+
+const FOCUS_LABEL: Record<CategoryKey, string> = {
+  reached_done: "закрито",
+  returned_from_done: "повернулось із Done",
+  created: "створено",
+  archived: "архівовано",
+  moved: "переміщено між списками",
+};
+
+const FOCUS_REPEAT_VERB: Partial<Record<CategoryKey, readonly [one: string, few: string, many: string]>> = {
+  reached_done: ["заходила в Done", "заходили в Done", "заходило в Done"],
+  returned_from_done: ["поверталась із Done", "повертались із Done", "поверталось із Done"],
+};
+
+function focusPeriod(input: WorkHistoryWindowInput, window: HistoryWindow): string {
+  if (input.kind === "this_week") return "цього тижня";
+  if (input.kind === "last_week") return "минулого тижня";
+  return `за період ${formatKyivDateTime(window.from)} – ${formatKyivDateTime(window.to)}`;
+}
+
+/** "Одна картка заходила в Done двічі." — the only mention of a repeated Done/reopen in a focused answer. */
+function repeatSentence(key: CategoryKey, items: readonly WorkHistoryItem[]): string | null {
+  const verb = FOCUS_REPEAT_VERB[key];
+  const repeated = items.filter((item) => (item.occurrences ?? 1) > 1);
+  if (!verb || repeated.length === 0) return null;
+  if (repeated.length === 1) {
+    const times = repeated[0].occurrences!;
+    return `Одна картка ${verb[0]} ${times === 2 ? "двічі" : `${times} ${ukrainianPlural(times, ["раз", "рази", "разів"])}`}.`;
+  }
+  return `${repeated.length} ${ukrainianPlural(repeated.length, VARIANT_B_COUNT_NOUN)} ${ukrainianPlural(repeated.length, verb)} більше одного разу.`;
+}
+
+/**
+ * The deterministic answer to a narrow question (#66) — «По CL, які задачі було закрито?»: exactly the requested kind
+ * of change as one deduplicated card list, then the unique-card count. No other category, no timestamp, no due value
+ * and no event chronology. A card that entered Done twice is listed once; the repeat is one short closing sentence.
+ */
+function buildFocusAnswerText(key: CategoryKey, category: WorkHistoryCategory | undefined, input: TrelloWorkHistoryInput, window: HistoryWindow): string {
+  const scope = input.scope.kind === "project" ? input.scope.label : "Дошка";
+  const heading = `${scope} — ${FOCUS_LABEL[key]} ${focusPeriod(input.window, window)}`;
+  if (!category) return `${heading}: нічого.`;
+  const count = category.items.length;
+  const listed = category.items.slice(0, FOCUS_LIST_LIMIT);
+  const lines = [`${heading}:`, ...listed.map((item) => `• ${item.card}${key === "moved" && item.transition ? ` (${item.transition})` : ""}`)];
+  if (count > listed.length) lines.push(`• … ще ${count - listed.length}`);
+  const closing = [
+    ...(count > 1 ? [`${count} ${ukrainianPlural(count, ["унікальна картка", "унікальні картки", "унікальних карток"])}.`] : []),
+    ...[repeatSentence(key, category.items)].filter((sentence): sentence is string => sentence !== null),
+  ];
+  if (closing.length > 0) lines.push(closing.join(" "));
+  return lines.join("\n");
+}
+
 /** The deterministic detailed `answer_text`: every category total and every named item, in full —
  *  the same computation `renderCategoryFactLines` already performs, just no longer a separate
  *  model-facing field Claude would have to fold into prose itself. Unchanged by the Variant B
@@ -489,7 +586,8 @@ export function buildWorkHistoryCategories(
   now = new Date(),
 ): WorkHistoryCategories {
   const window = resolveHistoryWindow(input.window, now);
-  const format = input.response_format ?? "concise";
+  // Only the overview caps its named examples; a detailed or single-focus answer needs every item.
+  const limit = input.response_format === "detailed" || (input.focus ?? "overview") !== "overview" ? null : OVERVIEW_NAMED_LIMIT[input.scope.kind];
   const cardsById = new Map(cards.map((card) => [card.id, card]));
   const projectLabel = input.scope.kind === "project" ? input.scope.label : null;
   const allowed = (card: TrelloHistoryCard | undefined): boolean =>
@@ -544,7 +642,7 @@ export function buildWorkHistoryCategories(
     ["moved", moved, "cards"],
   ];
   for (const [key, items, totalKind] of sections) {
-    const category = categoryFor(items, totalKind, format);
+    const category = categoryFor(items, totalKind, limit);
     if (category) categories[key] = category;
   }
   return categories;
@@ -564,24 +662,48 @@ export function buildWorkHistoryAnswer(
   cards: readonly TrelloHistoryCard[],
   coverage: HistoryCoverage,
   now = new Date(),
+  policy: WorkHistoryDeliveryPolicy = { detailRequested: true },
 ): WorkHistoryAnswer {
   const window = resolveHistoryWindow(input.window, now);
-  const categories = buildWorkHistoryCategories(input, actions, cards, now);
-  const format = input.response_format ?? "concise";
+  // #66: `detailed` is the model's request; whether Daniel asked for it is the client's fact. Without that fact the
+  // answer is the ordinary compact one, so a full event dump cannot reach him by the model's choice alone.
+  const withheld = input.response_format === "detailed" && !policy.detailRequested;
+  const format: WorkHistoryFormat = input.response_format === "detailed" && !withheld ? "detailed" : "concise";
+  const focus = input.focus ?? "overview";
+  const focusKey = focus === "overview" ? null : FOCUS_CATEGORY[focus];
+  const all = buildWorkHistoryCategories({ ...input, response_format: format }, actions, cards, now);
+  const categories: WorkHistoryCategories = focusKey === null ? all : all[focusKey] ? { [focusKey]: all[focusKey] } : {};
   const incomplete = coverage.truncated || !coverage.oldestActionReached;
   // Only a real data-coverage limitation (truncated/partial retrieval) produces this warning —
   // never concise mode's ordinary per-category example cap, which is not a coverage gap.
   const coverageWarning = incomplete ? "Історія за цей період може бути неповною: частину дій не вдалося прочитати повністю." : null;
+  const conciseText = focusKey === null ? buildVariantBAnswerText(categories, input, window) : buildFocusAnswerText(focusKey, categories[focusKey], input, window);
   const answerText =
-    format === "concise"
-      ? buildVariantBAnswerText(categories, input, window) + (coverageWarning ? `\n\n${coverageWarning}` : "")
-      : buildDetailedAnswerText(categories, coverageWarning);
+    format === "concise" ? conciseText + (coverageWarning ? `\n\n${coverageWarning}` : "") : buildDetailedAnswerText(categories, coverageWarning);
   return {
     window: { from: formatKyivDateTime(window.from), to: formatKyivDateTime(window.to), label: window.label },
     scope: input.scope.kind === "board" ? { kind: "board" } : { kind: "project", label: input.scope.label },
     coverage,
     answer_text: answerText,
+    ...(withheld ? { detail_note: DETAIL_WITHHELD_NOTE } : {}),
   };
+}
+
+const DETAIL_WITHHELD_NOTE =
+  "The detailed chronology was not produced: it is shown only when Daniel's own message in this turn asks for it " +
+  "(«детально», «повна історія», «всі переміщення»). `answer_text` is the compact answer he sees. Do not narrate events " +
+  "yourself; if detail would help, say in one short line that he can ask for it.";
+
+/**
+ * Whether Daniel's own message explicitly asks for the detailed history (#66). Deliberately a short list of plain
+ * requests, not intent recognition: it only permits what the model also has to ask for, so a false match shows nothing
+ * by itself, and a miss costs one compact answer plus a line telling Daniel how to get the detail.
+ */
+const DETAIL_REQUEST =
+  /детальн|докладн|подробиц|розгорнут|розпиши|хронолог|повн\S*\s+істор|вс[іея]\S*\s+(?:переміщен|поді|рух|істор)|кожн\S*\s+(?:переміщен|поді|картк)|in detail|detailed|full history/iu;
+
+export function asksForDetailedHistory(text: string): boolean {
+  return DETAIL_REQUEST.test(text);
 }
 
 
@@ -769,7 +891,7 @@ export class TrelloWorkHistoryClient {
     return { actions, coverage: { pagesRead, truncated, oldestActionReached } };
   }
 
-  async execute(input: TrelloWorkHistoryInput, now = new Date()): Promise<WorkHistoryAnswer> {
+  async execute(input: TrelloWorkHistoryInput, now = new Date(), policy?: WorkHistoryDeliveryPolicy): Promise<WorkHistoryAnswer> {
     const window = resolveHistoryWindow(input.window, now);
     const board = await this.resolveSingleBoard();
     const cards = await this.readCards(board.id);
@@ -778,27 +900,33 @@ export class TrelloWorkHistoryClient {
       throw new TrelloWorkHistoryError("project_not_found");
     }
     const { actions, coverage } = await this.readActions(board.id, window);
-    return buildWorkHistoryAnswer(input, actions, cards, coverage, now);
+    return buildWorkHistoryAnswer(input, actions, cards, coverage, now, policy);
   }
 }
 
 export interface CustomToolExecutionResult { isError: boolean; content: string }
 
 /** Safe boundary for the Session client: neither credentials nor raw Trello errors cross it. */
-export async function executeTrelloWorkHistory(input: unknown, client: TrelloWorkHistoryClient, now = new Date()): Promise<CustomToolExecutionResult> {
+/** Without a policy the executor is closed: a caller that cannot say Daniel asked for detail never gets the chronology. */
+export async function executeTrelloWorkHistory(
+  input: unknown,
+  client: TrelloWorkHistoryClient,
+  now = new Date(),
+  policy: WorkHistoryDeliveryPolicy = { detailRequested: false },
+): Promise<CustomToolExecutionResult> {
   try {
     const request = parseTrelloWorkHistoryInput(input);
-    return { isError: false, content: JSON.stringify(await client.execute(request, now)) };
+    return { isError: false, content: JSON.stringify(await client.execute(request, now, policy)) };
   } catch (error) {
     const message = error instanceof TrelloWorkHistoryError ? error.message : "Trello history request is unavailable because its input was invalid.";
     return { isError: true, content: JSON.stringify({ error: { message } }) };
   }
 }
 
-export async function executeTrelloWorkHistoryFromEnvironment(input: unknown): Promise<CustomToolExecutionResult> {
+export async function executeTrelloWorkHistoryFromEnvironment(input: unknown, policy?: WorkHistoryDeliveryPolicy): Promise<CustomToolExecutionResult> {
   try {
     const client = new TrelloWorkHistoryClient({ apiKey: process.env.TRELLO_API_KEY, readToken: process.env.TRELLO_READ_TOKEN });
-    return executeTrelloWorkHistory(input, client);
+    return executeTrelloWorkHistory(input, client, new Date(), policy);
   } catch (error) {
     const message = error instanceof TrelloWorkHistoryError ? error.message : "Trello history request is unavailable because its input was invalid.";
     return { isError: true, content: JSON.stringify({ error: { message } }) };
@@ -816,8 +944,12 @@ export function parseTrelloWorkHistoryInput(value: unknown): TrelloWorkHistoryIn
   if (!scope) throw new Error("Invalid tool input.");
   const response_format = value.response_format === undefined ? undefined : value.response_format === "concise" || value.response_format === "detailed" ? value.response_format : null;
   if (response_format === null) throw new Error("Invalid tool input.");
-  return { window, scope, ...(response_format ? { response_format } : {}) };
+  const focus = value.focus === undefined ? undefined : FOCUS_VALUES.find((candidate) => candidate === value.focus) ?? null;
+  if (focus === null) throw new Error("Invalid tool input.");
+  return { window, scope, ...(response_format ? { response_format } : {}), ...(focus ? { focus } : {}) };
 }
+
+const FOCUS_VALUES: readonly WorkHistoryFocus[] = ["overview", "completed", "returned", "created", "archived", "moved"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);

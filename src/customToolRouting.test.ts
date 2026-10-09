@@ -17,8 +17,9 @@ function recordingRouter() {
     calls.push(`${label}:${JSON.stringify(input)}${context ? `:${context.toolUseId}:${context.authority}` : ""}`);
     return { isError: false, content: label };
   };
+  const history = executor("history");
   const route = createCustomToolRouter({
-    workHistory: executor("history"), boardSnapshot: executor("snapshot"), reminder: executor("reminder"), focusBudget: executor("focus"),
+    workHistory: (input) => history(input), boardSnapshot: executor("snapshot"), reminder: executor("reminder"), focusBudget: executor("focus"),
     projectTime: executor("time"),
   });
   return { calls, route };
@@ -44,6 +45,15 @@ test("#62: a project-time call reaches its own read-only executor exactly once â
   const result = await route({ project_label: "A1" }, context("trello_project_time"));
   assert.equal(result.content, "time");
   assert.deepEqual(calls, ['time:{"project_label":"A1"}'], "one call, no id/authority (read-only), no history executor");
+});
+
+test("#66: work history learns whether Daniel's turn asked for detail from the call context â€” false unless the client said so", async () => {
+  const seen: unknown[] = [];
+  const route = createCustomToolRouter({ workHistory: async (_input, policy) => { seen.push(policy); return { isError: false, content: "history" }; } });
+  await route({}, context("trello_work_history"));
+  await route({}, { ...context("trello_work_history"), detailRequested: true });
+  await route({}, { ...context("trello_work_history"), authority: "autonomous_read_only", detailRequested: false });
+  assert.deepEqual(seen, [{ detailRequested: false }, { detailRequested: true }, { detailRequested: false }]);
 });
 
 test("an unknown tool fails closed: no executor runs, and it never becomes work history", async () => {

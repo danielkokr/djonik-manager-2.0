@@ -8,7 +8,7 @@ import { SUPPORTED_CUSTOM_TOOLS, attestAgentVersion, attestServingSession, canon
 import { buildCandidateUpdateBody, buildReleaseUpdateBody } from "./releasePlan.js";
 import { TRELLO_PROJECT_TIME_TOOL } from "./projectTimeTool.js";
 import { readOnlyBoundaryFor } from "./rhythmRuntime.js";
-import { R30_SYSTEM_PROMPT, SOURCE_SYSTEM_PROMPT, agentVersionFixture, r30SkillSource, servingSessionFixture } from "./releaseFixtures.test-helpers.js";
+import { R30_SYSTEM_PROMPT, SOURCE_SYSTEM_PROMPT, agentVersionFixture, r30SkillSource, r31SkillSource, servingSessionFixture } from "./releaseFixtures.test-helpers.js";
 
 // #64 (docs/102): r31 is the remote-constructed, attested resolution of RELEASE_R31_CANDIDATE — Agent v31, two new
 // byte-verified Skill versions (#59 task-management, #62 work-review), the #59 prompt and the #62 trello_project_time tool.
@@ -71,7 +71,8 @@ test("r31 Skill pins: two new explicit versions with measured Session spellings;
       assert.equal(pin.sessionVersion, real.sessionVersion);
       assert.notDeepEqual(skill.pin, prior.pin, `${skill.name} moves to its r31 version`);
       // The pinned version was downloaded byte-identical to this committed source (docs/102 §8).
-      assert.equal(sha256(skillSource(skill.name)), real.sha, `${skill.name} repo source drifted from its r31 pin`);
+      // #66 edits work-review in source only (not synced); the r31 pin stores the source minus that edit.
+      assert.equal(sha256(r31SkillSource(skill.name)), real.sha, `${skill.name} repo source (minus the unsynced #66 edit) drifted from its r31 pin`);
       assert.notEqual(r30SkillSource(skill.name), skillSource(skill.name), `${skill.name}: r30 pins the source minus the #59/#62 edit`);
     } else {
       assert.deepEqual(skill, prior, `${skill.name}: r30 pin reused unchanged`);

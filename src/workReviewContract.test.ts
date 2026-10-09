@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { TRELLO_WORK_HISTORY_TOOL } from "./trelloWorkHistory.js";
+import { TRELLO_WORK_HISTORY_TOOL, TRELLO_WORK_HISTORY_TOOL_NEXT } from "./trelloWorkHistory.js";
 import {
   WORK_REVIEW_RUBRIC,
   extractEvidenceTrace,
@@ -54,6 +54,21 @@ test("#36 work-review Skill treats answer_text as delivered by the client, not s
   assert.match(skill, /ONE short PM-level conclusion/i);
   assert.match(skill, /схоже/);
   assert.doesNotMatch(skill, /without summarizing, categorizing, generalizing/i);
+});
+
+// #66: the old line "Choose `concise` unless Daniel asks for detail" left the model one way to learn every card name —
+// `detailed`, whose block the client then showed Daniel verbatim. The Skill now maps the question to the answer shape.
+test("#66 work-review Skill answers the question asked: one call, a focus for a narrow question, detail only on Daniel's request", () => {
+  assert.match(skill, /Answer the question Daniel asked, with one call/);
+  assert.match(skill, /default `focus: overview`/);
+  for (const focus of ["completed", "returned", "created", "archived", "moved"]) assert.match(skill, new RegExp(`\`${focus}\``));
+  assert.match(skill, /only that deduplicated card list/);
+  assert.match(skill, /`response_format: detailed` is the event-by-event chronology, only when Daniel's own message asks for it/);
+  assert.match(skill, /never request it to gather material for your own summary/);
+  assert.match(skill, /needs no second call and no repeated facts/);
+  assert.doesNotMatch(skill, /Choose `concise` unless/);
+  // Every focus the Skill names is one the next tool definition accepts.
+  assert.deepEqual(TRELLO_WORK_HISTORY_TOOL_NEXT.input_schema.properties.focus.enum, ["overview", "completed", "returned", "created", "archived", "moved"]);
 });
 
 test("#36 exports one bounded custom-tool schema with semantic window, scope and format inputs", () => {

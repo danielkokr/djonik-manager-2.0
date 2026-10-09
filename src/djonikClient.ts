@@ -32,7 +32,7 @@ import {
   otherVerifiedWritesLine,
   type ChecklistCommentaryMode,
 } from "./checklistConfirmation.js";
-import { executeTrelloWorkHistoryFromEnvironment, type CustomToolExecutionResult } from "./trelloWorkHistory.js";
+import { asksForDetailedHistory, executeTrelloWorkHistoryFromEnvironment, type CustomToolExecutionResult, type WorkHistoryDeliveryPolicy } from "./trelloWorkHistory.js";
 import { executeTrelloBoardSnapshotFromEnvironment } from "./trelloBoardSnapshot.js";
 import { CustomToolResolution } from "./customToolResolution.js";
 import { isReadOnlyReminderInput, REMINDER_TOOL_NAME, reminderConfirmationOf } from "./reminderTool.js";
@@ -73,6 +73,9 @@ export interface CustomToolCallContext {
   name: string;
   /** Mutation authority of the turn that OBSERVED the call (its trusted origin, never its text). */
   authority: MutationAuthority;
+  /** #66: Daniel's own message of the turn that observed the call explicitly asked for detailed history. Never true
+   *  in an autonomous turn. It only permits the `detailed` chronology the model also has to request. */
+  detailRequested?: boolean;
 }
 
 export { DjonikSpecialistUnverifiedError, DjonikTurnIncompleteError } from "./turnCorrelation.js";
@@ -1118,7 +1121,7 @@ export function createCustomToolRouter(
     reminder?: SideEffectingToolExecutor;
     focusBudget?: SideEffectingToolExecutor;
     /** Test seams; production uses the environment-backed read-only executors. */
-    workHistory?: (input: unknown) => Promise<CustomToolExecutionResult>;
+    workHistory?: (input: unknown, policy: WorkHistoryDeliveryPolicy) => Promise<CustomToolExecutionResult>;
     boardSnapshot?: (input: unknown) => Promise<CustomToolExecutionResult>;
     /** #62 read-only project time; it needs the serving `/rhythm.md` source, so the adapter binds it (no env default). */
     projectTime?: (input: unknown) => Promise<CustomToolExecutionResult>;
@@ -1130,7 +1133,7 @@ export function createCustomToolRouter(
     const call = { toolUseId: context.toolUseId, authority: context.authority };
     switch (context.name) {
       case WORK_HISTORY_TOOL:
-        return workHistory(input);
+        return workHistory(input, { detailRequested: context.detailRequested === true });
       case BOARD_SNAPSHOT_TOOL:
         return boardSnapshot(input);
       case REMINDER_TOOL_NAME:
@@ -1320,9 +1323,16 @@ export async function connectToDjonik(
   /** Mutation authority each custom-tool call was OBSERVED under (#54), fixed at first observation for the
    *  Session: the executor of a side-effecting tool decides from it, never from the call's input or text. */
   const customToolAuthority = new Map<string, MutationAuthority>();
+  /** #66: ids first observed in a turn whose own human text asked for detailed history; fixed like the authority. */
+  const customToolDetailRequested = new Set<string>();
   /** The executor as the #40 lifecycle calls it: once per id, with that id's own name and observed authority. */
   const executeCustomTool = (input: unknown, call: { id: string; name: string }) =>
-    customToolExecutor(input, { toolUseId: call.id, name: call.name, authority: customToolAuthority.get(call.id) ?? "autonomous_read_only" });
+    customToolExecutor(input, {
+      toolUseId: call.id,
+      name: call.name,
+      authority: customToolAuthority.get(call.id) ?? "autonomous_read_only",
+      detailRequested: customToolDetailRequested.has(call.id),
+    });
   /** Distinct `custom_tool_use_id`s observed during the CURRENT visible turn (across a possible
    *  verification-nudge rerun of `runTurn`), in first-seen order. Reset once per visible turn in
    *  `sendPartsSerial`, never inside `runTurn`, so a nudge rerun cannot lose an earlier call — and never
@@ -1343,6 +1353,8 @@ export async function connectToDjonik(
   const confirmations = new ToolConfirmationLifecycle();
   /** Mutation authority of the CURRENT visible turn, from its trusted caller path (never from its text). */
   let turnAuthority: MutationAuthority = "human";
+  /** #66: the CURRENT visible turn is Daniel's and its text explicitly asks for detailed history. */
+  let turnDetailRequested = false;
   /** Confirmations requested during the CURRENT visible turn (content-free), in first-seen order. */
   let turnConfirmations: Array<{ id: string; record: ConfirmationRecord }> = [];
 
@@ -1592,7 +1604,10 @@ export async function connectToDjonik(
           // Result routing is exclusively by the observed blocking custom-tool event id (#40 lifecycle).
           customTools.observeUse({ id: event.id, name: event.name, input: event.input });
           // First observation wins, like the lifecycle's own: a replayed event can never upgrade authority.
-          if (!customToolAuthority.has(event.id)) customToolAuthority.set(event.id, turnAuthority);
+          if (!customToolAuthority.has(event.id)) {
+            customToolAuthority.set(event.id, turnAuthority);
+            if (turnDetailRequested) customToolDetailRequested.add(event.id);
+          }
           if (!turnCustomToolUseIds.includes(event.id)) turnCustomToolUseIds.push(event.id);
           turnToolUses.push(
             event.name === BOARD_SNAPSHOT_TOOL || event.name === PROJECT_TIME_TOOL_NAME ||
@@ -1770,6 +1785,7 @@ export async function connectToDjonik(
    */
   async function sendPartsSerial(parts: DjonikTurnPart[], origin: TurnOrigin): Promise<string> {
     turnAuthority = mutationAuthorityFor(origin);
+    turnDetailRequested = turnAuthority === "human" && parts.some((part) => part.type === "text" && asksForDetailedHistory(part.text));
     turnConfirmations = [];
     ledger = new TrelloMutationLedger();
     specialist.beginTurn();

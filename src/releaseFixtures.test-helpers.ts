@@ -88,10 +88,35 @@ export const ISSUE_62_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ befor
   ],
 };
 
-/** A Skill's committed source as its r30 pin stores it: the repo source (= the r31 pin) minus any #59/#62 edit. */
-export function r30SkillSource(name: string): string {
+/** The #66 work-review edit (answer the question asked: `focus`, `detailed` only on Daniel's request, no second call for
+ *  a follow-up), exact text before → after. Source only: no reviewed release pins it. r31 (served) pins the source minus
+ *  this edit; it ships with `TRELLO_WORK_HISTORY_TOOL_NEXT` in one later Agent version (docs/104). */
+export const ISSUE_66_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ before: string; after: string }>>> = {
+  "work-review": [
+    {
+      before: "otherwise review the whole board. Choose `concise` unless Daniel asks for detail.\n\n",
+      after:
+        "otherwise review the whole board.\n\n" +
+        "Answer the question Daniel asked, with one call. A week or project review uses the default `focus: overview`. A " +
+        "question about one kind of change — «які задачі закрито по CL?», «що створили цього тижня?» — uses that `focus` " +
+        "(`completed`, `returned`, `created`, `archived`, `moved`): the block is then only that deduplicated card list. " +
+        "`response_format: detailed` is the event-by-event chronology, only when Daniel's own message asks for it («детально», " +
+        "«повна історія», «всі переміщення»); never request it to gather material for your own summary — code shows it only on " +
+        "such a request. A follow-up about a review you just delivered («тобто тиждень успішний?») needs no second call and no " +
+        "repeated facts: answer it in a sentence or two.\n\n",
+    },
+  ],
+};
+
+/** A Skill's committed source as its r31 pin stores it: the repo source minus the unsynced #66 edit. */
+export function r31SkillSource(name: string): string {
   const source = readFileSync(join(repoRoot, ".claude", "skills", name, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
-  return revertEdits(revertEdits(source, ISSUE_62_SKILL_EDITS[name] ?? [], `#62 ${name}`), ISSUE_59_SKILL_EDITS[name] ?? [], `#59 ${name}`);
+  return revertEdits(source, ISSUE_66_SKILL_EDITS[name] ?? [], `#66 ${name}`);
+}
+
+/** A Skill's committed source as its r30 pin stores it: the r31 pin's bytes minus any #59/#62 edit. */
+export function r30SkillSource(name: string): string {
+  return revertEdits(revertEdits(r31SkillSource(name), ISSUE_62_SKILL_EDITS[name] ?? [], `#62 ${name}`), ISSUE_59_SKILL_EDITS[name] ?? [], `#59 ${name}`);
 }
 
 /** The prompt r29 (Agent v29, the rollback since #56) stores: the r30 prompt minus the #44 edit. */
