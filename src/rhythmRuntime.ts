@@ -278,6 +278,8 @@ export interface WorkingRhythmDeps {
   /** Factories are called only once both locks are open; closed, nothing is constructed. */
   createConfigSource: () => RhythmConfigSource;
   createStateStore: (path: string) => RhythmStateStore;
+  /** The fresh-Trello fact collector. Absent (no Trello read credentials) → every ritual fails closed (#71); this
+   *  wiring deliberately offers no way to run rituals without one. */
   createFactCollector?: () => NonNullable<RhythmTickDeps["collectFacts"]>;
   /** #50 Friday time-per-project report over the same Trello read client; absent → "unavailable" block. */
   createWeeklyTimeReporter?: () => NonNullable<RhythmTickDeps["weeklyTime"]>;
@@ -422,6 +424,8 @@ export function startWorkingRhythm(deps: WorkingRhythmDeps): WorkingRhythmRuntim
 
   timer.start();
   if (scheduler) log("[rhythm] running");
+  // #71: said once at startup, so a misconfigured host is diagnosable before the first ritual fails closed.
+  if (scheduler && !deps.createFactCollector) log("[rhythm] fact_reader_unavailable rituals_fail_closed");
   if (reminderScheduler) log("[reminder] running");
   return {
     status,

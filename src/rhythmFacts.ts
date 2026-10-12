@@ -1,6 +1,6 @@
 import type { RhythmConfig } from "./rhythmConfig.js";
 import type { CardFact, ListRole, ProjectFact, SignalFacts } from "./rhythmSignals.js";
-import type { HistoryCoverage, HistoryWindow, TrelloAction, TrelloBoardCard, TrelloList } from "./trelloWorkHistory.js";
+import type { HistoryCoverage, HistoryWindow, TrelloAction, TrelloBoardCard, TrelloList, TrelloWorkHistoryError } from "./trelloWorkHistory.js";
 
 /**
  * Read-only fact collector for the Working Rhythm scheduler (#39): fresh Trello state plus what the board's
@@ -191,23 +191,154 @@ export function historyLookbackDays(config: RhythmConfig): number {
   return Math.max(config.thresholds.staleProjectDays, 7) + 1;
 }
 
+// --- Required fresh reads: failure classes and a small bounded retry (#71) ---------------------------
+
+/** The three reads without which there is no current board state. */
+export type FactReadStage = "board" | "open_cards" | "lists";
+
+export type FactFailureReason =
+  | "network"
+  | "timeout"
+  | "rate_limited"
+  | "http_5xx"
+  | "http_error"
+  | "unauthorized"
+  | "malformed"
+  | "board_config"
+  | "unknown";
+
+/** Content-free description of one failed required read: enums and an HTTP status only. */
+export interface FactFailure {
+  stage: FactReadStage;
+  reason: FactFailureReason;
+  status?: number;
+  /** Whether the same read may succeed a moment later (network, timeout, 429, 5xx). */
+  retryable: boolean;
+}
+
+class ReadTimeout extends Error {}
+
+/**
+ * Sorts a failed read into a retry class. It reads only the structured `code`/`detail` the GET-only client
+ * attaches (`TrelloWorkHistoryError`) and never the error's message, so nothing provider-authored can reach a log
+ * line. Anything unrecognised is permanent: an unknown failure is not retried blindly.
+ */
+export function classifyFactFailure(error: unknown): Omit<FactFailure, "stage"> {
+  if (error instanceof ReadTimeout) return { reason: "timeout", retryable: true };
+  const failure = (typeof error === "object" && error !== null ? error : {}) as Partial<Pick<TrelloWorkHistoryError, "code" | "detail">>;
+  const status = typeof failure.detail?.status === "number" ? failure.detail.status : undefined;
+  const withStatus = status === undefined ? {} : { status };
+  switch (failure.code) {
+    case "unauthorized":
+      return { reason: "unauthorized", ...withStatus, retryable: false };
+    case "malformed":
+      return { reason: "malformed", retryable: false };
+    case "ambiguous_board":
+    case "credentials_missing":
+      return { reason: "board_config", retryable: false };
+    case "request_failed":
+      if (status === 429) return { reason: "rate_limited", status, retryable: true };
+      if (status !== undefined && status >= 500) return { reason: "http_5xx", status, retryable: true };
+      if (status !== undefined) return { reason: "http_error", status, retryable: false };
+      return { reason: failure.detail?.transport === "timeout" ? "timeout" : "network", retryable: true };
+    default:
+      return { reason: "unknown", retryable: false };
+  }
+}
+
+/** `stage=open_cards reason=http_5xx status=503 retryable=true` — the whole diagnostic vocabulary. */
+export function describeFactFailure(failure: FactFailure): string {
+  return `stage=${failure.stage} reason=${failure.reason}${failure.status === undefined ? "" : ` status=${failure.status}`} retryable=${failure.retryable}`;
+}
+
+/** The required reads failed after the bounded retry: there is no fresh board state for this tick. */
+export class RhythmFactsUnavailableError extends Error {
+  constructor(
+    readonly failure: FactFailure,
+    readonly attempts: number,
+  ) {
+    super("Fresh Trello board facts are unavailable.");
+    this.name = "RhythmFactsUnavailableError";
+  }
+}
+
+class StageFailure extends Error {
+  constructor(readonly failure: FactFailure) {
+    super("fact read failed");
+  }
+}
+
+/** Waits before the 2nd and 3rd attempt of the required reads; after the last one the collection fails. */
+export const FACT_RETRY_DELAYS_MS: readonly number[] = [1_500, 4_000];
+/** Longest wait for one required read, so a hung request cannot hold the scheduler. */
+export const FACT_READ_TIMEOUT_MS = 8_000;
+
+function withTimeout<T>(read: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    read,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new ReadTimeout()), ms);
+      (timer as { unref?: () => void }).unref?.();
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 export interface RhythmFactCollectorOptions {
   reader: RhythmTrelloReader;
   projectPriorities?: ProjectPriorities;
   log?: (line: string) => void;
+  /** Backoff between attempts of the required reads (default `FACT_RETRY_DELAYS_MS`); its length + 1 = attempts. */
+  retryDelaysMs?: readonly number[];
+  /** Per-read timeout (default `FACT_READ_TIMEOUT_MS`). */
+  readTimeoutMs?: number;
+  /** Injected in tests so the backoff costs no real time. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /**
- * The `collectFacts` the scheduler uses. Board, open cards and lists are required: any failure there
- * rejects, and the scheduler then runs rituals without deterministic hints and considers no exception. A
- * failed or truncated history read degrades instead: history-derived fields become null (unknown), which
- * never creates a Waiting/reopened/stale signal on its own.
+ * The `collectFacts` the scheduler uses. Board, open cards and lists are required. A transient failure there
+ * (network, timeout, 429, 5xx) is retried a few times with a short backoff, every attempt reading all three anew;
+ * a permanent one (401/403, malformed, board/configuration) is not. When they still fail the collection rejects
+ * with `RhythmFactsUnavailableError`, and the scheduler then sends no ritual built on stale context and considers
+ * no exception (#71). A failed or truncated history read degrades instead: history-derived fields become null
+ * (unknown), which never creates a Waiting/reopened/stale signal on its own.
  */
 export function createRhythmFactCollector(options: RhythmFactCollectorOptions): (context: { now: Date; config: RhythmConfig }) => Promise<SignalFacts> {
   const log = options.log ?? (() => {});
+  const delays = options.retryDelaysMs ?? FACT_RETRY_DELAYS_MS;
+  const timeoutMs = options.readTimeoutMs ?? FACT_READ_TIMEOUT_MS;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const staged = async <T>(stage: FactReadStage, read: () => Promise<T>): Promise<T> => {
+    try {
+      return await withTimeout(read(), timeoutMs);
+    } catch (error) {
+      throw new StageFailure({ stage, ...classifyFactFailure(error) });
+    }
+  };
+  const readRequired = async () => {
+    const board = await staged("board", () => options.reader.resolveSingleBoard());
+    const [cards, lists] = await Promise.all([
+      staged("open_cards", () => options.reader.readOpenCards(board.id)),
+      staged("lists", () => options.reader.readLists(board.id)),
+    ]);
+    return { board, cards, lists };
+  };
+  const readRequiredWithRetry = async () => {
+    const attempts = delays.length + 1;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await readRequired();
+      } catch (error) {
+        const failure: FactFailure = error instanceof StageFailure ? error.failure : { stage: "board", ...classifyFactFailure(error) };
+        log(`[rhythm] trello_facts_failed ${describeFactFailure(failure)} attempt=${attempt}/${attempts}`);
+        if (!failure.retryable || attempt >= attempts) throw new RhythmFactsUnavailableError(failure, attempt);
+        await sleep(delays[attempt - 1]);
+      }
+    }
+  };
   return async ({ now, config }) => {
-    const board = await options.reader.resolveSingleBoard();
-    const [cards, lists] = await Promise.all([options.reader.readOpenCards(board.id), options.reader.readLists(board.id)]);
+    const { board, cards, lists } = await readRequiredWithRetry();
     const from = new Date(now.getTime() - historyLookbackDays(config) * 86_400_000);
     let history: FactsInput["history"] = null;
     try {

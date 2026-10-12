@@ -290,6 +290,7 @@ test("end to end (offline): scheduled week plan with buttons → click → ordin
       toolUses: [{ kind: "mcp", name: "trelloReadCard" }],
     }),
     send: sender,
+    isolatedWithoutFacts: true, // a transport test: board facts are not its subject (#71)
     newRef: () => "e2e000000001",
   });
   await scheduler.tick();

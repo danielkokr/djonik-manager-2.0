@@ -305,6 +305,8 @@ function rhythmDeps(boundary: ReturnType<typeof readOnlyBoundaryFor>) {
       allowedUserId: "1",
       createConfigSource: () => ({ read: async () => null }),
       createStateStore: () => createMemoryRhythmStateStore(),
+      // #71: the runtime runs no ritual without a fact collector; a quiet fresh board keeps this an activation test.
+      createFactCollector: () => async () => ({ cards: [], projects: [], followUps: [] }),
       runTurn: async () => (turns++, { reply: "Бриф.", sessionId: "sesn_x", toolUses: [], confirmations: [], autonomousMutationAttempt: false }),
       send: async () => ({ status: "sent" as const, messageId: 1 }),
       currentSessionId: () => "sesn_x",

@@ -3,13 +3,17 @@ import assert from "node:assert/strict";
 import { DEFAULT_RHYTHM_CONFIG } from "./rhythmConfig.js";
 import {
   buildSignalFacts,
+  classifyFactFailure,
   createRhythmFactCollector,
+  describeFactFailure,
+  FACT_RETRY_DELAYS_MS,
   historyLookbackDays,
   listRoleFor,
   MAX_IN_PROGRESS_ENTRY_READS,
   MAX_WAITING_ENTRY_READS,
   projectOf,
   projectSlug,
+  RhythmFactsUnavailableError,
   type RhythmTrelloReader,
 } from "./rhythmFacts.js";
 import { detectSignals } from "./rhythmSignals.js";
@@ -236,9 +240,134 @@ test("collector degrades safely: failed history → unknown history, cards still
 });
 
 test("collector: a failed board/card/list read rejects (the scheduler then treats facts as unavailable)", async () => {
+  const stages = { resolveSingleBoard: "board", readOpenCards: "open_cards", readLists: "lists" } as const;
   for (const broken of ["resolveSingleBoard", "readOpenCards", "readLists"] as const) {
     const r = reader({ [broken]: async () => Promise.reject(new Error("401")) });
-    await assert.rejects(() => createRhythmFactCollector({ reader: r })({ now: NOW, config: DEFAULT_RHYTHM_CONFIG }), /401/, broken);
+    // #71: the rejection names the failed read stage and carries nothing of the original error's text.
+    await assert.rejects(
+      () => createRhythmFactCollector({ reader: r })({ now: NOW, config: DEFAULT_RHYTHM_CONFIG }),
+      (error: unknown) => error instanceof RhythmFactsUnavailableError && error.failure.stage === stages[broken] && !/401/.test(error.message),
+      broken,
+    );
+  }
+});
+
+// --- #71: failure classes, bounded retry and secret-safe diagnostics ---------------------------------
+
+/** A real GET-only client over a scripted fetch: each call takes the next step (the last one repeats). */
+function scriptedClient(steps: Array<number | "network" | "timeout" | "ok" | "garbage">) {
+  const calls: string[] = [];
+  const fetch = async (input: string) => {
+    const url = new URL(input);
+    calls.push(url.pathname);
+    const step = steps[Math.min(calls.length - 1, steps.length - 1)];
+    if (step === "network") throw new TypeError(`fetch failed for ${input} with OAuth oauth_token="secret-token"`);
+    if (step === "timeout") throw Object.assign(new Error("The operation timed out"), { name: "TimeoutError" });
+    if (step === "garbage") return new Response("<html>not json</html>", { status: 200 });
+    if (step !== "ok") return new Response(JSON.stringify({ message: "provider detail secret-token" }), { status: step });
+    const path = url.pathname;
+    const body = path === "/1/members/me/boards" ? [{ id: "b1", name: "Djonik" }] : path === "/1/boards/b1/cards" ? [card("t", WEEK.id)] : path === "/1/boards/b1/lists" ? LISTS : [];
+    return new Response(JSON.stringify(body), { status: 200 });
+  };
+  return { client: new TrelloWorkHistoryClient({ apiKey: "secret-key", readToken: "secret-token", fetch }), calls };
+}
+
+function retrying(client: TrelloWorkHistoryClient) {
+  const lines: string[] = [];
+  const sleeps: number[] = [];
+  const collect = createRhythmFactCollector({ reader: client, log: (line) => lines.push(line), sleep: async (ms) => void sleeps.push(ms) });
+  return { lines, sleeps, run: () => collect({ now: NOW, config: DEFAULT_RHYTHM_CONFIG }) };
+}
+
+test("#71 failure classes: transient (network, timeout, 429, 5xx) vs permanent (401/403, other 4xx, malformed, board/config, unknown)", () => {
+  const failed = (code: string, detail: object = {}) => Object.assign(new Error("ignored secret-token"), { code, detail });
+  assert.deepEqual(classifyFactFailure(failed("request_failed", { transport: "network" })), { reason: "network", retryable: true });
+  assert.deepEqual(classifyFactFailure(failed("request_failed", { transport: "timeout" })), { reason: "timeout", retryable: true });
+  assert.deepEqual(classifyFactFailure(failed("request_failed", { status: 429 })), { reason: "rate_limited", status: 429, retryable: true });
+  assert.deepEqual(classifyFactFailure(failed("request_failed", { status: 503 })), { reason: "http_5xx", status: 503, retryable: true });
+  assert.deepEqual(classifyFactFailure(failed("request_failed", { status: 404 })), { reason: "http_error", status: 404, retryable: false });
+  assert.deepEqual(classifyFactFailure(failed("unauthorized", { status: 401 })), { reason: "unauthorized", status: 401, retryable: false });
+  assert.deepEqual(classifyFactFailure(failed("unauthorized", { status: 403 })), { reason: "unauthorized", status: 403, retryable: false });
+  assert.deepEqual(classifyFactFailure(failed("malformed")), { reason: "malformed", retryable: false });
+  assert.deepEqual(classifyFactFailure(failed("ambiguous_board")), { reason: "board_config", retryable: false });
+  assert.deepEqual(classifyFactFailure(failed("credentials_missing")), { reason: "board_config", retryable: false });
+  assert.deepEqual(classifyFactFailure(new Error("anything")), { reason: "unknown", retryable: false });
+  assert.deepEqual(classifyFactFailure("a string"), { reason: "unknown", retryable: false });
+});
+
+test("#71 A: a transient 5xx is retried after a short backoff and the next attempt's fresh reads serve the ritual", async () => {
+  const { client, calls } = scriptedClient([503, "ok"]);
+  const t = retrying(client);
+  const facts = await t.run();
+  assert.deepEqual(facts.cards.map((c) => c.id), ["t"]);
+  assert.deepEqual(t.sleeps, [FACT_RETRY_DELAYS_MS[0]]);
+  assert.deepEqual(t.lines, ["[rhythm] trello_facts_failed stage=board reason=http_5xx status=503 retryable=true attempt=1/3"]);
+  assert.equal(calls.filter((path) => path === "/1/members/me/boards").length, 2, "the board is resolved anew on the retry");
+});
+
+test("#71 B: a network failure and a 429 are retried the same way", async () => {
+  const network = retrying(scriptedClient(["network", "ok"]).client);
+  await network.run();
+  assert.deepEqual(network.lines, ["[rhythm] trello_facts_failed stage=board reason=network retryable=true attempt=1/3"]);
+  // Board resolves, then the two parallel reads meet a 429 once.
+  const limited = retrying(scriptedClient(["ok", 429, 429, "ok"]).client);
+  await limited.run();
+  assert.equal(limited.sleeps.length, 1);
+  assert.match(limited.lines[0], /^\[rhythm\] trello_facts_failed stage=(open_cards|lists) reason=rate_limited status=429 retryable=true attempt=1\/3$/);
+});
+
+test("#71: transient failures are bounded — three attempts, two waits, then the collection rejects", async () => {
+  const { client, calls } = scriptedClient([502]);
+  const t = retrying(client);
+  await assert.rejects(t.run, (error: unknown) => error instanceof RhythmFactsUnavailableError && error.attempts === 3 && error.failure.reason === "http_5xx");
+  assert.deepEqual(t.sleeps, [...FACT_RETRY_DELAYS_MS]);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(t.lines.map((line) => line.slice(-11)), ["attempt=1/3", "attempt=2/3", "attempt=3/3"]);
+  // A hung read cannot hold the scheduler: it times out, and a timeout is a transient class.
+  const lines: string[] = [];
+  const hung = createRhythmFactCollector({
+    reader: reader({ readLists: () => new Promise(() => {}) }),
+    log: (line) => lines.push(line),
+    sleep: async () => {},
+    readTimeoutMs: 5,
+    retryDelaysMs: [1],
+  });
+  await assert.rejects(() => hung({ now: NOW, config: DEFAULT_RHYTHM_CONFIG }), (error: unknown) => error instanceof RhythmFactsUnavailableError && error.failure.reason === "timeout");
+  assert.deepEqual(lines, [
+    "[rhythm] trello_facts_failed stage=lists reason=timeout retryable=true attempt=1/2",
+    "[rhythm] trello_facts_failed stage=lists reason=timeout retryable=true attempt=2/2",
+  ]);
+});
+
+test("#71 C: 401/403, malformed and board-configuration failures are never retried", async () => {
+  for (const [steps, reason, status] of [
+    [[401], "unauthorized", " status=401"],
+    [[403], "unauthorized", " status=403"],
+    [["garbage"], "malformed", ""],
+    [[404], "http_error", " status=404"],
+  ] as const) {
+    const { client, calls } = scriptedClient([...steps]);
+    const t = retrying(client);
+    await assert.rejects(t.run, (error: unknown) => error instanceof RhythmFactsUnavailableError && error.attempts === 1 && error.failure.retryable === false);
+    assert.equal(calls.length, 1, reason);
+    assert.deepEqual(t.sleeps, []);
+    assert.deepEqual(t.lines, [`[rhythm] trello_facts_failed stage=board reason=${reason}${status} retryable=false attempt=1/3`]);
+  }
+  // Two boards visible to the token: a configuration problem, not an outage.
+  const fetch = async () => new Response(JSON.stringify([{ id: "b1", name: "A" }, { id: "b2", name: "B" }]), { status: 200 });
+  const ambiguous = retrying(new TrelloWorkHistoryClient({ apiKey: "k", readToken: "t", fetch }));
+  await assert.rejects(ambiguous.run, RhythmFactsUnavailableError);
+  assert.deepEqual(ambiguous.lines, ["[rhythm] trello_facts_failed stage=board reason=board_config retryable=false attempt=1/3"]);
+});
+
+test("#71 H: diagnostics never carry credentials, the Authorization header, a URL or provider text", async () => {
+  for (const steps of [["network"], [500], [401], ["garbage"], ["timeout"]] as const) {
+    const t = retrying(scriptedClient([...steps]).client);
+    const error = await t.run().then(() => null, (thrown: unknown) => thrown);
+    assert.ok(error instanceof RhythmFactsUnavailableError);
+    const emitted = [...t.lines, error.message, describeFactFailure(error.failure), JSON.stringify(error.failure)].join("\n");
+    assert.doesNotMatch(emitted, /secret-token|secret-key|oauth|Authorization|api\.trello\.com|https?:|provider detail/i);
+    for (const line of t.lines) assert.match(line, /^\[rhythm\] trello_facts_failed stage=[a-z_]+ reason=[a-z_0-9]+( status=\d{3})? retryable=(true|false) attempt=\d\/\d$/);
   }
 });
 

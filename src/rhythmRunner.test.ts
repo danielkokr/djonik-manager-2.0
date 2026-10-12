@@ -87,7 +87,8 @@ function harness(options: {
     },
     // Stage 1 tests tick at arbitrary instants; the exception-only collection cadence has its own test.
     factsIntervalMs: 0,
-    ...(options.facts ? { collectFacts: async () => options.facts!() } : {}),
+    // No facts scripted → this test is not about board facts: the explicit isolation opt-out (#71).
+    ...(options.facts ? { collectFacts: async () => options.facts!() } : { isolatedWithoutFacts: true as const }),
   };
   return h;
 }
@@ -121,6 +122,20 @@ test("activation invariant: no non-test source declares a pre-execution read-onl
     const source = readFileSync(join(repoRoot, "src", name), "utf8");
     assert.doesNotMatch(source, /readOnlyBoundary:\s*"pre_execution"/, `${name} must not claim a boundary that does not exist`);
   }
+});
+
+test("#71 invariant: no non-test source can run rituals without a fact collector", () => {
+  const sources = readdirSync(join(repoRoot, "src")).filter((name) => name.endsWith(".ts") && !name.includes(".test"));
+  for (const name of sources) {
+    const source = readFileSync(join(repoRoot, "src", name), "utf8");
+    // Declared and read in rhythmRunner.ts only; never assigned, spread or forwarded anywhere outside tests.
+    assert.doesNotMatch(source, /isolatedWithoutFacts\s*[:=]\s*(true|deps|options)/, name);
+    if (name !== "rhythmRunner.ts") assert.doesNotMatch(source, /isolatedWithoutFacts/, name);
+  }
+  const runtime = readFileSync(join(repoRoot, "src", "rhythmRuntime.ts"), "utf8");
+  // The one production construction of the scheduler passes the collector or nothing — no fallback, no opt-out.
+  assert.match(runtime, /\.\.\.\(deps\.createFactCollector \? \{ collectFacts: deps\.createFactCollector\(\) \} : \{\}\),/);
+  assert.equal([...runtime.matchAll(/createRhythmScheduler\(/g)].length, 1);
 });
 
 test("a state write failing mid-tick fails closed: no throw, no send", async () => {

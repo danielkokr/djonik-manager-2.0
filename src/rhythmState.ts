@@ -33,6 +33,10 @@ import { emptyFocusLedger, FocusLedgerError, isEmptyFocusLedger, validateFocusLe
  * their entry times, how recent stints ended, Daniel's explicit focus budgets and the idempotency records of the
  * `focus_budget` tool — ids, project slugs, timestamps and minutes only. It follows the reminder rules: optional,
  * absent until first needed, validated on load, and preserved untouched by an older revision.
+ *
+ * Since #71 a due ritual whose fresh Trello read failed is not consumed: `deferredRituals` holds its failure count
+ * and next attempt time until the ritual is sent or given up, and the one short notice Daniel gets has its own
+ * delivery record (`fresh-facts:<ritual key>`) with the ordinary sending/sent/ambiguous lifecycle.
  */
 
 export type DeliveryStatus = "claimed" | "sending" | "sent" | "ambiguous" | "failed" | "silent" | "blocked";
@@ -77,6 +81,42 @@ export interface RhythmState {
   focus?: FocusLedger;
   /** #52: last calendar month considered for a working-style review; no rule content. */
   workingStyleReviewMonth?: string;
+  /** #71: due rituals waiting for a later fresh Trello read, by occurrence key; absent = none. */
+  deferredRituals?: Record<string, RitualDeferral>;
+}
+
+/**
+ * A due ritual whose fresh Trello read failed (#71): how many collections have failed for this occurrence and when
+ * the next one may run. Counts and timestamps only — never a snapshot of the board, so a later attempt can only
+ * read Trello anew.
+ */
+export interface RitualDeferral {
+  failures: number;
+  firstFailedAt: string;
+  nextAttemptAt: string;
+}
+
+function isDeferrals(value: unknown): value is Record<string, RitualDeferral> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  return Object.values(value).every((entry) => {
+    const deferral = entry as Partial<RitualDeferral> | null;
+    return (
+      typeof deferral === "object" &&
+      deferral !== null &&
+      Number.isInteger(deferral.failures) &&
+      (deferral.failures as number) >= 1 &&
+      typeof deferral.firstFailedAt === "string" &&
+      !Number.isNaN(Date.parse(deferral.firstFailedAt)) &&
+      typeof deferral.nextAttemptAt === "string" &&
+      !Number.isNaN(Date.parse(deferral.nextAttemptAt))
+    );
+  });
+}
+
+/** `state` with these deferrals; none left → the field is absent, as in a state that never had one. */
+export function withDeferredRituals(state: RhythmState, deferrals: Record<string, RitualDeferral>): RhythmState {
+  const { deferredRituals: _previous, ...rest } = state;
+  return Object.keys(deferrals).length === 0 ? rest : { ...rest, deferredRituals: deferrals };
 }
 
 export function emptyRhythmState(): RhythmState {
@@ -147,6 +187,7 @@ function isState(value: unknown): value is RhythmState {
     if (candidate.reminders !== undefined) validateReminderLedger(candidate.reminders);
     if (candidate.focus !== undefined) validateFocusLedger(candidate.focus);
     if (candidate.workingStyleReviewMonth !== undefined && !/^\d{4}-(0[1-9]|1[0-2])$/.test(candidate.workingStyleReviewMonth)) return false;
+    if (candidate.deferredRituals !== undefined && !isDeferrals(candidate.deferredRituals)) return false;
     return true;
   } catch (error) {
     if (error instanceof ReminderLedgerError || error instanceof FocusLedgerError) return false;
@@ -238,7 +279,12 @@ export function recoverRhythmState(state: RhythmState, now: Date): RhythmState {
       deliveries[key] = { ...record };
     }
   }
-  return state.reminders === undefined ? { ...state, deliveries } : { ...state, deliveries, reminders: recoverReminders(state.reminders, now) };
+  // #71: a deferral outlives its ritual only if that ritual expired while waiting; a day later it is noise.
+  const deferrals = Object.fromEntries(
+    Object.entries(state.deferredRituals ?? {}).filter(([, deferral]) => now.getTime() - Date.parse(deferral.firstFailedAt) < 86_400_000),
+  );
+  const next = withDeferredRituals({ ...state, deliveries }, deferrals);
+  return state.reminders === undefined ? next : { ...next, reminders: recoverReminders(state.reminders, now) };
 }
 
 /** Maximum model+send attempts per occurrence (only definite non-delivery or an interrupted claim retries). */

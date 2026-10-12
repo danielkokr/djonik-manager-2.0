@@ -737,8 +737,22 @@ export function asksForDetailedHistory(text: string): boolean {
 }
 
 
+/**
+ * Why a request failed, as far as the retry policy and secret-safe diagnostics need it (#71). Never part of the
+ * message: neither Claude nor Telegram sees it, and it holds no URL, header or credential.
+ */
+export interface TrelloFailureDetail {
+  /** HTTP status of a non-2xx answer. */
+  status?: number;
+  /** The request got no answer at all. */
+  transport?: "network" | "timeout";
+}
+
 export class TrelloWorkHistoryError extends Error {
-  constructor(public readonly code: "credentials_missing" | "unauthorized" | "request_failed" | "malformed" | "ambiguous_board" | "project_not_found") {
+  constructor(
+    public readonly code: "credentials_missing" | "unauthorized" | "request_failed" | "malformed" | "ambiguous_board" | "project_not_found",
+    public readonly detail: TrelloFailureDetail = {},
+  ) {
     super(
       code === "credentials_missing"
         ? "Trello history is unavailable because read-only credentials are not configured."
@@ -789,11 +803,13 @@ export class TrelloWorkHistoryClient {
     let response: Response;
     try {
       response = await this.fetcher(url.toString(), { method: "GET", headers: { Authorization: this.authorization, Accept: "application/json" } });
-    } catch {
-      throw new TrelloWorkHistoryError("request_failed");
+    } catch (error) {
+      // Only the error's class name is read: its message may quote the request.
+      const name = error instanceof Error ? error.name : "";
+      throw new TrelloWorkHistoryError("request_failed", { transport: name === "TimeoutError" || name === "AbortError" ? "timeout" : "network" });
     }
-    if (response.status === 401 || response.status === 403) throw new TrelloWorkHistoryError("unauthorized");
-    if (!response.ok) throw new TrelloWorkHistoryError("request_failed");
+    if (response.status === 401 || response.status === 403) throw new TrelloWorkHistoryError("unauthorized", { status: response.status });
+    if (!response.ok) throw new TrelloWorkHistoryError("request_failed", { status: response.status });
     try {
       return await response.json();
     } catch {

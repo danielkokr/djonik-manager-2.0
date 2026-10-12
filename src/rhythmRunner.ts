@@ -22,6 +22,7 @@ import {
   type SignalFacts,
 } from "./rhythmSignals.js";
 import { advanceFocus, detectTimeboxSignals } from "./rhythmFocus.js";
+import { describeFactFailure, RhythmFactsUnavailableError } from "./rhythmFacts.js";
 import { composeWeeklyTimeReply, weeklyTimeUnavailable, type WeeklyTimeReporter } from "./weeklyTime.js";
 import {
   focusOf,
@@ -30,9 +31,11 @@ import {
   recoverRhythmState,
   remindersOf,
   RhythmStateError,
+  withDeferredRituals,
   withFocus,
   withReminders,
   type DeliveryRecord,
+  type RitualDeferral,
   type RhythmState,
   type RhythmStateStore,
 } from "./rhythmState.js";
@@ -305,6 +308,58 @@ export function buildExceptionPrompt(signals: readonly Signal[], now: Date, next
  */
 export type AutonomousReadOnlyBoundary = "pre_execution" | "post_hoc_detection_only";
 
+// --- Fresh board state is a precondition, not a hint (#71) --------------------------------------------
+
+/**
+ * Which rituals may not be composed when the code-side fresh Trello read failed. Every ritual is a current-state
+ * artifact — each one names work to do, carry over or drop from what the board shows NOW — so each fails closed:
+ *
+ * - `monday-plan`: picks the week's outcomes and what is consciously left alone, and asks Daniel to accept it;
+ * - `morning` / `friday-morning`: name today's main thing from This week / In progress and today's deadlines;
+ * - `friday-review`: compares the accepted plan with what moved, and proposes what to carry over;
+ * - `evening`: asks what to carry over from today's unfinished cards.
+ *
+ * What may still proceed on partial evidence is narrower and unchanged: a failed or truncated HISTORY read (board,
+ * cards and lists fresh; "how long in Waiting" and "reopened" unknown).
+ *
+ * INVARIANT: no collector is not "facts are fine". A scheduler built without `collectFacts` has no deterministic
+ * evidence of a fresh board, so a due ritual fails closed through the same deferred path (`reason=reader_unavailable`,
+ * no network attempt, because there is no reader to retry). Only a scheduler explicitly built with
+ * `isolatedWithoutFacts` — unit tests of other concerns — runs rituals without one; no runtime wiring can set it.
+ */
+export const FRESH_BOARD_REQUIRED: Readonly<Record<RitualKind, boolean>> = {
+  "monday-plan": true,
+  morning: true,
+  "friday-morning": true,
+  "friday-review": true,
+  evening: true,
+};
+
+/**
+ * Minutes from each failed collection to the next attempt of the same ritual occurrence. Three later attempts, each
+ * a new Trello read; after the last one fails the occurrence is given up for the day. The ritual's own grace window
+ * (`RITUAL_GRACE_MINUTES`) and quiet hours still end it earlier.
+ */
+export const FRESH_FACTS_RETRY_MINUTES: readonly number[] = [7, 15, 30];
+
+const FRESH_FACTS_SUBJECT: Record<RitualKind, string> = {
+  "monday-plan": "план тижня",
+  morning: "ранковий бриф",
+  "friday-morning": "ранковий бриф",
+  "friday-review": "огляд тижня",
+  evening: "вечірній підсумок",
+};
+
+/** The one short, code-owned message Daniel gets instead of a ritual built on old context. No technical detail. */
+export function freshFactsNotice(kind: RitualKind): string {
+  return `⚠️ Не можу зараз зібрати нормальний ${FRESH_FACTS_SUBJECT[kind]}: Trello не віддав свіжий стан дошки. Не хочу спиратися на старі дані — спробую ще раз трохи пізніше.`;
+}
+
+/** Delivery record of that notice; at most one is ever delivered per ritual occurrence. */
+export function freshFactsNoticeKey(ritualKey: string): string {
+  return `fresh-facts:${ritualKey}`;
+}
+
 /** Default cadence for exception-only fact collection (see `RhythmTickDeps.factsIntervalMs`). */
 export const DEFAULT_FACTS_INTERVAL_MS = 15 * 60_000;
 
@@ -317,8 +372,17 @@ export interface RhythmTickDeps {
   store: RhythmStateStore;
   runTurn: AutonomousTurnRunner;
   send: ProactiveSender;
-  /** Fresh deterministic facts for signals; absent → rituals only, no exceptions. */
+  /**
+   * Fresh deterministic facts: the precondition of every ritual (#71) and the source of exception signals. Absent →
+   * no exceptions, and every due ritual fails closed as "fresh facts unavailable" unless `isolatedWithoutFacts`.
+   */
   collectFacts?: (context: { now: Date; config: RhythmConfig }) => Promise<SignalFacts>;
+  /**
+   * TEST ISOLATION ONLY: lets a scheduler without `collectFacts` run rituals, for unit tests that exercise delivery,
+   * buttons or reminders and not board facts. `startWorkingRhythm` has no way to pass it, and a source test asserts
+   * that no non-test module sets it, so the serving process cannot bypass the #71 invariant.
+   */
+  isolatedWithoutFacts?: true;
   /**
    * Minimum time between fact collections that serve only exception checks (default 15 min). A due ritual
    * always collects fresh facts; outside an exception window (off, quiet hours, non-workday without
@@ -385,6 +449,11 @@ export interface TickReport {
   configWarnings?: string[];
   /** Date-only reminders the due ritual claimed (#54). */
   remindersClaimed?: number;
+  /**
+   * #71, a due ritual without fresh board facts: `deferred` = this collection failed and a later attempt is
+   * scheduled; `waiting` = that attempt is not due yet (the tick did nothing); `gave_up` = the last attempt failed.
+   */
+  freshFacts?: "deferred" | "waiting" | "gave_up";
 }
 
 function exceptionKey(date: string, signals: readonly Signal[]): string {
@@ -552,6 +621,88 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
     return { state, outcome: record.status };
   }
 
+  /**
+   * #71: the due ritual has no fresh board facts. No model turn runs and no reminder is claimed. The occurrence is
+   * re-armed for a later attempt and Daniel gets one short notice — or, once the attempts are used up, the
+   * occurrence is closed as failed and nothing more is said.
+   */
+  async function deferForFreshFacts(state: RhythmState, ritual: RitualOccurrence, now: Date, report: TickReport): Promise<TickReport> {
+    const stamp = () => deps.now().toISOString();
+    const failures = (state.deferredRituals?.[ritual.key]?.failures ?? 0) + 1;
+    const delayMinutes = FRESH_FACTS_RETRY_MINUTES[failures - 1];
+    if (delayMinutes === undefined) {
+      // Terminal: the ritual is concluded without a send, so a date-only reminder stops waiting for it (#54).
+      const previous = state.deliveries[ritual.key];
+      const record: DeliveryRecord = {
+        key: ritual.key,
+        kind: ritual.kind,
+        status: "failed",
+        attempts: previous?.attempts ?? 0,
+        ref: previous?.ref ?? newRef(),
+        sessionId: null,
+        createdAt: previous?.createdAt ?? stamp(),
+        updatedAt: stamp(),
+        actions: [],
+        failure: "fresh_facts_unavailable",
+        retryable: false,
+      };
+      await deps.store.update((current) => {
+        const { [ritual.key]: _done, ...rest } = current.deferredRituals ?? {};
+        return withDeferredRituals({ ...current, deliveries: { ...current.deliveries, [ritual.key]: record } }, rest);
+      });
+      log(`[rhythm] ${ritual.key} fresh_facts_gave_up failures=${failures}`);
+      return { ...report, freshFacts: "gave_up", delivery: { key: ritual.key, kind: ritual.kind, status: record.status } };
+    }
+
+    const deferral: RitualDeferral = {
+      failures,
+      firstFailedAt: state.deferredRituals?.[ritual.key]?.firstFailedAt ?? now.toISOString(),
+      nextAttemptAt: new Date(now.getTime() + delayMinutes * 60_000).toISOString(),
+    };
+    const noticeKey = freshFactsNoticeKey(ritual.key);
+    const previous = state.deliveries[noticeKey];
+    // Sent or possibly sent → never again; a definite refusal or an interrupted claim may retry once (`mayAttempt`).
+    const sendNotice = mayAttempt(previous);
+    let record: DeliveryRecord = {
+      key: noticeKey,
+      kind: ritual.kind,
+      status: "sending",
+      attempts: (previous?.attempts ?? 0) + 1,
+      ref: previous?.ref ?? newRef(),
+      sessionId: null,
+      createdAt: previous?.createdAt ?? stamp(),
+      updatedAt: stamp(),
+      actions: [],
+      sendStartedAt: stamp(),
+    };
+    // The re-arm and the durable "send started" in ONE write, before the Telegram call. Deferrals of other days go.
+    await deps.store.update((current) => {
+      const today = Object.fromEntries(Object.entries(current.deferredRituals ?? {}).filter(([key]) => key.endsWith(`:${ritual.date}`)));
+      const next = withDeferredRituals(current, { ...today, [ritual.key]: deferral });
+      return sendNotice ? { ...next, deliveries: { ...next.deliveries, [noticeKey]: record } } : next;
+    });
+    log(`[rhythm] ${ritual.key} fresh_facts_deferred failures=${failures} retry_in_min=${delayMinutes}`);
+    if (!sendNotice) return { ...report, freshFacts: "deferred" };
+
+    let outcome: SendOutcome;
+    try {
+      outcome = await deps.send({ text: freshFactsNotice(ritual.kind), actions: [] }, record.ref);
+    } catch {
+      outcome = { status: "unknown", reason: "send_threw" };
+    }
+    if (outcome.status === "sent") {
+      report.sends += 1;
+      record = { ...record, status: "sent", sentAt: stamp(), telegramMessageId: outcome.messageId, updatedAt: stamp() };
+    } else if (outcome.status === "rejected") {
+      record = { ...record, status: "failed", failure: `telegram_rejected:${outcome.reason}`.slice(0, 80), retryable: true, updatedAt: stamp() };
+    } else {
+      record = { ...record, status: "ambiguous", failure: `send_unknown:${outcome.reason}`.slice(0, 80), retryable: false, updatedAt: stamp() };
+    }
+    await deps.store.update((current) => ({ ...current, deliveries: { ...current.deliveries, [noticeKey]: record } }));
+    log(`[rhythm] ${noticeKey} ${record.status}`);
+    return { ...report, freshFacts: "deferred", delivery: { key: noticeKey, kind: ritual.kind, status: record.status } };
+  }
+
   async function tickOnce(): Promise<TickReport> {
     const report: TickReport = { status: "ran", modelCalls: 0, sends: 0 };
     ritualConfig = null;
@@ -590,6 +741,10 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
     // Rituals first; at most one proactive message per tick.
     const rituals = evaluateRituals(now, config);
     const dueRitual = rituals.find((ritual) => ritual.status === "due" && mayAttempt(state.deliveries[ritual.key]));
+    // #71: an occurrence waiting for its next fresh-read attempt does nothing this tick — no Trello read, no turn
+    // and no exception check either (nothing proactive is decided while the board is known to be unreadable).
+    const deferral = dueRitual ? state.deferredRituals?.[dueRitual.key] : undefined;
+    if (deferral && now.getTime() < Date.parse(deferral.nextAttemptAt)) return { ...report, freshFacts: "waiting" };
     const exceptionWindowOpen =
       config.exceptions.enabled &&
       config.exceptions.maxPerDay > 0 &&
@@ -601,27 +756,54 @@ export function createRhythmScheduler(deps: RhythmTickDeps): RhythmScheduler {
 
     let signals: Signal[] = [];
     let factsCollected = false;
+    let factsFailed = false;
     if (factsDue) {
       lastFactsAt = now.getTime();
+      let facts: SignalFacts | null = null;
       try {
-        const facts = await deps.collectFacts!({ now, config });
+        // Always a new read (the collector keeps no snapshot), with its own bounded retry for transient failures.
+        facts = await deps.collectFacts!({ now, config });
+      } catch (error) {
+        factsFailed = true;
+        // Structured and secret-safe: enums, an HTTP status and a count — never the error's message.
+        const detail = error instanceof RhythmFactsUnavailableError ? ` ${describeFactFailure(error.failure)} attempts=${error.attempts}` : " reason=unknown";
+        log(`[rhythm] facts_unavailable${detail}`);
+      }
+      if (facts !== null) {
+        const fresh = facts;
         let detected: Signal[] = [];
         // #50: the same fresh facts advance code-owned focus (zero model calls) and may add a timebox candidate; one
         // atomic write carries the focus ledger and the signal lifecycle together.
         state = await deps.store.update((current) => {
-          const focus = advanceFocus(focusOf(current), facts, now);
-          detected = [...detectSignals(facts, now, config), ...detectTimeboxSignals(focus, facts, now, config)];
+          const focus = advanceFocus(focusOf(current), fresh, now);
+          detected = [...detectSignals(fresh, now, config), ...detectTimeboxSignals(focus, fresh, now, config)];
           return withFocus({ ...current, signals: advanceSignalLedger(current.signals, detected, now) }, focus);
         });
         signals = detected;
         factsCollected = true;
-      } catch {
-        log("[rhythm] facts_unavailable");
-        signals = [];
       }
     }
 
+    // #71: a ritual that needs the board, in a scheduler that has no reader for it. Nothing was read, so nothing is
+    // retried; it is the same "no fresh facts" outcome as a failed read, with a configuration reason.
+    if (dueRitual && FRESH_BOARD_REQUIRED[dueRitual.kind] && deps.collectFacts === undefined && deps.isolatedWithoutFacts !== true) {
+      factsFailed = true;
+      log("[rhythm] facts_unavailable stage=reader reason=reader_unavailable retryable=false attempts=0");
+    }
+
+    // #71: fail closed BEFORE any reminder claim or model turn — Claude never gets a planning turn it could only
+    // fill from Memory or the Session.
+    if (dueRitual && factsFailed && FRESH_BOARD_REQUIRED[dueRitual.kind]) return deferForFreshFacts(state, dueRitual, now, report);
+
     if (dueRitual) {
+      // A deferred occurrence that now has fresh facts is an ordinary ritual again, sent exactly once below.
+      if (state.deferredRituals?.[dueRitual.key] !== undefined) {
+        state = await deps.store.update((current) => {
+          const { [dueRitual.key]: _resumed, ...rest } = current.deferredRituals ?? {};
+          return withDeferredRituals(current, rest);
+        });
+        log(`[rhythm] ${dueRitual.key} fresh_facts_recovered`);
+      }
       // A changed set of /rhythm.md warnings is mentioned once, inside the next ritual — never on its own.
       const notice = configNoticeDigest(parsed.warnings);
       const noteWarnings = notice !== null && state.configNotice?.digest !== notice;

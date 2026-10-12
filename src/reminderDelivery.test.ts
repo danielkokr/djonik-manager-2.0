@@ -68,6 +68,8 @@ function world(options: {
     allowedUserId: String(USER),
     createConfigSource: () => ({ read: async () => null }),
     createStateStore: () => store,
+    // #71: the runtime has no way to run a ritual without a fact collector; these tests give it a quiet fresh board.
+    createFactCollector: () => async () => ({ cards: [], projects: [], followUps: [] }),
     runTurn: async (request) => {
       turns.push(request);
       return options.runTurn ? options.runTurn(request) : { reply: "🎯 Головне: концепт Seqthera.", sessionId: "sesn_serving", toolUses: [] };
