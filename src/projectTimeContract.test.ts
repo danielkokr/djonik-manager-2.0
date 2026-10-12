@@ -108,13 +108,14 @@ test("work-review routes time questions to the tool; its accepted #36 contract i
   assert.doesNotMatch(SOURCE_SYSTEM_PROMPT, /trello_project_time/);
 });
 
-test("release: the tool exists only on the r31 candidate and its #64 resolution r31 (served since #65); r30 stays immutable and the rollback", () => {
-  assert.equal(SERVING_RELEASE, RELEASE_R31);
-  assert.ok(SERVING_RELEASE.customTools.includes("trello_project_time"), "the served r31 exposes the #62 tool");
-  assert.deepEqual(RELEASE_R30.customTools, ["trello_work_history", "trello_board_snapshot", "focus_budget"], "the r30 rollback does not");
+test("release: the tool arrived with the r31 candidate and its #64 resolution r31; the served r32 keeps it; r30 stays immutable without it", () => {
+  assert.equal(SERVING_RELEASE, RELEASES.r32, "r32 source cutover (docs/111)");
+  assert.ok(SERVING_RELEASE.customTools.includes("trello_project_time"), "the served r32 keeps the #62 tool");
+  assert.ok(RELEASE_R31.customTools.includes("trello_project_time"), "the r31 rollback has it too");
+  assert.deepEqual(RELEASE_R30.customTools, ["trello_work_history", "trello_board_snapshot", "focus_budget"], "r30 does not");
   assert.deepEqual(Object.values(RELEASES).filter((release) => release.customTools.includes("trello_project_time")).map((release) => release.id), ["r31", "r32"], "r32 (#70) keeps it");
   assert.ok(!Object.values(RELEASES).includes(RELEASE_R31_CANDIDATE as never));
-  assert.equal(RELEASES.r31, RELEASE_R31, "#64 resolved the candidate remotely (Agent v31); #65 serves it");
+  assert.equal(RELEASES.r31, RELEASE_R31, "#64 resolved the candidate remotely (Agent v31); #65 served it, now the rollback");
   assert.equal(RELEASE_R31_CANDIDATE.agent.fromVersion, 30);
   assert.equal(RELEASE_R31_CANDIDATE.agent.version, null, "no invented Agent version");
   assert.deepEqual(RELEASE_R31_CANDIDATE.customTools, ["trello_work_history", "trello_board_snapshot", "focus_budget", "trello_project_time"]);

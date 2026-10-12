@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type Anthropic from "@anthropic-ai/sdk";
 import { connectToDjonik, createCustomToolRouter, DJONIK_MEMORY_INSTRUCTIONS, type DjonikTraceEvent } from "./djonikClient.js";
 import * as releaseModule from "./release.js";
-import { RELEASE_R31, RELEASES, SERVING_RELEASE, type DjonikRelease, type DjonikReleaseCandidate } from "./release.js";
+import { RELEASE_R31, RELEASE_R32, RELEASES, SERVING_RELEASE, type DjonikRelease, type DjonikReleaseCandidate } from "./release.js";
 import { canonicalJsonSha256, normalizeAgentConfig, sha256, SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
 import { buildAgentUpdateBody } from "./releasePlan.js";
 import { SOURCE_SYSTEM_PROMPT } from "./releaseFixtures.test-helpers.js";
@@ -33,8 +33,12 @@ const LAST_AGENT_VERSION_WITHOUT_REMINDER = 31;
 
 // --- 1. Release surface ---------------------------------------------------------------------------------------------
 
-test("#68 root cause: the serving release and every reviewed release up to r31 omit `reminder`, so the adapter keeps reminders off", () => {
-  assert.equal(SERVING_RELEASE, RELEASE_R31, "this revision still serves r31; #68 changes no serving tuple");
+test("#68 root cause and fix: every reviewed release up to r31 omits `reminder` (reminders off); the serving r32 exposes it (reminders on)", () => {
+  // The r32 source cutover (docs/111): this revision serves the first release with the tool. The host turns reminders on
+  // only once this revision is deployed; under its deployed r31 revision they stay off.
+  assert.equal(SERVING_RELEASE, RELEASE_R32);
+  assert.ok(SERVING_RELEASE.customTools.includes(REMINDER_TOOL_NAME), "the one switch below is now on for this revision");
+  assert.ok(!RELEASE_R31.customTools.includes(REMINDER_TOOL_NAME), "the r31 rollback keeps them off");
   for (const release of Object.values(RELEASES)) {
     if (release.agent.version > LAST_AGENT_VERSION_WITHOUT_REMINDER) continue;
     assert.ok(!release.customTools.includes(REMINDER_TOOL_NAME), `${release.id} is immutable history without reminder`);

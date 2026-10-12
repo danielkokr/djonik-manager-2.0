@@ -7,7 +7,7 @@ import { R30_SYSTEM_PROMPT, agentVersionFixture, servingSessionFixture } from ".
 import { PROJECT_HEALTH_SPECIALIST_AGENT_ID } from "./djonikClient.js";
 
 test("#47/#48/#50 candidate preserves immutable r29 and remains unresolved", () => {
-  assert.equal(SERVING_RELEASE.id, "r31", "#65 serves the resolved r31; the r30 candidate is never served");
+  assert.equal(SERVING_RELEASE.id, "r32", "docs/111 serves the resolved r32; the r30 candidate is never served");
   assert.notEqual(SERVING_RELEASE as unknown, RELEASE_R30_CANDIDATE);
   assert.equal(RELEASES.r29, RELEASE_R29);
   // #55 resolved the candidate into a separate, written-out RELEASE_R30; the candidate itself stays unresolved provenance.
@@ -50,8 +50,8 @@ test("#50: focus_budget exists only on the r30 candidate and its resolution r30 
   for (const release of [RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28, RELEASE_R29]) {
     assert.ok(!release.customTools.includes("focus_budget"), release.id);
   }
-  assert.ok(RELEASE_R30.customTools.includes("focus_budget"), "r30 (the rollback since #65) exposes the #50 tool");
-  assert.ok(SERVING_RELEASE.customTools.includes("focus_budget"), "the served r31 keeps it");
+  assert.ok(RELEASE_R30.customTools.includes("focus_budget"), "r30 exposes the #50 tool");
+  assert.ok(SERVING_RELEASE.customTools.includes("focus_budget"), "the served r32 keeps it");
   assert.ok(RELEASE_R30_CANDIDATE.customTools.includes("focus_budget"));
   assert.ok(!RELEASE_R30_CANDIDATE.customTools.includes("reminder"), "reminder stays dormant");
   assert.equal(RELEASE_R30_CANDIDATE.agent.version, null, "no invented Agent v30");
@@ -69,7 +69,7 @@ const R30_TEST_PINS = Object.fromEntries(["planning-and-focus", "pm-rhythm", "ta
 /** Test-only resolution of the candidate: invented ids never leave this file (the real r30 has no Agent version yet). */
 const resolvedR30 = () => resolveReleaseCandidate(RELEASE_R30_CANDIDATE, { skills: R30_TEST_PINS, agentVersion: 30 });
 
-test("#44 topology: r25–r29 pin specialist v4 unchanged; the r30 candidate has no specialist; r31 serves (#65), r30 is the rollback", () => {
+test("#44 topology: r25–r29 pin specialist v4 unchanged; the r30 candidate has no specialist; r32 serves (docs/111), r31 is the rollback", () => {
   for (const release of [RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28, RELEASE_R29]) {
     assert.deepEqual(release.specialist, {
       id: PROJECT_HEALTH_SPECIALIST_AGENT_ID,
@@ -80,10 +80,10 @@ test("#44 topology: r25–r29 pin specialist v4 unchanged; the r30 candidate has
   assert.equal(RELEASE_R30_CANDIDATE.specialist, null, "absence is explicit, not a missing field");
   assert.ok("specialist" in RELEASE_R30_CANDIDATE);
   assert.equal(RELEASE_R30_CANDIDATE.agent.version, null, "the candidate never carries an Agent version; RELEASE_R30 does (#55)");
-  assert.deepEqual(Object.keys(RELEASES), ["r25", "r26", "r27", "r28", "r29", "r30", "r31", "r32"], "r30 is attestable (#55); r31 too (#64), served since #65; r32 constructed, not served (#70)");
+  assert.deepEqual(Object.keys(RELEASES), ["r25", "r26", "r27", "r28", "r29", "r30", "r31", "r32"], "r30 is attestable (#55); r31 too (#64); r32 (#70) is served since docs/111");
   assert.equal(RELEASE_R30.specialist, null);
   assert.equal(RELEASES.r31!.specialist, null, "r31 keeps the coordinator-only topology");
-  assert.equal(SERVING_RELEASE.id, "r31");
+  assert.equal(SERVING_RELEASE.id, "r32");
   assert.equal(SERVING_RELEASE.specialist, null, "the served topology is coordinator-only");
   assert.equal(RELEASE_R30_CANDIDATE.model, RELEASE_R29.model, "#44 changes neither model nor effort");
   assert.deepEqual(RELEASE_R30_CANDIDATE.builtInTools, RELEASE_R29.builtInTools, "#44 changes no tool permission");

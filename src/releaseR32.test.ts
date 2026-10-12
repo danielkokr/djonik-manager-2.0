@@ -13,7 +13,8 @@ import { SOURCE_SYSTEM_PROMPT, agentVersionFixture, r31SkillSource, servingSessi
 
 // #70 (docs/110): r32 is the remote-constructed, attested resolution of RELEASE_R32_CANDIDATE — Agent v32, three new
 // byte-verified Skill versions (#66/#67/#69), the v2 trello_work_history definition (#66/#69) and the #54 reminder tool
-// (#68). Constructed WITHOUT a cutover: this revision still serves r31, which is also the rollback.
+// (#68). #70 constructed it WITHOUT a cutover; the r32 source cutover (docs/111) made it this revision's serving release.
+// r31 is the immediate rollback. The host serves it only after a separately authorized deploy.
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const skillSource = (name: string) => readFileSync(join(repoRoot, ".claude", "skills", name, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
@@ -30,11 +31,11 @@ const explicit = (skill: ReleaseSkill) => {
   return skill.pin as Extract<ReleaseSkill["pin"], { kind: "explicit" }>;
 };
 
-test("r32 is a reviewed, attestable release but NOT the serving release: this revision still serves r31", () => {
+test("r32 is a reviewed, attestable release and the serving release of this revision (docs/111); r31 is the rollback", () => {
   assert.equal(RELEASES.r32, RELEASE_R32);
-  assert.equal(SERVING_RELEASE, RELEASE_R31, "#70 performs no cutover");
-  assert.notEqual(SERVING_RELEASE as unknown, RELEASE_R32);
-  assert.equal(RELEASES[SERVING_RELEASE.id], RELEASE_R31, "the default `release:check` still checks r31");
+  assert.equal(SERVING_RELEASE, RELEASE_R32, "r32 source cutover");
+  assert.equal(RELEASES[SERVING_RELEASE.id], RELEASE_R32, "the default `release:check` checks r32");
+  assert.equal(RELEASES.r31, RELEASE_R31, "r31 stays a reviewed rollback release");
   assert.deepEqual(RELEASE_R32.agent, { id: RELEASE_R31.agent.id, version: 32 });
   assert.equal(RELEASE_R31.agent.version, 31, "r31 stays pinned to immutable Agent v31");
   assert.equal(RELEASE_R32_CANDIDATE.agent.version, null, "the candidate stays unresolved provenance");

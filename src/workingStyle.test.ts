@@ -42,9 +42,9 @@ test("#52 owner keeps current adaptation separate from approved Memory and exclu
   assert.ok(Buffer.byteLength(DJONIK_MEMORY_INSTRUCTIONS, "utf8") <= 4096);
 });
 
-test("#52 remains in the unresolved r30 candidate (resolved as r30 by #55; r31 served since #65); released tuples are untouched", () => {
-  assert.equal(SERVING_RELEASE.id, "r31", "the #52 app code runs under r31: r30's Skills plus only the #59/#62 edits");
-  assert.deepEqual(Object.keys(RELEASES), ["r25", "r26", "r27", "r28", "r29", "r30", "r31", "r32"], "r31 (#64) is attestable and served (#65); r32 (#70) is attestable, not served");
+test("#52 remains in the unresolved r30 candidate (resolved as r30 by #55; r32 served since docs/111); released tuples are untouched", () => {
+  assert.equal(SERVING_RELEASE.id, "r32", "the #52 app code runs under r32: r30's Skills plus the #59/#62 and #66/#67/#69 edits");
+  assert.deepEqual(Object.keys(RELEASES), ["r25", "r26", "r27", "r28", "r29", "r30", "r31", "r32"], "r31 (#64) is attestable and the rollback; r32 (#70) is served (docs/111)");
   assert.equal(RELEASE_R30_CANDIDATE.agent.version, null);
   assert.ok(RELEASE_R30_CANDIDATE.skills.filter((item) => item.pin.kind === "unresolved").every((item) => item.skillId === null));
 });

@@ -23,7 +23,7 @@ const measuredVersions: Record<string, string> = {
 
 test("r29 (the reviewed rollback after #56; r30 is the rollback since #65) keeps the accepted #45 prompt and only the three changed coordinator Skill pins", () => {
   assert.equal(RELEASES.r29, RELEASE_R29);
-  assert.notEqual(SERVING_RELEASE, RELEASE_R29, "#65: this revision serves r31; r30 is the immediate rollback");
+  assert.notEqual(SERVING_RELEASE, RELEASE_R29, "docs/111: this revision serves r32; r31 is the immediate rollback");
   assert.ok(RELEASE_R29.specialist && RELEASE_R29.specialist.version === 4, "the rollback keeps specialist v4");
   assert.equal(RELEASE_R29.agent.id, RELEASE_R28.agent.id);
   assert.equal(RELEASE_R29.agent.version, 29);

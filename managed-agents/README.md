@@ -20,7 +20,12 @@ The v21/v4 statements below describe recorded remote resource state from the rol
 
 ## Files
 
-**#70 (2026-10-12; [docs/110](../docs/110_ISSUE_70_R32_REMOTE_CONSTRUCTION_AND_ATTESTATION.md)): `djonik.md` frontmatter now declares Agent v32 = `RELEASE_R32`, but the application still serves r31.**
+**r32 source cutover (2026-10-12; [docs/111](../docs/111_R32_SOURCE_CUTOVER.md)): `djonik.md` = `SERVING_RELEASE` = `RELEASE_R32` (Agent v32).**
+- The #70 transition is over: the declaration, the application's serving release and `RELEASE_R32` are one lockstep again (`src/release.test.ts`). Nothing was applied or synced; Agent v32 and its Skills are unchanged.
+- r31 (Agent v31) is the immediate rollback; `src/release.test.ts` proves it differs from this file by exactly the r32 transition (#66 + #67 + #68 + #69).
+- Source cutover only: the host still serves its deployed r31 revision until a separately authorized deploy. Manual Telegram validation of #66–#69 and #71 follows that deploy.
+
+**#70 (2026-10-12; [docs/110](../docs/110_ISSUE_70_R32_REMOTE_CONSTRUCTION_AND_ATTESTATION.md)): `djonik.md` frontmatter now declares Agent v32 = `RELEASE_R32`, but the application still serves r31** (superseded by the r32 source cutover above).
 - Agent v32 was created from v31 by one `version: 31`-preconditioned `agents.update` with the body `buildCandidateUpdateBody` generated (Skills and tools only). It was read back exactly: `release:check -- r32` OK.
 - Three new Skill versions (planning-and-focus, work-review, pm-rhythm) are byte-identical to committed main. `task-management` and `studio-intake` keep their r31 pins.
 - `trello_work_history` carries its `v2` definition (explicit `focus`, #66/#69) under the same name; the `reminder` tool (#54) is exposed for the first time (#68). The other three custom tools, the built-in and Trello toolsets and every policy are unchanged.
@@ -28,7 +33,7 @@ The v21/v4 statements below describe recorded remote resource state from the rol
 - `SERVING_RELEASE` stays `RELEASE_R31` (Agent v31): source cutover, deploy and Telegram validation are separate, separately authorized steps. The r31 declaration stays reproducible from `RELEASE_R31` and git history; `src/release.test.ts` proves served r31 differs from this file by exactly the r32 transition.
 - Remote latest is now v32. Every serving path pins its version explicitly, so production (r31) is unaffected. A Console Session created without a version pin would get v32.
 
-**#65 (2026-10-02; [docs/103](../docs/103_ISSUE_65_R31_SOURCE_CUTOVER.md)): source cutover — `djonik.md` = `SERVING_RELEASE` = `RELEASE_R31` (Agent v31).**
+**#65 (2026-10-02; [docs/103](../docs/103_ISSUE_65_R31_SOURCE_CUTOVER.md)): source cutover — `djonik.md` = `SERVING_RELEASE` = `RELEASE_R31` (Agent v31).** (Superseded above: r32 is declared and served in source; r31 is the rollback.)
 - The #64 transition is over: the declaration, the application's serving release and `RELEASE_R31` are one lockstep again (`src/release.test.ts`). Nothing was applied or synced; Agent v31 and its Skills are unchanged.
 - r30 (Agent v30) is the immediate rollback; `src/release.test.ts` proves it differs from this file by exactly the r31 transition (#59 + #62).
 - Source cutover only: the host still serves its deployed r30 revision until a separately authorized deploy. Manual Telegram validation of #59/#62 follows that deploy.

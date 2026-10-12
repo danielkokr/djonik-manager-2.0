@@ -736,9 +736,10 @@ export const RELEASE_R32_CANDIDATE: DjonikReleaseCandidate = {
  * timestamp; the other two pins show their known r31 spellings there. Written out, not derived at import;
  * `releaseR32.test.ts` proves it equals the resolved candidate.
  *
- * #70 constructed it WITHOUT a cutover: this revision still serves r31, and production keeps its deployed r31 revision.
- * #71 (fresh-Trello fail-closed) is application runtime only and is not part of this tuple. Its source is
- * `managed-agents/djonik.md` (body unchanged since r31; frontmatter = Agent v32). r31 stays the rollback (Agent v31 unchanged).
+ * #70 constructed it WITHOUT a cutover; the r32 source cutover (docs/111) makes it this revision's serving release by the
+ * source cutover alone — the tuple is unchanged. Production keeps its deployed r31 revision until a separately authorized
+ * deploy. #71 (fresh-Trello fail-closed) is application runtime only and is not part of this tuple. Its source is
+ * `managed-agents/djonik.md` (body unchanged since r31; frontmatter = Agent v32). r31 stays the immediate rollback (Agent v31 unchanged).
  */
 export const RELEASE_R32: DjonikRelease = {
   id: "r32",
@@ -777,9 +778,10 @@ export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_
  * #64 constructed and attested r31 (Agent v31) remotely WITHOUT a cutover (docs/102). #65 flips this to `r31`
  * (docs/103), a source cutover only: the host keeps serving its deployed r30 revision until a separately authorized
  * deploy; r30 is the immediate rollback.
- * #70 constructed and attested r32 (Agent v32) remotely WITHOUT a cutover (docs/110): this stays `r31` until a separately
- * authorized source cutover and deploy.
+ * #70 constructed and attested r32 (Agent v32) remotely WITHOUT a cutover (docs/110). The r32 source cutover flips this to
+ * `r32` (docs/111), a source cutover only: the host keeps serving its deployed r31 revision until a separately authorized
+ * deploy; r31 is the immediate rollback.
  * This is deliberately not an environment variable:
  * the reviewed revision, not host configuration, decides what is served.
  */
-export const SERVING_RELEASE: DjonikRelease = RELEASE_R31;
+export const SERVING_RELEASE: DjonikRelease = RELEASE_R32;

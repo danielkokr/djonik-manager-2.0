@@ -25,14 +25,15 @@ test("the serving release of this revision is one of the reviewed releases", () 
   assert.equal(RELEASES[SERVING_RELEASE.id], SERVING_RELEASE);
 });
 
-test("this revision serves r31 (#65): Agent v31, no specialist, every Skill pinned with its measured Session spelling, writes gated", () => {
-  assert.equal(SERVING_RELEASE, RELEASE_R31);
-  assert.equal(SERVING_RELEASE.agent.version, 31);
+test("this revision serves r32 (docs/111): Agent v32, no specialist, every Skill pinned with its measured Session spelling, writes gated", () => {
+  assert.equal(SERVING_RELEASE, RELEASE_R32);
+  assert.equal(SERVING_RELEASE.agent.version, 32);
   assert.equal(SERVING_RELEASE.specialist, null, "coordinator-only Project Health topology (#44)");
   assert.ok(SERVING_RELEASE.skills.every((skill) => skill.pin.kind === "explicit"), "no `latest` is served");
   // Without its measured Session spelling a pinned Skill fails the startup Session attestation closed.
   assert.ok(SERVING_RELEASE.skills.every((skill) => skill.pin.kind === "explicit" && /^\d+$/.test(skill.pin.sessionVersion ?? "")), "every sessionVersion measured");
-  assert.deepEqual(SERVING_RELEASE.customTools, ["trello_work_history", "trello_board_snapshot", "focus_budget", "trello_project_time"]);
+  assert.deepEqual(SERVING_RELEASE.customTools, ["trello_work_history", "trello_board_snapshot", "focus_budget", "trello_project_time", "reminder"]);
+  assert.deepEqual(SERVING_RELEASE.customToolRevisions, { trello_work_history: "v2" });
   assert.deepEqual(SERVING_RELEASE.mcpServers.map((server) => server.name), ["trello"], "no Calendar MCP");
   assert.deepEqual(SERVING_RELEASE.confirmationRequired, { builtIn: ["write", "edit"], mcp: { trello: ["trelloWriteCard", "trelloWriteChecklist"] } });
 });
@@ -89,13 +90,13 @@ const surfaceOf = (release: DjonikRelease) => {
   return { skills, tools: (tools as Array<Record<string, unknown>>).map(omitEmpty) };
 };
 
-test("the declarative coordinator source managed-agents/djonik.md equals r32 (Agent v32) — body and frontmatter; r31 stays served", () => {
-  // #70 created Agent v32 from the real r32 pins WITHOUT a cutover (docs/110): the declaration is r32, while
-  // SERVING_RELEASE stays r31 (the transition test below pins the difference). The body is unchanged since r31 (the #59
-  // prompt); reverting exactly ISSUE_59_PROMPT_EDITS gives the r30 prompt, and then ISSUE_44_PROMPT_EDITS the r29 prompt.
-  assert.equal(SERVING_RELEASE, RELEASE_R31);
+test("the serving release r32 (Agent v32) equals the declarative coordinator source managed-agents/djonik.md — body and frontmatter", () => {
+  // #70 created Agent v32 from the real r32 pins (docs/110); the r32 source cutover (docs/111) made it the serving release,
+  // so declaration == SERVING_RELEASE == RELEASE_R32 again. The body is unchanged since r31 (the #59 prompt); reverting
+  // exactly ISSUE_59_PROMPT_EDITS gives the r30 prompt, and then ISSUE_44_PROMPT_EDITS the r29 prompt.
+  assert.equal(SERVING_RELEASE, RELEASE_R32);
   assert.equal(RELEASES.r32, RELEASE_R32);
-  const release = RELEASE_R32;
+  const release = SERVING_RELEASE;
   assert.equal(release.systemSha256, sha(SOURCE_SYSTEM_PROMPT), "r32 prompt SHA = djonik.md body");
   assert.equal(RELEASE_R31.systemSha256, release.systemSha256, "r32 keeps the r31 prompt byte for byte");
   assert.equal(RELEASE_R32_CANDIDATE.systemSha256, release.systemSha256);
@@ -120,10 +121,12 @@ test("the declarative coordinator source managed-agents/djonik.md equals r32 (Ag
   }
 });
 
-test("the served r31 differs from the declaration (r32) by exactly the reviewed r32 transition (#66 + #67 + #68 + #69)", () => {
-  // Until a separate cutover, r31 is served and the declaration is r32. Their difference must be exactly three Skill pins
-  // (work-review, pm-rhythm, planning-and-focus), the v2 definition of trello_work_history and the added reminder tool.
-  assert.equal(SERVING_RELEASE, RELEASE_R31);
+test("the r31 rollback differs from the served declaration (r32) by exactly the reviewed r32 transition (#66 + #67 + #68 + #69)", () => {
+  // docs/111: r32 is served and declared. Rolling back to r31 (docs/52 §6) reverts exactly three Skill pins (work-review,
+  // pm-rhythm, planning-and-focus), the v2 definition of trello_work_history and the added reminder tool — nothing else.
+  assert.equal(SERVING_RELEASE, RELEASE_R32);
+  assert.equal(RELEASES.r31, RELEASE_R31, "r31 stays a reviewed rollback release");
+  assert.deepEqual(surfaceOf(SERVING_RELEASE), declaredSurface, "served == declared");
   const served = surfaceOf(RELEASE_R31);
   assert.notDeepEqual(served, declaredSurface);
   assert.equal(RELEASE_R31.systemSha256, sha(SOURCE_SYSTEM_PROMPT), "prompt: unchanged");
@@ -136,17 +139,18 @@ test("the served r31 differs from the declaration (r32) by exactly the reviewed 
   const [before, after] = [byKey(served.tools), byKey(declaredSurface.tools)];
   const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
   assert.deepEqual(changed.sort(), ["reminder", "trello_work_history"], "built-in, Trello toolset/policies and the other three custom tools unchanged");
-  assert.equal(before.reminder, undefined, "the served r31 has no reminder");
+  assert.equal(before.reminder, undefined, "the r31 rollback has no reminder");
   assert.deepEqual(after.reminder, { type: "custom", name: "reminder", ...customToolDefinition(RELEASE_R32, "reminder") });
   assert.equal(after.trello_work_history.description, customToolDefinition(RELEASE_R32, "trello_work_history")!.description);
   assert.equal(before.trello_work_history.description, SUPPORTED_CUSTOM_TOOLS.trello_work_history.description, "r31 keeps the original definition");
 });
 
-test("the r30 rollback differs from the served r31 by exactly the reviewed r31 transition (#59 + #62)", () => {
-  // #65: r31 is served (the declaration moved to r32 in #70). Rolling back to r30 (docs/52 §6, docs/103) reverts exactly
-  // #59 (prompt + task-management) and #62 (work-review + the read-only trello_project_time tool) — nothing else.
-  assert.equal(SERVING_RELEASE, RELEASE_R31);
-  assert.equal(RELEASES.r30, RELEASE_R30, "r30 stays a reviewed rollback release");
+test("r30 differs from r31 by exactly the reviewed r31 transition (#59 + #62)", () => {
+  // #65 served r31 with r30 as its rollback (docs/103); since docs/111 r32 serves and r31 is the immediate rollback. r30
+  // stays a reviewed release: it differs from r31 by exactly #59 (prompt + task-management) and #62 (work-review + the
+  // read-only trello_project_time tool) — nothing else.
+  assert.equal(RELEASES.r31, RELEASE_R31);
+  assert.equal(RELEASES.r30, RELEASE_R30, "r30 stays a reviewed release");
   const servedSurface = surfaceOf(RELEASE_R31);
   const rollback = surfaceOf(RELEASE_R30);
   assert.notDeepEqual(rollback, servedSurface);

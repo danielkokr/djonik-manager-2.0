@@ -24,10 +24,10 @@ const explicit = (skill: ReleaseSkill) => {
   return skill.pin as Extract<ReleaseSkill["pin"], { kind: "explicit" }>;
 };
 
-test("r30 is a reviewed, attestable release and the immediate rollback of this revision (#65 serves r31); r29 stays reviewed", () => {
+test("r30 is a reviewed, attestable release (r32 is served since docs/111, r31 is the immediate rollback); r29 stays reviewed", () => {
   assert.equal(RELEASES.r30, RELEASE_R30, "r30 stays attestable by `release:check -- r30`");
-  assert.notEqual(SERVING_RELEASE, RELEASE_R30, "#56 served r30; #65 cut the source over to r31");
-  assert.equal(SERVING_RELEASE.id, "r31");
+  assert.notEqual(SERVING_RELEASE, RELEASE_R30, "#56 served r30; #65 cut the source over to r31, docs/111 to r32");
+  assert.equal(SERVING_RELEASE.id, "r32");
   assert.equal(RELEASES.r29, RELEASE_R29, "r29 stays a reviewed release");
   assert.equal(RELEASE_R30.id, "r30");
   assert.deepEqual(RELEASE_R30.agent, { id: RELEASE_R29.agent.id, version: 30 });
