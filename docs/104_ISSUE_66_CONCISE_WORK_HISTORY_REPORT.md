@@ -1,6 +1,7 @@
 # 104 — Issue #66: тижневий огляд без дампу подій Trello (source implementation report)
 
-**Статус:** source-only, очікує review. Без commit, push, deploy, змін віддаленого Agent/Skills і без платної/live перевірки.
+**Статус:** source implementation прийнято (Product Owner, 2026-10-12) на коміті `867298ddf0eac7a70eb3185d7ab4131b157034f1`. Issue #66 лишається відкритим: у production виправлення ще немає — попереду r32 (#70), source cutover/deploy і перевірка в Telegram. Closeout: [docs/105](105_ISSUE_66_SOURCE_CLOSEOUT_REPORT.md).
+**Стан на момент звіту (історичний):** source-only, очікував review; без commit, push, deploy, змін віддаленого Agent/Skills і без платної/live перевірки.
 **Дата:** 2026-10-09. **Serving release у source:** r31 (не змінено).
 
 ## 1. Корінь проблеми
