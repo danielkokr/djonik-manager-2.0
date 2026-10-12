@@ -161,7 +161,7 @@ test("#45: every concrete detail in a rhythm message has a source this turn; an 
 
 test("#45 / docs/77 §4: each ritual carries its approved shape", () => {
   const monday = section("Monday — week-plan proposal");
-  for (const line of ["🗓 Тиждень", "🎯 1.", "📌 Обіцянки цього тижня:", "⏳ Чекаємо:", "➡️ Свідомо не чіпаємо:", "💭", "Приймаєш?"]) assert.ok(monday.includes(line), line);
+  for (const line of ["🗓 Тиждень", "🎯 **<проєкт>**", "📌 Обіцянки цього тижня:", "⏳ Чекаємо:", "➡️ Свідомо не чіпаємо:", "💭", "Приймаєш?"]) assert.ok(monday.includes(line), line);
   assert.match(monday, /з рядка годинника/, "the week's dates come from the clock line");
   assert.match(monday, /promises only as recorded in `commitments\/`/);
   assert.match(monday, /up to three outcomes/i);
@@ -216,7 +216,8 @@ test("#50: Monday answers 'what must be true by Friday' — week stakes, not a s
   const monday = section("Monday — week-plan proposal");
   assert.match(monday, /\*\*what must be true by Friday\?\*\*/);
   assert.match(monday, /No day-by-day schedule and no weekday for an outcome unless a recorded promise carries it/);
-  assert.ok(monday.includes("🎯 1. <що має бути правдою до кінця тижня> — <чому>"));
+  assert.ok(monday.includes("• <що має бути правдою до кінця тижня> — <дедлайн або чому>"));
+  assert.match(monday, /still three at most in the whole plan, not three per project/);
 });
 
 test("#50: a timebox asks whether to change action; SILENT when the current work stays best; never 'stop'", () => {

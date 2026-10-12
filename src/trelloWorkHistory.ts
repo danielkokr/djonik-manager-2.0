@@ -351,7 +351,7 @@ function occurrenceSuffix(item: WorkHistoryItem): string {
 }
 
 function dueSuffix(item: WorkHistoryItem): string {
-  return item.due ? `, due ${item.due}` : "";
+  return item.due ? `, дедлайн ${item.due}` : "";
 }
 
 const CATEGORY_NARRATION: Record<CategoryKey, CategoryNarration> = {

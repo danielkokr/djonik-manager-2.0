@@ -108,10 +108,35 @@ export const ISSUE_66_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ befor
   ],
 };
 
-/** A Skill's committed source as its r31 pin stores it: the repo source minus the unsynced #66 edit. */
+const pmRhythmSource = readFileSync(join(repoRoot, ".claude", "skills", "pm-rhythm", "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
+
+/** The #67 Skill edits (plain words instead of `due`, scan-first layout, the project-grouped Monday shape), exact text
+ *  before → after. Source only: no reviewed release pins them, so r31 (served) pins the source minus these edits. The
+ *  two long pm-rhythm additions are read back from the Skill itself rather than copied here (docs/106). */
+export const ISSUE_67_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ before: string; after: string }>>> = {
+  "pm-rhythm": [
+    {
+      before: "",
+      after: /- \*\*Plain words\.\*\*[\s\S]*?bullets do\.\n/.exec(pmRhythmSource)?.[0] ?? "<missing #67 plain-words and scan rules>",
+    },
+    {
+      before:
+        "```\n🗓 Тиждень <дд.мм–дд.мм з рядка годинника>\n" +
+        "🎯 1. <що має бути правдою до кінця тижня> — <чому>\n🎯 2. …\n🎯 3. …\n" +
+        "📌 Обіцянки цього тижня: <кому, що, коли — лише записане>\n⏳ Чекаємо: …\n➡️ Свідомо не чіпаємо: …\n" +
+        "💭 <висновок, якщо є>\nПриймаєш?\n```\n",
+      after: /```\n🗓 Тиждень <дд\.мм–дд\.мм з рядка годинника>\n\n[\s\S]*?\n\nПриймаєш\?»\n/.exec(pmRhythmSource)?.[0] ?? "<missing #67 Monday shape>",
+    },
+  ],
+  "planning-and-focus": [
+    { before: "(\"вважаю, due внутрішній — якщо клієнт чекає, скажи\")", after: "(\"вважаю, дедлайн внутрішній — якщо клієнт чекає, скажи\")" },
+  ],
+};
+
+/** A Skill's committed source as its r31 pin stores it: the repo source minus the unsynced #67 and #66 edits. */
 export function r31SkillSource(name: string): string {
   const source = readFileSync(join(repoRoot, ".claude", "skills", name, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
-  return revertEdits(source, ISSUE_66_SKILL_EDITS[name] ?? [], `#66 ${name}`);
+  return revertEdits(revertEdits(source, ISSUE_67_SKILL_EDITS[name] ?? [], `#67 ${name}`), ISSUE_66_SKILL_EDITS[name] ?? [], `#66 ${name}`);
 }
 
 /** A Skill's committed source as its r30 pin stores it: the r31 pin's bytes minus any #59/#62 edit. */

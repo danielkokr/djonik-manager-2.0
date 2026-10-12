@@ -101,8 +101,8 @@ test("#36 detailed answer_text names every item and never emits an omitted-examp
   );
   assert.equal(
     answer.answer_text,
-    "У Done перейшло 2 події. У Done перейшла «Анонімна картка» — пн 23.03, 13:00 (2 рази), due пт 27.03, 18:00. " +
-      "Із Done повернулося 1 подія. Із Done повернулася «Анонімна картка» — пн 23.03, 11:00, due пт 27.03, 18:00.",
+    "У Done перейшло 2 події. У Done перейшла «Анонімна картка» — пн 23.03, 13:00 (2 рази), дедлайн пт 27.03, 18:00. " +
+      "Із Done повернулося 1 подія. Із Done повернулася «Анонімна картка» — пн 23.03, 11:00, дедлайн пт 27.03, 18:00.",
   );
 });
 
@@ -466,7 +466,7 @@ test("#66 `detailed` without Daniel's own request is withheld: the compact answe
 
   const delivered = buildWorkHistoryAnswer(input, clActions, clCards, FULL, NOW, { detailRequested: true });
   assert.equal(delivered.detail_note, undefined);
-  assert.match(delivered.answer_text, /^У Done перейшло 12 подій\. У Done перейшла «Whitepaper PDF» — пн 23\.03, 03:00, due пт 27\.03, 18:00\./);
+  assert.match(delivered.answer_text, /^У Done перейшло 12 подій\. У Done перейшла «Whitepaper PDF» — пн 23\.03, 03:00, дедлайн пт 27\.03, 18:00\./);
   assert.match(delivered.answer_text, /«Футболка» — пн 23\.03, 16:00 \(2 рази\)/);
   assert.match(delivered.answer_text, /Створено «Нова картка CL» — пн 23\.03, 17:00\./);
   // A focused detailed request narrows the chronology to that kind of change.

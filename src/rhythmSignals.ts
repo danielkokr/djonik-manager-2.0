@@ -83,7 +83,8 @@ export interface Signal {
   project: string | null;
   /** Content-light reference for the prompt (card name or project), never a Trello mutation target. */
   subject: string;
-  /** Short factual hint for Claude; wording of the actual message stays Claude's. */
+  /** Short factual hint for Claude; wording of the actual message stays Claude's. Plain Ukrainian only (#67): the
+   *  model repeats a hint's words, so a field name such as `due` here ends up in front of Daniel. */
   fact: string;
 }
 
@@ -146,7 +147,7 @@ export function detectSignals(facts: SignalFacts, now: Date, config: RhythmConfi
             channel: newly ? "interrupt" : "ritual",
             severity: newly ? "high" : "medium",
             fingerprint: card.due,
-            fact: `due ${dueDate} минув, картка не в Done`,
+            fact: `дедлайн ${dueDate} минув, картка не в Done`,
           });
         } else if (dueDate === tomorrowWork && isNotStarted(card)) {
           signals.push({
@@ -156,7 +157,7 @@ export function detectSignals(facts: SignalFacts, now: Date, config: RhythmConfi
             channel: "interrupt",
             severity: "medium",
             fingerprint: `${card.due}|${card.list}`,
-            fact: `due ${dueDate} (наступний робочий день), ще не в роботі`,
+            fact: `дедлайн ${dueDate} (наступний робочий день), ще не в роботі`,
           });
         } else if (
           card.list !== "in_progress" &&
@@ -174,7 +175,7 @@ export function detectSignals(facts: SignalFacts, now: Date, config: RhythmConfi
             channel: "ritual",
             severity: "medium",
             fingerprint: card.due,
-            fact: `due ${dueDate}, ще не в роботі`,
+            fact: `дедлайн ${dueDate}, ще не в роботі`,
           });
         }
       }

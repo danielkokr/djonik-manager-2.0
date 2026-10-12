@@ -1735,7 +1735,7 @@ test("#66 explicit detailed request: Daniel's own words open the chronology, for
   const { session, push } = await open(undefined, false, realHistoryRouter());
   push(...historyTurn("h1", DETAILED_CL, ""));
   const detailed = await session.send("Покажи детально всі переміщення по CL за тиждень");
-  assert.match(detailed, /^У Done перейшло 8 подій\. У Done перейшла «Whitepaper PDF» — пн 23\.03, 03:00, due пт 27\.03, 18:00\./);
+  assert.match(detailed, /^У Done перейшло 8 подій\. У Done перейшла «Whitepaper PDF» — пн 23\.03, 03:00, дедлайн пт 27\.03, 18:00\./);
   assert.match(detailed, /«Футболка» — пн 23\.03, 13:00 \(2 рази\)/);
   assert.match(detailed, /Створено «Нова картка CL» — пн 23\.03, 14:00\.$/);
   // The permission belongs to the turn that asked: the next ordinary question is compact again.
