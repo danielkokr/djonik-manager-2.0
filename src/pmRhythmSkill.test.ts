@@ -246,3 +246,22 @@ test("#50: work_hours is taught only from Daniel's words and never derived from 
   assert.match(tuning, /never infer it from ritual times or quiet hours/);
   assert.ok(section("Buttons are shortcuts, text is first-class").includes(RHYTHM_ACTIONS.start.label));
 });
+
+// --- #69: the Friday conclusion judges outcomes, not activity -------------------------------------------------------
+
+test("#69: 💭 Висновок тижня rests on the accepted plan, commitments and priorities; counts never decide it", () => {
+  const review = section("Friday afternoon — weekly review");
+  const rule = /- 💭 Висновок тижня judges outcomes, not activity:[^\n]*/.exec(review)?.[0] ?? "";
+  assert.ok(rule.length > 0);
+  const order = ["the accepted week plan first", "accepted commitments", "`priorities.md`"].map((part) => rule.indexOf(part));
+  assert.ok(order.every((index) => index >= 0) && order[0] < order[1] && order[1] < order[2]);
+  assert.match(rule, /what closed or clearly moved, what stayed open, waits or carries over/);
+  assert.match(rule, /«N карток» is unique cards that entered Done and «переходів» is transitions: never call either that many completed tasks/);
+  assert.match(rule, /no count decides the week/);
+  assert.match(rule, /A card in Done, a card date or a move alone does not prove a planned outcome/);
+  assert.match(rule, /Without an accepted plan for this week, say the conclusion is partial/);
+  // The #66/#36 relay and the no-score rule are untouched.
+  assert.match(review, /never write, repeat or reword closed or moved cards yourself; your text starts at ⏸/);
+  assert.match(skill, /\*\*No scores\.\*\* No productivity score, no percent-complete/);
+  assert.doesNotMatch(rule, /\bdue\b/);
+});

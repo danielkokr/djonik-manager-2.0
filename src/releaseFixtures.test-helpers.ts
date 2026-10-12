@@ -133,10 +133,25 @@ export const ISSUE_67_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ befor
   ],
 };
 
-/** A Skill's committed source as its r31 pin stores it: the repo source minus the unsynced #67 and #66 edits. */
+const workReviewSource = readFileSync(join(repoRoot, ".claude", "skills", "work-review", "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
+
+/** The #69 Skill edits (a week's success is judged by planned and important outcomes, never by activity counts; what
+ *  «N карток» and «переходів» mean), exact text before → after. Source only: no reviewed release pins them, so r31
+ *  (served) pins the source minus these edits. Both additions are read back from the Skills themselves (docs/108). */
+export const ISSUE_69_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ before: string; after: string }>>> = {
+  "work-review": [
+    { before: "", after: /\*\*«Тиждень успішний\?»\*\*[\s\S]*?with no score or percentage\.\n\n/.exec(workReviewSource)?.[0] ?? "<missing #69 week-judgement rule>" },
+  ],
+  "pm-rhythm": [
+    { before: "", after: /- 💭 Висновок тижня judges outcomes, not activity:[^\n]*\n/.exec(pmRhythmSource)?.[0] ?? "<missing #69 Friday conclusion rule>" },
+  ],
+};
+
+/** A Skill's committed source as its r31 pin stores it: the repo source minus the unsynced #69, #67 and #66 edits. */
 export function r31SkillSource(name: string): string {
   const source = readFileSync(join(repoRoot, ".claude", "skills", name, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
-  return revertEdits(revertEdits(source, ISSUE_67_SKILL_EDITS[name] ?? [], `#67 ${name}`), ISSUE_66_SKILL_EDITS[name] ?? [], `#66 ${name}`);
+  const pre69 = revertEdits(source, ISSUE_69_SKILL_EDITS[name] ?? [], `#69 ${name}`);
+  return revertEdits(revertEdits(pre69, ISSUE_67_SKILL_EDITS[name] ?? [], `#67 ${name}`), ISSUE_66_SKILL_EDITS[name] ?? [], `#66 ${name}`);
 }
 
 /** A Skill's committed source as its r30 pin stores it: the r31 pin's bytes minus any #59/#62 edit. */

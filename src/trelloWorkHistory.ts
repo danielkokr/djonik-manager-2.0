@@ -108,8 +108,13 @@ export interface WorkHistoryItem {
 export interface WorkHistoryCategory {
   total: number;
   total_kind: "event_occurrences" | "cards";
+  /** Unique cards in the category (#69). Equals `total` for a `cards` category; for `event_occurrences` it is what a
+   *  re-entered Done must not inflate: a card that entered Done twice is 2 in `total` and 1 here. */
+  cards: number;
   shown: number;
   omitted: number;
+  /** Unique cards not named because of the display limit (#69); `omitted` is the same remainder in `total`'s unit. */
+  cards_omitted: number;
   items: WorkHistoryItem[];
 }
 
@@ -188,7 +193,7 @@ export const TRELLO_WORK_HISTORY_TOOL_NEXT = {
   type: "custom" as const,
   name: TRELLO_WORK_HISTORY_TOOL.name,
   description:
-    "Read a compact, read-only Trello board-action digest for a requested week or explicit Kyiv date range. The client shows its `answer_text` to Daniel verbatim, so request exactly what he asked. `focus`: `overview` (default) for a week or project review; one kind of change (`completed` = moved into Done, `returned` = came back from Done, `created`, `archived`, `moved`) for a narrow question — the answer is then only that deduplicated card list. `response_format: detailed` is the event-by-event chronology: code delivers it only when Daniel's own message asks for detail, so never request it to gather material for your own summary. It computes Kyiv dates, counts, current-label project scope, and coverage itself; do not use it for current Project Health, writes, effort, or work outside Trello.",
+    "Read a compact, read-only Trello board-action digest for a requested week or explicit Kyiv date range. The client shows its `answer_text` to Daniel verbatim, so request exactly what he asked. `focus`: `overview` (default) for a week or project review; one kind of change (`completed` = moved into Done, `returned` = came back from Done, `created`, `archived`, `moved`) for a narrow question — the answer is then only that deduplicated card list. `response_format: detailed` is the event-by-event chronology: code delivers it only when Daniel's own message asks for detail, so never request it to gather material for your own summary. In the text «N карток» is unique cards and «переходів»/«подій» is Done transitions; neither counts completed tasks or achieved outcomes. It computes Kyiv dates, counts, current-label project scope, and coverage itself; do not use it for current Project Health, writes, effort, or work outside Trello.",
   input_schema: {
     ...TRELLO_WORK_HISTORY_TOOL.input_schema,
     properties: {
@@ -314,7 +319,7 @@ function categoryFor(
   const shownItems = limit === null ? items : items.slice(0, limit);
   const total = total_kind === "event_occurrences" ? items.reduce((count, item) => count + (item.occurrences ?? 1), 0) : items.length;
   const shown = total_kind === "event_occurrences" ? shownItems.reduce((count, item) => count + (item.occurrences ?? 1), 0) : shownItems.length;
-  return { total, total_kind, shown, omitted: total - shown, items: shownItems };
+  return { total, total_kind, cards: items.length, shown, omitted: total - shown, cards_omitted: items.length - shownItems.length, items: shownItems };
 }
 
 /** Ukrainian one/few/many noun selection for a count-agreeing phrase ("1 картка", "2 картки", "5 карток"). */
@@ -336,8 +341,8 @@ function notListedPredicate(n: number, gender: "fem" | "neut"): string {
 type CategoryKey = keyof WorkHistoryCategories;
 
 interface CategoryNarration {
-  /** Renders the authoritative total sentence, e.g. "У Done перейшло 4 події." */
-  total: (n: number) => string;
+  /** Renders the authoritative total sentence, e.g. "У Done перейшло 4 події (3 унікальні картки)." */
+  total: (category: WorkHistoryCategory) => string;
   /** Renders one named example sentence for a single item. */
   item: (item: WorkHistoryItem) => string;
   /** Noun forms and gender used for the "N more not listed" overflow sentence. */
@@ -354,33 +359,49 @@ function dueSuffix(item: WorkHistoryItem): string {
   return item.due ? `, дедлайн ${item.due}` : "";
 }
 
+const UNIQUE_CARDS_NOUN = ["унікальна картка", "унікальні картки", "унікальних карток"] as const;
+const CARDS_NOUN = ["картка", "картки", "карток"] as const;
+
+/**
+ * #69: an event total never stands alone. The chronology counts transitions, so «24 події» with no card count beside it
+ * was the only number available and got retold as «24 картки». Code states the unique-card count next to it, always.
+ */
+function eventTotal(lead: string, category: WorkHistoryCategory): string {
+  const events = `${category.total} ${ukrainianPlural(category.total, ["подія", "події", "подій"])}`;
+  return `${lead} ${events} (${category.cards} ${ukrainianPlural(category.cards, UNIQUE_CARDS_NOUN)}).`;
+}
+
+function cardTotal(lead: string, category: WorkHistoryCategory): string {
+  return `${lead} ${category.total} ${ukrainianPlural(category.total, CARDS_NOUN)}.`;
+}
+
 const CATEGORY_NARRATION: Record<CategoryKey, CategoryNarration> = {
   reached_done: {
-    total: (n) => `У Done перейшло ${n} ${ukrainianPlural(n, ["подія", "події", "подій"])}.`,
+    total: (category) => eventTotal("У Done перейшло", category),
     item: (item) => `У Done перейшла «${item.card}»${item.at ? ` — ${item.at}` : ""}${occurrenceSuffix(item)}${dueSuffix(item)}.`,
     overflowNoun: ["подія", "події", "подій"],
     overflowGender: "fem",
   },
   returned_from_done: {
-    total: (n) => `Із Done повернулося ${n} ${ukrainianPlural(n, ["подія", "події", "подій"])}.`,
+    total: (category) => eventTotal("Із Done повернулося", category),
     item: (item) => `Із Done повернулася «${item.card}»${item.at ? ` — ${item.at}` : ""}${occurrenceSuffix(item)}${dueSuffix(item)}.`,
     overflowNoun: ["подія", "події", "подій"],
     overflowGender: "fem",
   },
   created: {
-    total: (n) => `Створено ${n} ${ukrainianPlural(n, ["картка", "картки", "карток"])}.`,
+    total: (category) => cardTotal("Створено", category),
     item: (item) => `Створено «${item.card}»${item.at ? ` — ${item.at}` : ""}${dueSuffix(item)}.`,
     overflowNoun: ["картка", "картки", "карток"],
     overflowGender: "fem",
   },
   archived: {
-    total: (n) => `Архівовано ${n} ${ukrainianPlural(n, ["картка", "картки", "карток"])}.`,
+    total: (category) => cardTotal("Архівовано", category),
     item: (item) => `Архівовано «${item.card}»${item.at ? ` — ${item.at}` : ""}.`,
     overflowNoun: ["картка", "картки", "карток"],
     overflowGender: "fem",
   },
   moved: {
-    total: (n) => `Між іншими списками переміщено ${n} ${ukrainianPlural(n, ["картка", "картки", "карток"])}.`,
+    total: (category) => cardTotal("Між іншими списками переміщено", category),
     item: (item) => `«${item.card}»${item.transition ? ` перейшла ${item.transition}` : ""}${item.at ? ` — ${item.at}` : ""}${dueSuffix(item)}.`,
     overflowNoun: ["переміщення", "переміщення", "переміщень"],
     overflowGender: "neut",
@@ -402,7 +423,7 @@ export function renderCategoryFactLines(categories: WorkHistoryCategories): stri
     const category = categories[key];
     if (!category) continue;
     const narration = CATEGORY_NARRATION[key];
-    lines.push(narration.total(category.total));
+    lines.push(narration.total(category));
     for (const item of category.items) lines.push(narration.item(item));
     if (category.omitted > 0) {
       const noun = ukrainianPlural(category.omitted, narration.overflowNoun);
@@ -450,22 +471,31 @@ const VARIANT_B_NAMED: ReadonlySet<CategoryKey> = new Set(["reached_done", "retu
 
 const VARIANT_B_COUNT_NOUN: readonly [string, string, string] = ["картка", "картки", "карток"];
 
+/** The event noun of a named category, used only when its event count differs from its unique-card count (#69). */
+const VARIANT_B_EVENT_NOUN: Partial<Record<CategoryKey, readonly [string, string, string]>> = {
+  reached_done: ["перехід", "переходи", "переходів"],
+  returned_from_done: ["повернення", "повернення", "повернень"],
+};
+
 /**
- * One structured bullet for a single non-empty category. `category.total` is always the
- * authoritative count (event occurrences for `reached_done`/`returned_from_done`, so a
- * Done → reopen → Done card still counts twice even though only one card is named — the same
- * total/shown/omitted split `buildWorkHistoryCategories` already computes, just rendered as a
- * bullet instead of a sentence). A non-zero `omitted` is folded into the same bullet as "(ще N)"
- * rather than a separate line, so overflow never grows the answer's line count.
+ * One structured bullet for a single non-empty category. Every count carries its unit (#69). The overview is about
+ * cards, so a named category leads with its unique-card count; the event-occurrence total (`category.total`, where a
+ * Done → reopen → Done card counts twice) follows in brackets only when it differs: «2 картки (3 переходи)». Before
+ * #69 the bullet was a bare «24 — «…»» of event occurrences beside card names and sibling «N карток» bullets — the
+ * text that got retold as «24 картки перейшли в Done». The names and «(ще N)» are cards too. Overflow stays folded
+ * into the same bullet, so it never grows the answer's line count.
  */
 function buildVariantBBullet(key: CategoryKey, category: WorkHistoryCategory): string {
   const label = VARIANT_B_LABEL[key];
+  const cards = `${category.cards} ${ukrainianPlural(category.cards, VARIANT_B_COUNT_NOUN)}`;
   if (VARIANT_B_NAMED.has(key)) {
     const names = joinUkrainianList(category.items.map((item) => `«${item.card}»`));
-    const overflow = category.omitted > 0 ? ` (ще ${category.omitted})` : "";
-    return `- **${label}:** ${category.total} — ${names}${overflow}`;
+    const eventNoun = VARIANT_B_EVENT_NOUN[key];
+    const events = eventNoun && category.total !== category.cards ? ` (${category.total} ${ukrainianPlural(category.total, eventNoun)})` : "";
+    const overflow = category.cards_omitted > 0 ? ` (ще ${category.cards_omitted})` : "";
+    return `- **${label}:** ${cards}${events} — ${names}${overflow}`;
   }
-  return `- **${label}:** ${category.total} ${ukrainianPlural(category.total, VARIANT_B_COUNT_NOUN)}`;
+  return `- **${label}:** ${cards}`;
 }
 
 /**

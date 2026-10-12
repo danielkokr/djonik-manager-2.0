@@ -17,6 +17,7 @@ import {
 } from "./djonikClient.js";
 import { EXECUTOR_EXCEPTION_CONTENT } from "./customToolResolution.js";
 import { TrelloWorkHistoryClient, executeTrelloWorkHistory } from "./trelloWorkHistory.js";
+import { lintWeekJudgement } from "./workReviewRubric.js";
 import { RELEASE_R29, RELEASE_R30_CANDIDATE, resolveReleaseCandidate } from "./release.js";
 import { servingSessionFixture } from "./releaseFixtures.test-helpers.js";
 
@@ -1684,8 +1685,8 @@ const DETAILED_CL = { window: { kind: "this_week" }, scope: { kind: "project", l
 const EVENT_DUMP = /\d{2}:\d{2}|due |У Done перейшла|Створено «/;
 const BOARD_OVERVIEW =
   "Цього тижня на дошці:\n\n" +
-  "- **Перейшло в Done:** 9 — «Whitepaper PDF», «Футболка», «RDAS», «Пост в LinkedIn» та «Google Slides V3» (ще 3)\n" +
-  "- **Повернулось з Done:** 1 — «Футболка»\n" +
+  "- **Перейшло в Done:** 8 карток (9 переходів) — «Whitepaper PDF», «Футболка», «RDAS», «Пост в LinkedIn» та «Google Slides V3» (ще 3)\n" +
+  "- **Повернулось з Done:** 1 картка — «Футболка»\n" +
   "- **Створено:** 1 картка";
 const historyTurn = (id: string, input: Record<string, unknown>, commentary: string): unknown[] => [
   customUse(id, "trello_work_history", input), idleWith("requires_action", { event_ids: [id] }), msg(commentary), IDLE_OK,
@@ -1721,7 +1722,7 @@ test("#66 narrow question «По CL, які задачі було закрито
   // Agent v31 (released schema): the model can only narrow by scope and still asks for `detailed`.
   push(...historyTurn("h1", DETAILED_CL, "Одна картка поверталась із Done."));
   const released = await session.send("По CL, які задачі було закрито");
-  assert.ok(released.startsWith("Цього тижня по Cossack Labs:\n\n- **Перейшло в Done:** 8 — «Whitepaper PDF», «Футболка», «RDAS», «Пост в LinkedIn», «Google Slides V3», «Банер» та «Лендинг»\n"));
+  assert.ok(released.startsWith("Цього тижня по Cossack Labs:\n\n- **Перейшло в Done:** 7 карток (8 переходів) — «Whitepaper PDF», «Футболка», «RDAS», «Пост в LinkedIn», «Google Slides V3», «Банер» та «Лендинг»\n"));
   assert.doesNotMatch(released, EVENT_DUMP);
   assert.doesNotMatch(released, /Брендбук/, "another project's card never enters a scoped answer");
   // Next Agent version: `focus: completed` is exactly the requested slice.
@@ -1735,7 +1736,7 @@ test("#66 explicit detailed request: Daniel's own words open the chronology, for
   const { session, push } = await open(undefined, false, realHistoryRouter());
   push(...historyTurn("h1", DETAILED_CL, ""));
   const detailed = await session.send("Покажи детально всі переміщення по CL за тиждень");
-  assert.match(detailed, /^У Done перейшло 8 подій\. У Done перейшла «Whitepaper PDF» — пн 23\.03, 03:00, дедлайн пт 27\.03, 18:00\./);
+  assert.match(detailed, /^У Done перейшло 8 подій \(7 унікальних карток\)\. У Done перейшла «Whitepaper PDF» — пн 23\.03, 03:00, дедлайн пт 27\.03, 18:00\./);
   assert.match(detailed, /«Футболка» — пн 23\.03, 13:00 \(2 рази\)/);
   assert.match(detailed, /Створено «Нова картка CL» — пн 23\.03, 14:00\.$/);
   // The permission belongs to the turn that asked: the next ordinary question is compact again.
@@ -1744,5 +1745,107 @@ test("#66 explicit detailed request: Daniel's own words open the chronology, for
   // Without the model asking for `detailed`, Daniel's word alone changes nothing either.
   push(...historyTurn("h3", { window: { kind: "this_week" }, scope: { kind: "board" } }, ""));
   assert.equal(await session.send("детально"), BOARD_OVERVIEW);
+  session.close();
+});
+
+// ---------------------------------------------------------------------------------------------
+// #69 at the same boundary. A noisy week: twelve Done transitions over nine cards (two cards re-entered Done), six new
+// cards, and one planned outcome still open. What code can prove here: the facts Daniel and the model both get carry
+// the unique-card count with its unit, so «12» is never offered as cards; and a follow-up answered without a tool call
+// is delivered as the judgement alone — no second factual block. The judgement text itself is the scripted model's:
+// whether the real model writes it is not provable offline (docs/108 §6).
+// ---------------------------------------------------------------------------------------------
+
+const WEEK_DONE = ["Extract — упаковка", "Extract — whitepaper", "CL — hero", "CL — deck", "Іконки", "Стікери", "Мерч", "Банер", "Пост"];
+const weekCards = [
+  ...WEEK_DONE.map((name, index) => ({ id: `w_${index}`, name, labels: [{ name: index < 2 ? "Extract" : "Cossack Labs" }] })),
+  ...Array.from({ length: 6 }, (_unused, index) => ({ id: `n_${index}`, name: `Нова ${index + 1}`, labels: [{ name: "Cossack Labs" }] })),
+  { id: "rdas", name: "RDAS", labels: [{ name: "Cossack Labs" }] },
+];
+const reopen = (id: string, card: string, hour: number) => ({
+  id, type: "updateCard", date: `2026-03-24T${String(hour).padStart(2, "0")}:00:00Z`,
+  data: { card: { id: card }, listBefore: { name: "Done" }, listAfter: { name: "In progress" } },
+});
+const weekActions = [
+  ...WEEK_DONE.map((_name, index) => doneMove(`wd_${index}`, `w_${index}`, index + 1)),
+  // Two cards bounce: Done → In progress → Done. One of them bounces twice.
+  reopen("wb_1", "w_4", 1), { ...doneMove("wa_1", "w_4", 2), date: "2026-03-24T02:00:00Z" },
+  reopen("wb_2", "w_5", 3), { ...doneMove("wa_2", "w_5", 4), date: "2026-03-24T04:00:00Z" },
+  reopen("wb_3", "w_4", 5), { ...doneMove("wa_3", "w_4", 6), date: "2026-03-24T06:00:00Z" },
+  ...Array.from({ length: 6 }, (_unused, index) => ({ id: `wn_${index}`, type: "createCard", date: `2026-03-24T${String(index + 10).padStart(2, "0")}:00:00Z`, data: { card: { id: `n_${index}` } } })),
+  // The planned outcome that did not close: it only moved to Waiting.
+  { id: "rdas_wait", type: "updateCard", date: "2026-03-24T18:00:00Z", data: { card: { id: "rdas" }, listBefore: { name: "In progress" }, listAfter: { name: "Waiting" } } },
+];
+function weekRouter(): DjonikCustomToolExecutor {
+  const trello = new TrelloWorkHistoryClient({
+    apiKey: "k", readToken: "t",
+    fetch: async (url) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/boards")) return Response.json([{ id: "board_1", name: "Djonik" }]);
+      return Response.json(path.endsWith("/cards/all") ? weekCards : weekActions);
+    },
+  });
+  return createCustomToolRouter({ workHistory: (input, policy) => executeTrelloWorkHistory(input, trello, HISTORY_NOW, policy) });
+}
+const WEEK_OVERVIEW =
+  "Цього тижня на дошці:\n\n" +
+  "- **Перейшло в Done:** 9 карток (12 переходів) — «Extract — упаковка», «Extract — whitepaper», «CL — hero», «CL — deck» та «Іконки» (ще 4)\n" +
+  "- **Повернулось з Done:** 2 картки (3 повернення) — «Іконки» та «Стікери»\n" +
+  "- **Створено:** 6 карток\n" +
+  "- **Інші переміщення:** 1 картка";
+const WEEK_JUDGEMENT =
+  "Скоріше так. Обидві ставки тижня по Extract закрито і hero для Cossack Labs зданий, але RDAS, третя ставка, лише перейшов у Waiting. " +
+  "Тобто головне зрушили, але тиждень закритий не повністю.";
+const WEEK_NO_PLAN =
+  "Схоже, тиждень був активний і кілька важливих речей закрились, але без прийнятого плану тижня я не можу чесно сказати, чи закрито саме головне. " +
+  "Тож оцінка часткова.";
+
+test("#69 weekly success follow-up: the facts carry unique cards with their unit, and the answer is the judgement alone", async () => {
+  const { session, push, sendCalls } = await open(undefined, false, weekRouter());
+  push(...historyTurn("w1", { window: { kind: "this_week" }, scope: { kind: "board" } }, "⏸ З плану тижня відкритим лишився RDAS."));
+  const review = await session.send("Дай огляд тижня");
+  assert.equal(review, `${WEEK_OVERVIEW}${PM_SEPARATOR}⏸ З плану тижня відкритим лишився RDAS.`);
+  // The event count never stands as a card or task count — not in what Daniel sees, not in what the model is handed.
+  const TWELVE_AS_TASKS = /(?<!\d)12\s+(?:\p{L}+\s+)?(?:картк|карток|задач|завдан)/iu;
+  const [toolResult] = sentCustomResults(sendCalls);
+  const handed = JSON.parse(toolResult.content[0].text);
+  for (const text of [review, handed.answer_text]) {
+    assert.doesNotMatch(text, TWELVE_AS_TASKS);
+    assert.match(text, /9 карток \(12 переходів\)/);
+  }
+  assert.deepEqual(Object.keys(handed).sort(), ["answer_text", "coverage", "scope", "window"], "no parallel numeric structure reaches the model (#36)");
+
+  // The follow-up: the model answers from the delivered facts and the accepted plan, with no second history call.
+  push(msg(WEEK_JUDGEMENT), IDLE_OK);
+  const followUp = await session.send("тобто цей тиждень успішний?");
+  assert.equal(followUp, WEEK_JUDGEMENT, "the judgement alone: no relayed block, no separator");
+  assert.equal(sentCustomResults(sendCalls).length, 1, "one history call in the whole exchange");
+  assert.deepEqual(lintWeekJudgement(followUp, { doneEvents: 12, doneCards: 9, acceptedPlanAvailable: true }), []);
+  assert.ok(followUp.split(/(?<=[.!?])\s+/).length <= 3);
+  assert.doesNotMatch(followUp, /\d/, "this judgement needs no activity count at all");
+  session.close();
+});
+
+test("#69 weekly success follow-up without an accepted plan: a partial assessment passes, a volume verdict does not", async () => {
+  const { session, push } = await open(undefined, false, weekRouter());
+  push(...historyTurn("w1", { window: { kind: "this_week" }, scope: { kind: "board" } }, ""));
+  assert.equal(await session.send("Дай огляд тижня"), WEEK_OVERVIEW);
+  push(msg(WEEK_NO_PLAN), IDLE_OK);
+  const followUp = await session.send("цей тиждень успішний?");
+  assert.equal(followUp, WEEK_NO_PLAN);
+  const context = { doneEvents: 12, doneCards: 9, acceptedPlanAvailable: false };
+  assert.deepEqual(lintWeekJudgement(followUp, context), []);
+  // The production-shaped answer over the same facts: the event count as cards, volume as the verdict, no partial note.
+  const volume = "Так, тиждень продуктивний: 12 карток перейшли в Done, 6 створено, лише кілька повернулись.";
+  assert.deepEqual(lintWeekJudgement(volume, context).sort(), ["count_led", "event_count_as_tasks", "missing_partial_note"]);
+  session.close();
+});
+
+test("#69 leaves the #66 gate alone: a follow-up that does call history again still gets only the compact overview", async () => {
+  const { session, push } = await open(undefined, false, weekRouter());
+  push(...historyTurn("w1", { window: { kind: "this_week" }, scope: { kind: "board" }, response_format: "detailed" }, WEEK_JUDGEMENT));
+  const followUp = await session.send("тобто цей тиждень успішний?");
+  assert.equal(followUp, `${WEEK_OVERVIEW}${PM_SEPARATOR}${WEEK_JUDGEMENT}`);
+  assert.doesNotMatch(followUp, EVENT_DUMP);
   session.close();
 });

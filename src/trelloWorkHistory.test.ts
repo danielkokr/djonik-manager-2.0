@@ -79,8 +79,8 @@ test("#36 concise answer_text is the structured Variant B report: project headin
   assert.equal(
     answer.answer_text,
     "Цього тижня по Extract:\n\n" +
-      "- **Перейшло в Done:** 2 — «Анонімна картка»\n" +
-      "- **Повернулось з Done:** 1 — «Анонімна картка»",
+      "- **Перейшло в Done:** 1 картка (2 переходи) — «Анонімна картка»\n" +
+      "- **Повернулось з Done:** 1 картка — «Анонімна картка»",
   );
   assert.doesNotMatch(answer.answer_text, /card_extract|lastActivityAt|ти зробив|daniel/i);
 });
@@ -88,7 +88,7 @@ test("#36 concise answer_text is the structured Variant B report: project headin
 test("#36 Variant B board-scope heading says «на дошці», never a project name that was not requested", () => {
   const board = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: { kind: "board" } }, history, cards, { pagesRead: 1, truncated: false, oldestActionReached: true }, NOW);
   assert.ok(board.answer_text.startsWith("Цього тижня на дошці:\n"), board.answer_text);
-  assert.match(board.answer_text, /\*\*Перейшло в Done:\*\* 3 —/, "whole-board scope includes the other labelled card in the Done bullet's total");
+  assert.match(board.answer_text, /\*\*Перейшло в Done:\*\* 2 картки \(3 переходи\) —/, "whole-board scope includes the other labelled card; the re-entered card is one card, two transitions");
 });
 
 test("#36 detailed answer_text names every item and never emits an omitted-example sentence", () => {
@@ -101,8 +101,8 @@ test("#36 detailed answer_text names every item and never emits an omitted-examp
   );
   assert.equal(
     answer.answer_text,
-    "У Done перейшло 2 події. У Done перейшла «Анонімна картка» — пн 23.03, 13:00 (2 рази), дедлайн пт 27.03, 18:00. " +
-      "Із Done повернулося 1 подія. Із Done повернулася «Анонімна картка» — пн 23.03, 11:00, дедлайн пт 27.03, 18:00.",
+    "У Done перейшло 2 події (1 унікальна картка). У Done перейшла «Анонімна картка» — пн 23.03, 13:00 (2 рази), дедлайн пт 27.03, 18:00. " +
+      "Із Done повернулося 1 подія (1 унікальна картка). Із Done повернулася «Анонімна картка» — пн 23.03, 11:00, дедлайн пт 27.03, 18:00.",
   );
 });
 
@@ -114,7 +114,7 @@ test("#36 concise Variant B limits named completions to five, folds the omitted 
   assert.equal(
     answer.answer_text,
     "Цього тижня на дошці:\n\n" +
-      "- **Перейшло в Done:** 6 — «Картка 0», «Картка 1», «Картка 2», «Картка 3» та «Картка 4» (ще 1)\n\n" +
+      "- **Перейшло в Done:** 6 карток — «Картка 0», «Картка 1», «Картка 2», «Картка 3» та «Картка 4» (ще 1)\n\n" +
       "Історія за цей період може бути неповною: частину дій не вдалося прочитати повністю.",
   );
   assert.equal(formatKyivDateTime("2026-03-23T08:00:00Z"), "пн 23.03, 10:00");
@@ -125,7 +125,7 @@ test("#36 concise Variant B limits named completions to five, folds the omitted 
   assert.doesNotMatch(complete.answer_text, /може бути неповною|не всі|not all/i);
   assert.equal(
     complete.answer_text,
-    "Цього тижня на дошці:\n\n- **Перейшло в Done:** 6 — «Картка 0», «Картка 1», «Картка 2», «Картка 3» та «Картка 4» (ще 1)",
+    "Цього тижня на дошці:\n\n- **Перейшло в Done:** 6 карток — «Картка 0», «Картка 1», «Картка 2», «Картка 3» та «Картка 4» (ще 1)",
   );
 });
 
@@ -172,7 +172,7 @@ test("#36 fixture B (second live failure): reached-Done and created totals stay 
     NOW,
   );
 
-  assert.match(answer.answer_text, /\*\*Перейшло в Done:\*\* 4 —/, "reached-Done total is stated exactly, with no lower substitute total");
+  assert.match(answer.answer_text, /\*\*Перейшло в Done:\*\* 4 картки —/, "reached-Done total is stated exactly, with no lower substitute total");
   assert.match(answer.answer_text, /\*\*Створено:\*\* 6 карток/, "created total is stated exactly, not the five internally shown, and never individually named");
   assert.match(answer.answer_text, /«Завершення 1», «Завершення 2», «Завершення 3» та «Завершення 4»/, "all four reached-Done examples are named because the concise limit (5) is not exceeded");
   assert.doesNotMatch(answer.answer_text, /Нова картка/, "created cards are never individually named in a concise answer");
@@ -233,8 +233,8 @@ test("#36 exact third live diagnostic fixture (docs/27 §12): every requirement 
   );
 
   // 1-4: every authoritative total is stated correctly.
-  assert.match(answer.answer_text, /\*\*Перейшло в Done:\*\* 4 —/, "4 reached-Done events");
-  assert.match(answer.answer_text, /\*\*Повернулось з Done:\*\* 2 —/, "2 returned-from-Done events");
+  assert.match(answer.answer_text, /\*\*Перейшло в Done:\*\* 4 картки —/, "4 reached-Done events");
+  assert.match(answer.answer_text, /\*\*Повернулось з Done:\*\* 2 картки —/, "2 returned-from-Done events");
   assert.match(answer.answer_text, /\*\*Створено:\*\* 6 карток/, "6 created cards");
   assert.match(answer.answer_text, /\*\*Інші переміщення:\*\* 5 карток/, "5 moved cards");
   // 5: the moved card "Міні-парфуми адаптація" never appears anywhere, so it cannot be misdescribed as created.
@@ -290,8 +290,8 @@ test("#36 Variant B: docs/27-shaped last-week Extract fixture renders the exact 
   assert.equal(
     answer.answer_text,
     "Минулого тижня по Extract:\n\n" +
-      "- **Перейшло в Done:** 4 — «Кохаю пінка», «Білі аромати 3D відео», «Автоматизація рендеру» та «Коментарі по пінкам»\n" +
-      "- **Повернулось з Done:** 2 — «Білі аромати 3D відео» та «Коментарі по пінкам»\n" +
+      "- **Перейшло в Done:** 4 картки — «Кохаю пінка», «Білі аромати 3D відео», «Автоматизація рендеру» та «Коментарі по пінкам»\n" +
+      "- **Повернулось з Done:** 2 картки — «Білі аромати 3D відео» та «Коментарі по пінкам»\n" +
       "- **Створено:** 6 карток\n" +
       "- **Інші переміщення:** 5 карток",
   );
@@ -444,8 +444,8 @@ test("#66 default weekly overview stays the compact Variant B: a board names fiv
   assert.equal(
     board,
     "Цього тижня на дошці:\n\n" +
-      "- **Перейшло в Done:** 13 — «Whitepaper PDF», «Футболка», «RDAS», «Пост в LinkedIn» та «Google Slides V3» (ще 7)\n" +
-      "- **Повернулось з Done:** 1 — «Футболка»\n" +
+      "- **Перейшло в Done:** 12 карток (13 переходів) — «Whitepaper PDF», «Футболка», «RDAS», «Пост в LinkedIn» та «Google Slides V3» (ще 7)\n" +
+      "- **Повернулось з Done:** 1 картка — «Футболка»\n" +
       "- **Створено:** 1 картка\n" +
       "- **Інші переміщення:** 1 картка",
   );
@@ -466,7 +466,7 @@ test("#66 `detailed` without Daniel's own request is withheld: the compact answe
 
   const delivered = buildWorkHistoryAnswer(input, clActions, clCards, FULL, NOW, { detailRequested: true });
   assert.equal(delivered.detail_note, undefined);
-  assert.match(delivered.answer_text, /^У Done перейшло 12 подій\. У Done перейшла «Whitepaper PDF» — пн 23\.03, 03:00, дедлайн пт 27\.03, 18:00\./);
+  assert.match(delivered.answer_text, /^У Done перейшло 12 подій \(11 унікальних карток\)\. У Done перейшла «Whitepaper PDF» — пн 23\.03, 03:00, дедлайн пт 27\.03, 18:00\./);
   assert.match(delivered.answer_text, /«Футболка» — пн 23\.03, 16:00 \(2 рази\)/);
   assert.match(delivered.answer_text, /Створено «Нова картка CL» — пн 23\.03, 17:00\./);
   // A focused detailed request narrows the chronology to that kind of change.
@@ -506,7 +506,7 @@ test("#66 the executor is closed by default and accepts the released input shape
   const released = { window: { kind: "this_week" }, scope: CL, response_format: "detailed" };
   assert.doesNotMatch((await run(released)).answer_text, CHRONOLOGY, "no policy → no chronology");
   assert.ok((await run(released)).detail_note);
-  assert.match((await run(released, { detailRequested: true })).answer_text, /^У Done перейшло 12 подій\./);
+  assert.match((await run(released, { detailRequested: true })).answer_text, /^У Done перейшло 12 подій \(11 унікальних карток\)\./);
   assert.match((await run({ window: { kind: "this_week" }, scope: CL, focus: "completed" })).answer_text, /^Cossack Labs — закрито цього тижня:\n• Whitepaper PDF\n/);
   for (const focus of ["everything", "toString", 5, null]) {
     const bad = await executeTrelloWorkHistory({ window: { kind: "this_week" }, scope: CL, focus }, client, NOW);
@@ -533,4 +533,71 @@ test("#66 the next tool definition only adds `focus`; the released definition (A
   assert.equal(TRELLO_WORK_HISTORY_TOOL_NEXT.name, "trello_work_history");
   assert.match(TRELLO_WORK_HISTORY_TOOL_NEXT.description, /only when Daniel's own message asks for detail/);
   assert.match(TRELLO_WORK_HISTORY_TOOL_NEXT.description, /never request it to gather material/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// #69: Done-transition events, unique cards that entered Done, and completed outcomes are three different things.
+// Production (2026-10-09): the block said «У Done перейшло 24 події» and the conclusion said «24 картки перейшли в
+// Done». The review stated no unique-card count anywhere, and the overview bullet was a bare number beside card names.
+// ---------------------------------------------------------------------------------------------
+
+const repeatCards: TrelloHistoryCard[] = [
+  { id: "twice", name: "RDAS", labels: [{ name: "Cossack Labs" }] },
+  { id: "once", name: "Whitepaper PDF", labels: [{ name: "Cossack Labs" }] },
+];
+const repeatActions: TrelloAction[] = [
+  toDone("r1", "twice", 8),
+  action("r2", "2026-03-23T09:00:00Z", "updateCard", { card: { id: "twice" }, listBefore: { name: "Done" }, listAfter: { name: "In progress" } }),
+  toDone("r3", "twice", 10),
+  toDone("r4", "once", 11),
+];
+/** The relabel itself: the event count given the unit of a card or a task. */
+const THREE_AS_TASKS = /(?<!\d)3\s+(?:\p{L}+\s+)?(?:картк|карток|задач|завдан)/iu;
+
+test("#69 repeated Done: three transitions, two unique cards — code owns both numbers and keeps them apart", () => {
+  const categories = buildWorkHistoryCategories({ window: { kind: "this_week" }, scope: { kind: "board" } }, repeatActions, repeatCards, NOW);
+  assert.equal(categories.reached_done?.total, 3, "event occurrences");
+  assert.equal(categories.reached_done?.total_kind, "event_occurrences");
+  assert.equal(categories.reached_done?.cards, 2, "unique cards");
+  assert.equal(categories.returned_from_done?.total, 1);
+  assert.equal(categories.returned_from_done?.cards, 1);
+});
+
+test("#69 repeated Done in every user-facing shape: the unit is always written, and no wording says «3 картки/задачі»", () => {
+  const board = { kind: "board" } as const;
+  const overview = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: board }, repeatActions, repeatCards, FULL, NOW).answer_text;
+  assert.equal(
+    overview,
+    "Цього тижня на дошці:\n\n" +
+      "- **Перейшло в Done:** 2 картки (3 переходи) — «RDAS» та «Whitepaper PDF»\n" +
+      "- **Повернулось з Done:** 1 картка — «RDAS»",
+  );
+  const completed = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: board, focus: "completed" }, repeatActions, repeatCards, FULL, NOW).answer_text;
+  assert.equal(completed, "Дошка — закрито цього тижня:\n• RDAS\n• Whitepaper PDF\n2 унікальні картки. Одна картка заходила в Done двічі.");
+  const detailed = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: board, response_format: "detailed" }, repeatActions, repeatCards, FULL, NOW, { detailRequested: true }).answer_text;
+  assert.match(detailed, /^У Done перейшло 3 події \(2 унікальні картки\)\. /);
+  assert.match(detailed, /Із Done повернулося 1 подія \(1 унікальна картка\)\./);
+  for (const text of [overview, completed, detailed]) {
+    assert.doesNotMatch(text, THREE_AS_TASKS, text);
+    assert.match(text, /2 (?:унікальні )?картки/, "the unique-card count is stated by code, never left to the reader");
+  }
+  // The overview and the narrow slice now agree on the card count (docs/104 §6 recorded 12 events against 11 cards).
+  assert.equal(/\*\*Перейшло в Done:\*\* (\d+) картки/.exec(overview)?.[1], /(\d+) унікальні картки/.exec(completed)?.[1]);
+});
+
+test("#69 no bare count survives in an overview: every bullet number has a unit, and «(ще N)» counts cards", () => {
+  const board = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: { kind: "board" } }, clActions, clCards, FULL, NOW).answer_text;
+  for (const bullet of board.split("\n").filter((line) => line.startsWith("- "))) {
+    assert.match(bullet, /^- \*\*[^*]+:\*\* \d+ (?:картка|картки|карток)(?: \(\d+ (?:перехід|переходи|переходів|повернення|повернень)\))?(?: — |$)/, bullet);
+  }
+  // 12 unique cards, 5 named → 7 more cards; the 13th transition is the same card again, not an eighth omitted one.
+  assert.match(board, /12 карток \(13 переходів\) — .* \(ще 7\)$/m);
+  // Without a repeat the event count would only restate the card count, so it is not printed.
+  const plain = buildWorkHistoryAnswer({ window: { kind: "this_week" }, scope: { kind: "project", label: "Extract" } }, clActions, clCards, FULL, NOW).answer_text;
+  assert.equal(plain, "Цього тижня по Extract:\n\n- **Перейшло в Done:** 1 картка — «Чужа картка»");
+});
+
+test("#69 the next tool definition says what the two counts are and that neither is completed tasks", () => {
+  assert.match(TRELLO_WORK_HISTORY_TOOL_NEXT.description, /«N карток» is unique cards and «переходів»\/«подій» is Done transitions; neither counts completed tasks or achieved outcomes/);
+  assert.doesNotMatch(TRELLO_WORK_HISTORY_TOOL.description, /переходів/, "the released definition (Agent v26–v31) stays byte-identical");
 });

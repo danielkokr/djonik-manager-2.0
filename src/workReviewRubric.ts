@@ -214,3 +214,62 @@ export function gradeEvidenceAcquisition(input: EvidenceAcquisitionInput): { ver
   }
   return { verdict: "PASS", reason: `discovery attempted (${input.discoveryOutcome})` };
 }
+
+// ---- #69: week-success judgement ------------------------------------------------------------------
+//
+// Evaluation aid only, like everything above: nothing at runtime imports it and it never filters a reply. It reads an
+// answer to «тиждень успішний?» for the mechanically detectable part of the #69 contract, so a later authorized
+// behavioural run and the offline regressions judge the same things. An empty result does not show good PM judgement.
+
+export interface WeekJudgementContext {
+  /** Done-transition events in the review the answer rests on. */
+  readonly doneEvents: number;
+  /** Unique cards that entered Done in the same review. */
+  readonly doneCards: number;
+  /** Whether an accepted plan for this week was available to the turn. */
+  readonly acceptedPlanAvailable: boolean;
+}
+
+export type WeekJudgementFlag =
+  /** The event count is stated as that many cards or tasks. */
+  | "event_count_as_tasks"
+  /** The verdict leads with an activity count, or more than one count carries it. */
+  | "count_led"
+  | "score"
+  /** More than three sentences. */
+  | "too_long"
+  /** No accepted plan, and the answer does not say the assessment is partial. */
+  | "missing_partial_note"
+  /** The factual review block is written out again. */
+  | "history_repeated";
+
+const TASK_NOUN = /^(?:картк|карток|задач|завдан|таск)/iu;
+const EVENT_NOUN = /^(?:перех|поді|повернен|раз)/iu;
+const ACTIVITY_COUNT = /(?<!\d)\d+\s+(?:\p{L}+\s+){0,2}?(?:картк|карток|задач|завдан|таск|поді|перех|повернен|створен|переміщен)\p{L}*/giu;
+const SCORE = /\d+\s*%|(?<!\d)\d+\s*\/\s*(?:10|100)(?!\d)|\d+\s*бал|відсотк/iu;
+const PARTIAL_NOTE = /частков|неповн|без\s+(?:прийнятого\s+)?плану|не\s+можу\s+(?:чесно\s+)?сказати/iu;
+const REVIEW_BLOCK = /\*\*Перейшло в Done:\*\*|PM-висновок:|^У Done перейшло/mu;
+
+/** The unit the answer gives a number: the first unit noun among the three words after it. */
+function unitAfter(answer: string, value: number): "tasks" | "events" | null {
+  for (const match of answer.matchAll(new RegExp(String.raw`(?<!\d)${value}(?!\d)((?:\s+\p{L}+){1,3})`, "giu"))) {
+    for (const word of match[1].trim().split(/\s+/)) {
+      if (EVENT_NOUN.test(word)) break;
+      if (TASK_NOUN.test(word)) return "tasks";
+    }
+  }
+  return null;
+}
+
+export function lintWeekJudgement(answer: string, context: WeekJudgementContext): WeekJudgementFlag[] {
+  const flags: WeekJudgementFlag[] = [];
+  const sentences = answer.split(/(?<=[.!?…])\s+/).map((part) => part.trim()).filter(Boolean);
+  if (context.doneEvents !== context.doneCards && unitAfter(answer, context.doneEvents) === "tasks") flags.push("event_count_as_tasks");
+  const counts = [...answer.matchAll(ACTIVITY_COUNT)];
+  if (counts.length > 1 || [...(sentences[0] ?? "").matchAll(ACTIVITY_COUNT)].length > 0) flags.push("count_led");
+  if (SCORE.test(answer)) flags.push("score");
+  if (sentences.length > 3) flags.push("too_long");
+  if (!context.acceptedPlanAvailable && !PARTIAL_NOTE.test(answer)) flags.push("missing_partial_note");
+  if (REVIEW_BLOCK.test(answer)) flags.push("history_repeated");
+  return flags;
+}

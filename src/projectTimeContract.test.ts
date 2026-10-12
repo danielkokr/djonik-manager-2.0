@@ -100,7 +100,7 @@ test("work-review routes time questions to the tool; its accepted #36 contract i
   assert.match(skill, /How much time or how many hours went into a project is not a review: call `trello_project_time`/);
   assert.match(skill, /`unavailable` included — never use this tool's moves to estimate effort\./);
   assert.match(skill, /Do not make Project Health judgements, productivity scores, effort\/time claims, trend analysis/, "#36 line kept");
-  assert.ok(Buffer.byteLength(skill, "utf8") <= 3 * 1024);
+  assert.ok(Buffer.byteLength(skill, "utf8") <= 4 * 1024, "#69 raised the cap from 3 KB for the week-judgement paragraph");
   assert.deepEqual(Object.keys(ISSUE_62_SKILL_EDITS), ["work-review"], "#62 edits exactly one Skill");
   assert.equal(createHash("sha256").update(r30SkillSource("work-review"), "utf8").digest("hex").slice(0, 8), "c079d285", "minus the edit = the pinned bytes");
   // The coordinator prompt is not touched by #62 (#59's paragraph already covers name → label; the size budget is spent).
