@@ -14,7 +14,9 @@ import { connectToDjonik, DJONIK_MEMORY_INSTRUCTIONS } from "./djonikClient.js";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (...path: string[]) => readFileSync(join(repoRoot, ...path), "utf8").replace(/\r\n?/g, "\n");
 const readSkill = (name: string) => read(".claude", "skills", name, "SKILL.md");
-const coordinatorPrompt = () => read("managed-agents", "djonik.md");
+/** The coordinator prompt: the file's body. Its frontmatter is the tool surface — since Agent v32 (#70) it declares the
+ *  `reminder` tool, which is a capability, not a promise in the prompt. */
+const coordinatorPrompt = () => read("managed-agents", "djonik.md").replace(/\r\n/g, "\n").replace(/^---\n[\s\S]*?\n---\n/, "");
 
 const M = DJONIK_MEMORY_INSTRUCTIONS;
 

@@ -184,10 +184,10 @@ export const TRELLO_WORK_HISTORY_TOOL = {
 };
 
 /**
- * #66 source intent for the next Agent version; NOT what any reviewed release exposes. Agent v26–v31 carry
- * `TRELLO_WORK_HISTORY_TOOL` above byte for byte (attestation compares against it), so that definition stays frozen
- * until a release-construction issue ships this one together with the #66 `work-review` Skill edit. It adds the
- * explicit `focus` and says what `detailed` is for. The executor already accepts both input shapes.
+ * Revision `v2` of the same tool (#66 + #69), carried from r32 on (`customToolRevisions`, #70). Agent v26–v31 carry
+ * `TRELLO_WORK_HISTORY_TOOL` above byte for byte and their attestation still compares against it, so that definition
+ * stays frozen. This one adds the explicit `focus`, says what `detailed` is for and what the two counts mean; it
+ * ships together with the #66/#69 `work-review` Skill. The executor accepts both input shapes.
  */
 export const TRELLO_WORK_HISTORY_TOOL_NEXT = {
   type: "custom" as const,

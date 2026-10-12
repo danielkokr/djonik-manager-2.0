@@ -1,8 +1,15 @@
 import { confirmationPolicyProblems, RELEASES, resolveCandidateSkills, type CandidateResolution, type DjonikRelease, type DjonikReleaseCandidate } from "./release.js";
-import { sha256, SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
+import { customToolDefinition, sha256 } from "./releaseAttestation.js";
 
 /** What an `agents.update` body is derived from: a release's Skills and tool surface (never its Agent version). */
-type ReleaseUpdateSource = Pick<DjonikRelease, "skills" | "builtInTools" | "customTools" | "mcpToolsets" | "confirmationRequired">;
+type ReleaseUpdateSource = Pick<DjonikRelease, "skills" | "builtInTools" | "customTools" | "customToolRevisions" | "mcpToolsets" | "confirmationRequired">;
+
+/** The definition `release` carries for one of its custom tools (#70); a body is never built around a missing one. */
+function definitionFor(release: ReleaseUpdateSource, name: string) {
+  const definition = customToolDefinition(release, name);
+  if (!definition) throw new Error(`No reviewed definition of custom tool ${name} for this release.`);
+  return definition;
+}
 
 const sameSpecialist = (a: DjonikRelease["specialist"], b: DjonikRelease["specialist"]) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -65,8 +72,8 @@ export function buildAgentUpdateBody(release: ReleaseUpdateSource, fromVersion: 
       ...release.customTools.map((name) => ({
         type: "custom",
         name,
-        description: SUPPORTED_CUSTOM_TOOLS[name].description,
-        input_schema: SUPPORTED_CUSTOM_TOOLS[name].input_schema,
+        description: definitionFor(release, name).description,
+        input_schema: definitionFor(release, name).input_schema,
       })),
       ...release.mcpToolsets.map((toolset) => {
         const gated = askMcp(toolset.server);

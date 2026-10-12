@@ -4,8 +4,8 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28_CANDIDATE, RELEASE_R29, RELEASE_R30, RELEASE_R30_CANDIDATE, RELEASE_R31, RELEASE_R31_CANDIDATE, RELEASES, RETIRED_BY_R28, SERVING_RELEASE, type DjonikRelease } from "./release.js";
-import { SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
+import { BUILT_IN_TOOL_NAMES, RELEASE_R25, RELEASE_R26, RELEASE_R27, RELEASE_R28_CANDIDATE, RELEASE_R29, RELEASE_R30, RELEASE_R30_CANDIDATE, RELEASE_R31, RELEASE_R31_CANDIDATE, RELEASE_R32, RELEASE_R32_CANDIDATE, RELEASES, RETIRED_BY_R28, SERVING_RELEASE, type DjonikRelease } from "./release.js";
+import { SUPPORTED_CUSTOM_TOOLS, customToolDefinition } from "./releaseAttestation.js";
 import { buildAgentUpdateBody } from "./releasePlan.js";
 import { PROJECT_HEALTH_SPECIALIST_AGENT_ID } from "./djonikClient.js";
 import { ISSUE_44_PROMPT_EDITS, ISSUE_59_PROMPT_EDITS, PRE_41_SYSTEM_PROMPT, R28_SYSTEM_PROMPT, R29_SYSTEM_PROMPT, R30_SYSTEM_PROMPT, SOURCE_SYSTEM_PROMPT, r30SkillSource } from "./releaseFixtures.test-helpers.js";
@@ -89,14 +89,16 @@ const surfaceOf = (release: DjonikRelease) => {
   return { skills, tools: (tools as Array<Record<string, unknown>>).map(omitEmpty) };
 };
 
-test("the serving release r31 (Agent v31) equals the declarative coordinator source managed-agents/djonik.md — body and frontmatter", () => {
-  // #64 created Agent v31 from this file's body and the real r31 pins (docs/102); #65 (docs/103) made it the serving release,
-  // so declaration == SERVING_RELEASE == RELEASE_R31 again. The body is the #59 prompt; reverting exactly
-  // ISSUE_59_PROMPT_EDITS gives the r30 (rollback) prompt, and then ISSUE_44_PROMPT_EDITS the r29 prompt.
+test("the declarative coordinator source managed-agents/djonik.md equals r32 (Agent v32) — body and frontmatter; r31 stays served", () => {
+  // #70 created Agent v32 from the real r32 pins WITHOUT a cutover (docs/110): the declaration is r32, while
+  // SERVING_RELEASE stays r31 (the transition test below pins the difference). The body is unchanged since r31 (the #59
+  // prompt); reverting exactly ISSUE_59_PROMPT_EDITS gives the r30 prompt, and then ISSUE_44_PROMPT_EDITS the r29 prompt.
   assert.equal(SERVING_RELEASE, RELEASE_R31);
-  assert.equal(RELEASES.r31, RELEASE_R31);
-  const release = SERVING_RELEASE;
-  assert.equal(release.systemSha256, sha(SOURCE_SYSTEM_PROMPT), "r31 prompt SHA = djonik.md body");
+  assert.equal(RELEASES.r32, RELEASE_R32);
+  const release = RELEASE_R32;
+  assert.equal(release.systemSha256, sha(SOURCE_SYSTEM_PROMPT), "r32 prompt SHA = djonik.md body");
+  assert.equal(RELEASE_R31.systemSha256, release.systemSha256, "r32 keeps the r31 prompt byte for byte");
+  assert.equal(RELEASE_R32_CANDIDATE.systemSha256, release.systemSha256);
   assert.equal(RELEASE_R31_CANDIDATE.systemSha256, release.systemSha256, "the reviewed candidate prompt is the synced one");
   assert.equal(RELEASE_R30.systemSha256, sha(R30_SYSTEM_PROMPT), "r30 prompt = djonik.md body minus the #59 edit");
   assert.equal(ISSUE_59_PROMPT_EDITS.length, 1);
@@ -107,10 +109,10 @@ test("the serving release r31 (Agent v31) equals the declarative coordinator sou
   assert.deepEqual(declared.model, { id: release.model.id, effort: release.model.effort, speed: release.model.speed });
   assert.equal(release.specialist, null);
   assert.ok("multiagent" in declared, "the cleared roster is stated, not omitted");
-  assert.equal(declared.multiagent, null, "no roster: Agent v31 reads back `multiagent: null`");
+  assert.equal(declared.multiagent, null, "no roster: Agent v32 reads back `multiagent: null`");
   assert.deepEqual(declared.mcp_servers, release.mcpServers.map((server) => ({ type: "url", name: server.name, url: server.url })));
   // Skills (with explicit pins) and every tool — enabled flags AND permission policies — exactly as the
-  // generated update body of r31 states them.
+  // generated update body of r32 states them.
   assert.deepEqual(declaredSurface, surfaceOf(release));
   const declaredIds = (declared.skills as Array<Record<string, string>>).map((skill) => skill.skill_id);
   for (const retired of RETIRED_BY_R28) {
@@ -118,28 +120,49 @@ test("the serving release r31 (Agent v31) equals the declarative coordinator sou
   }
 });
 
-test("the r30 rollback differs from the served declaration (r31) by exactly the reviewed r31 transition (#59 + #62)", () => {
-  // #65: r31 is served and declared. Rolling back to r30 (docs/52 §6, docs/103) reverts exactly #59 (prompt +
-  // task-management) and #62 (work-review + the read-only trello_project_time tool) — nothing else.
+test("the served r31 differs from the declaration (r32) by exactly the reviewed r32 transition (#66 + #67 + #68 + #69)", () => {
+  // Until a separate cutover, r31 is served and the declaration is r32. Their difference must be exactly three Skill pins
+  // (work-review, pm-rhythm, planning-and-focus), the v2 definition of trello_work_history and the added reminder tool.
+  assert.equal(SERVING_RELEASE, RELEASE_R31);
+  const served = surfaceOf(RELEASE_R31);
+  assert.notDeepEqual(served, declaredSurface);
+  assert.equal(RELEASE_R31.systemSha256, sha(SOURCE_SYSTEM_PROMPT), "prompt: unchanged");
+  assert.deepEqual(declared.mcp_servers, RELEASE_R31.mcpServers.map((server) => ({ type: "url", ...server })), "MCP servers unchanged");
+  const pins = (skills: unknown) => (skills as Array<Record<string, string>>).map((skill) => `${skill.skill_id}@${skill.version}`);
+  assert.deepEqual((served.skills as Array<Record<string, string>>).map((skill) => skill.skill_id), (declaredSurface.skills as Array<Record<string, string>>).map((skill) => skill.skill_id), "same five Skill identities, same order");
+  const moved = RELEASE_R31.skills.filter((_skill, index) => pins(served.skills)[index] !== pins(declaredSurface.skills)[index]).map((skill) => skill.name);
+  assert.deepEqual(moved.sort(), ["planning-and-focus", "pm-rhythm", "work-review"]);
+  const byKey = (tools: unknown) => Object.fromEntries((tools as Array<Record<string, any>>).map((tool) => [tool.name ?? tool.mcp_server_name ?? tool.type, tool]));
+  const [before, after] = [byKey(served.tools), byKey(declaredSurface.tools)];
+  const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
+  assert.deepEqual(changed.sort(), ["reminder", "trello_work_history"], "built-in, Trello toolset/policies and the other three custom tools unchanged");
+  assert.equal(before.reminder, undefined, "the served r31 has no reminder");
+  assert.deepEqual(after.reminder, { type: "custom", name: "reminder", ...customToolDefinition(RELEASE_R32, "reminder") });
+  assert.equal(after.trello_work_history.description, customToolDefinition(RELEASE_R32, "trello_work_history")!.description);
+  assert.equal(before.trello_work_history.description, SUPPORTED_CUSTOM_TOOLS.trello_work_history.description, "r31 keeps the original definition");
+});
+
+test("the r30 rollback differs from the served r31 by exactly the reviewed r31 transition (#59 + #62)", () => {
+  // #65: r31 is served (the declaration moved to r32 in #70). Rolling back to r30 (docs/52 §6, docs/103) reverts exactly
+  // #59 (prompt + task-management) and #62 (work-review + the read-only trello_project_time tool) — nothing else.
   assert.equal(SERVING_RELEASE, RELEASE_R31);
   assert.equal(RELEASES.r30, RELEASE_R30, "r30 stays a reviewed rollback release");
-  assert.deepEqual(surfaceOf(SERVING_RELEASE), declaredSurface, "served == declared");
+  const servedSurface = surfaceOf(RELEASE_R31);
   const rollback = surfaceOf(RELEASE_R30);
-  assert.notDeepEqual(rollback, declaredSurface);
-  assert.notEqual(RELEASE_R30.systemSha256, sha(SOURCE_SYSTEM_PROMPT), "prompt: #59");
+  assert.notDeepEqual(rollback, servedSurface);
+  assert.notEqual(RELEASE_R30.systemSha256, RELEASE_R31.systemSha256, "prompt: #59");
   assert.equal(RELEASE_R30.specialist, null);
-  assert.equal(declared.multiagent, null, "roster: none → none");
-  assert.deepEqual(declared.mcp_servers, RELEASE_R30.mcpServers.map((server) => ({ type: "url", ...server })), "MCP servers unchanged");
+  assert.deepEqual(RELEASE_R31.mcpServers, RELEASE_R30.mcpServers, "MCP servers unchanged");
   const pins = (skills: unknown) => (skills as Array<Record<string, string>>).map((skill) => `${skill.skill_id}@${skill.version}`);
-  assert.deepEqual((rollback.skills as Array<Record<string, string>>).map((skill) => skill.skill_id), (declaredSurface.skills as Array<Record<string, string>>).map((skill) => skill.skill_id), "same five Skill identities, same order");
-  const moved = RELEASE_R30.skills.filter((_skill, index) => pins(rollback.skills)[index] !== pins(declaredSurface.skills)[index]).map((skill) => skill.name);
+  assert.deepEqual((rollback.skills as Array<Record<string, string>>).map((skill) => skill.skill_id), (servedSurface.skills as Array<Record<string, string>>).map((skill) => skill.skill_id), "same five Skill identities, same order");
+  const moved = RELEASE_R30.skills.filter((_skill, index) => pins(rollback.skills)[index] !== pins(servedSurface.skills)[index]).map((skill) => skill.name);
   assert.deepEqual(moved.sort(), ["task-management", "work-review"]);
   const byKey = (tools: unknown) => Object.fromEntries((tools as Array<Record<string, any>>).map((tool) => [tool.name ?? tool.mcp_server_name ?? tool.type, tool]));
-  const [before, after] = [byKey(rollback.tools), byKey(declaredSurface.tools)];
+  const [before, after] = [byKey(rollback.tools), byKey(servedSurface.tools)];
   const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
   assert.deepEqual(changed, ["trello_project_time"], "built-in, Trello toolset/policies and the three r30 custom tools unchanged");
   assert.equal(before.trello_project_time, undefined);
-  assert.deepEqual(after.trello_project_time, SUPPORTED_CUSTOM_TOOLS.trello_project_time, "the executable #62 definition, not a copy");
+  assert.deepEqual(after.trello_project_time, { type: "custom", name: "trello_project_time", description: SUPPORTED_CUSTOM_TOOLS.trello_project_time.description, input_schema: SUPPORTED_CUSTOM_TOOLS.trello_project_time.input_schema }, "the executable #62 definition, not a copy");
 });
 
 test("r29 differs from r30 by exactly the reviewed r30 transition", () => {
@@ -225,7 +248,10 @@ test("Skills and memory still have the file tools they need in every release", (
 
 test("every custom tool a release exposes is one this application executes", () => {
   for (const release of Object.values(RELEASES)) {
-    for (const name of release.customTools) assert.ok(SUPPORTED_CUSTOM_TOOLS[name], `${release.id}: ${name}`);
+    for (const name of release.customTools) {
+      assert.ok(SUPPORTED_CUSTOM_TOOLS[name], `${release.id}: ${name}`);
+      assert.ok(customToolDefinition(release, name), `${release.id}: ${name} resolves to a reviewed definition`);
+    }
   }
 });
 
@@ -233,7 +259,7 @@ test("the specialist pin matches the reviewed specialist source and the client's
   // #44: every reviewed release r25–r29 still pins specialist v4 (r29 is r30's rollback); r30 (#55) has none.
   assert.equal(RELEASE_R30.specialist, null);
   assert.equal(RELEASES.r31.specialist, null, "r31 (#64) keeps no specialist");
-  assert.deepEqual(Object.values(RELEASES).filter((entry) => entry.specialist === null).map((entry) => entry.id), ["r30", "r31"]);
+  assert.deepEqual(Object.values(RELEASES).filter((entry) => entry.specialist === null).map((entry) => entry.id), ["r30", "r31", "r32"]);
   for (const release of Object.values(RELEASES).filter((entry) => entry.specialist !== null)) {
     assert.ok(release.specialist, `${release.id} keeps its specialist`);
     assert.equal(release.specialist.id, PROJECT_HEALTH_SPECIALIST_AGENT_ID);

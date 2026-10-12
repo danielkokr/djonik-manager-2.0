@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { BUILT_IN_TOOL_NAMES, type DjonikRelease } from "./release.js";
 import { REMINDER_TOOL } from "./reminderTool.js";
-import { TRELLO_WORK_HISTORY_TOOL } from "./trelloWorkHistory.js";
+import { TRELLO_WORK_HISTORY_TOOL, TRELLO_WORK_HISTORY_TOOL_NEXT } from "./trelloWorkHistory.js";
 import { TRELLO_BOARD_SNAPSHOT_TOOL } from "./trelloBoardSnapshot.js";
 import { FOCUS_BUDGET_TOOL } from "./focusBudgetTool.js";
 import { TRELLO_PROJECT_TIME_TOOL } from "./projectTimeTool.js";
@@ -20,10 +20,15 @@ import { TRELLO_PROJECT_TIME_TOOL } from "./projectTimeTool.js";
  * text or credential.
  */
 
-/** Custom tools this application can execute. An Agent exposing any other custom tool would stall on
- *  `requires_action` (the client settles only these), so attestation requires an exact match. `reminder` (#54) is
- *  executable by this revision; no reviewed release exposes it yet (a separately authorized release adds it). */
-export const SUPPORTED_CUSTOM_TOOLS: Readonly<Record<string, { description: string; input_schema: unknown }>> = {
+export interface CustomToolDefinition {
+  description: string;
+  input_schema: unknown;
+}
+
+/** Custom tools this application can execute, each at its ORIGINAL definition. An Agent exposing any other custom tool
+ *  would stall on `requires_action` (the client settles only these), so attestation requires an exact match.
+ *  `reminder` (#54) is exposed from r32 on (#68). */
+export const SUPPORTED_CUSTOM_TOOLS: Readonly<Record<string, CustomToolDefinition>> = {
   [TRELLO_WORK_HISTORY_TOOL.name]: TRELLO_WORK_HISTORY_TOOL,
   [TRELLO_BOARD_SNAPSHOT_TOOL.name]: TRELLO_BOARD_SNAPSHOT_TOOL,
   [REMINDER_TOOL.name]: REMINDER_TOOL,
@@ -31,6 +36,24 @@ export const SUPPORTED_CUSTOM_TOOLS: Readonly<Record<string, { description: stri
   // #62: read-only; executable by this revision, exposed only by the unresolved r31 candidate.
   [TRELLO_PROJECT_TIME_TOOL.name]: TRELLO_PROJECT_TIME_TOOL,
 };
+
+/**
+ * Later reviewed revisions of an existing tool's definition, by tool name and revision id (#70). The executor accepts
+ * every revision's input; what differs is the description and schema an Agent version stores. A release selects one
+ * through `customToolRevisions`; nothing here changes what an older release expects.
+ *  - `trello_work_history` `v2` (#66 + #69, first exposed by r32): explicit `focus`, what `detailed` is for, and
+ *    the meaning of «N карток» / «переходів».
+ */
+export const CUSTOM_TOOL_REVISIONS: Readonly<Record<string, Readonly<Record<string, CustomToolDefinition>>>> = {
+  [TRELLO_WORK_HISTORY_TOOL.name]: { v2: TRELLO_WORK_HISTORY_TOOL_NEXT },
+};
+
+/** The exact definition of `name` that `release` carries: its named revision, else the original. Undefined when the
+ *  application does not execute the tool or does not know the revision — callers fail closed. */
+export function customToolDefinition(release: Pick<DjonikRelease, "customToolRevisions">, name: string): CustomToolDefinition | undefined {
+  const revision = release.customToolRevisions?.[name];
+  return revision === undefined ? SUPPORTED_CUSTOM_TOOLS[name] : CUSTOM_TOOL_REVISIONS[name]?.[revision];
+}
 
 export class ReleaseAttestationError extends Error {
   constructor(
@@ -293,13 +316,21 @@ export function compareWithRelease(release: DjonikRelease, observed: ObservedCon
     );
   }
 
-  // Custom tools: exact name set, each byte-identical (canonically) to the tool this revision executes.
+  // Custom tools: exact name set, each byte-identical (canonically) to the definition THIS release carries — the
+  // tool's original one, or the revision the release names (#70).
   const observedCustom = observed.customTools.map((tool) => tool.name);
   expect(sortedJoin(observedCustom) === sortedJoin(release.customTools), `custom tools [${sortedJoin(observedCustom)}] != [${sortedJoin(release.customTools)}]`);
+  for (const name of Object.keys(release.customToolRevisions ?? {})) {
+    expect(release.customTools.includes(name), `custom tool revision names ${name}, which the release does not expose`);
+  }
   for (const tool of observed.customTools) {
-    const source = SUPPORTED_CUSTOM_TOOLS[tool.name];
-    if (!source) {
+    if (!SUPPORTED_CUSTOM_TOOLS[tool.name]) {
       mismatches.push(`custom tool ${tool.name} is not executable by this application`);
+      continue;
+    }
+    const source = customToolDefinition(release, tool.name);
+    if (!source) {
+      mismatches.push(`custom tool ${tool.name} revision ${release.customToolRevisions?.[tool.name]} is not a reviewed definition`);
       continue;
     }
     const schema = canonicalJsonSha256(source.input_schema);

@@ -79,6 +79,13 @@ export interface DjonikRelease {
   builtInTools: BuiltInToolName[];
   /** Custom tools the Agent must expose — each must be one this application executes (#36/#40). */
   customTools: string[];
+  /**
+   * Which reviewed revision of a custom tool's definition this release carries, by tool name (#70). A tool not named
+   * here has its original definition — what every release up to r31 exposes, so their attestation is unchanged. The
+   * definitions themselves live with the code that executes them; `customToolDefinition` (releaseAttestation.ts)
+   * resolves the pair, and an unknown revision fails attestation closed.
+   */
+  customToolRevisions?: Readonly<Record<string, string>>;
   mcpServers: Array<{ name: string; url: string }>;
   mcpToolsets: ReleaseMcpToolset[];
   /** Tools gated by `always_ask`; absent = none (every enabled tool `always_allow`). */
@@ -683,7 +690,79 @@ export const RELEASE_R31: DjonikRelease = {
   session: SESSION,
 };
 
-export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_R25, r26: RELEASE_R26, r27: RELEASE_R27, r28: RELEASE_R28, r29: RELEASE_R29, r30: RELEASE_R30, r31: RELEASE_R31 };
+// --- r32 candidate (#66 + #67 + #68 + #69, source only) ---------------------------------------------------------------
+
+/** The Skills whose accepted source changed after r31: work-review (#66, #69), pm-rhythm (#67, #69), planning-and-focus (#67). */
+export const CHANGED_BY_R32 = ["planning-and-focus", "work-review", "pm-rhythm"] as const;
+
+/** The combined pilot-fix release intent (Product Owner decision 2026-10-12; docs/110), kept as the reviewed input that
+ * `RELEASE_R32` was resolved from; it stays unresolved by design and is never served. On top of r31 it carries exactly:
+ *  - #66 + #69: the `work-review` Skill and revision `v2` of the existing `trello_work_history` definition (explicit
+ *    `focus`; what `detailed` is for; «N карток» vs «переходів»);
+ *  - #67 (+ #69's Friday conclusion rule): the `pm-rhythm` and `planning-and-focus` Skills;
+ *  - #68: the accepted #54 `reminder` custom tool, exposed for the first time.
+ * The prompt, model, built-in tools, the other three custom tools, MCP servers/toolsets, confirmation policy, roster (none)
+ * and Session resources are r31's. #71 is application runtime only and is deliberately absent from the tuple. */
+export const RELEASE_R32_CANDIDATE: DjonikReleaseCandidate = {
+  candidateId: "r32-candidate",
+  becomes: "r32",
+  agent: { id: COORDINATOR_ID, fromVersion: 31, version: null },
+  model: RELEASE_R31.model,
+  systemSha256: RELEASE_R31.systemSha256,
+  skills: RELEASE_R31.skills.map((skill) => (CHANGED_BY_R32 as readonly string[]).includes(skill.name)
+    ? { name: skill.name, skillId: null, pin: { kind: "unresolved" as const, reason: "#66/#67/#69 Skill source not remotely synced" } }
+    : skill),
+  specialist: null,
+  builtInTools: RELEASE_R31.builtInTools,
+  customTools: [...RELEASE_R31.customTools, "reminder"],
+  customToolRevisions: { trello_work_history: "v2" },
+  mcpServers: RELEASE_R31.mcpServers,
+  mcpToolsets: RELEASE_R31.mcpToolsets,
+  confirmationRequired: RELEASE_R31.confirmationRequired!,
+  session: RELEASE_R31.session,
+};
+
+// --- r32 (#70 remote construction, no cutover) ---------------------------------------------------------------------
+
+/**
+ * r32 — `RELEASE_R32_CANDIDATE` with its real identifiers (#70, docs/110): Agent v32, created 2026-10-12 from v31 by ONE
+ * `buildCandidateUpdateBody` update under a `version: 31` precondition and read back exactly. Three new immutable Skill
+ * versions were created on their existing Skill identities from committed main (`e174f5b`) and downloaded byte-identical
+ * (planning-and-focus `6da1cf10…`, work-review `b52f1b2d…`, pm-rhythm `82d3dd97…`; no identical earlier version
+ * existed). The update replaced Skills and tools only: `trello_work_history` moved to its `v2` definition (#66 + #69) and
+ * `reminder` (#54, #68) was added; the prompt, model, roster (none), MCP servers and every other tool and policy are r31's,
+ * preserved by omission or re-sent unchanged. The three new `sessionVersion`s were read from the snapshot of zero-event
+ * inspection Session `sesn_01T19sr3fCmXmTDSQ9wcHZrm` (pinned @32, Memory `read_only`, 0 events), never derived from a
+ * timestamp; the other two pins show their known r31 spellings there. Written out, not derived at import;
+ * `releaseR32.test.ts` proves it equals the resolved candidate.
+ *
+ * #70 constructed it WITHOUT a cutover: this revision still serves r31, and production keeps its deployed r31 revision.
+ * #71 (fresh-Trello fail-closed) is application runtime only and is not part of this tuple. Its source is
+ * `managed-agents/djonik.md` (body unchanged since r31; frontmatter = Agent v32). r31 stays the rollback (Agent v31 unchanged).
+ */
+export const RELEASE_R32: DjonikRelease = {
+  id: "r32",
+  agent: { id: COORDINATOR_ID, version: 32 },
+  model: MODEL,
+  systemSha256: "569999b5da22d075940af44d8acbabb397c1567e418348a98194fced0a3e8859",
+  skills: [
+    RELEASE_R31.skills.find((skill) => skill.name === "task-management")!,
+    { name: "planning-and-focus", skillId: "skill_01PxXTvhbZSrbxqi7gmDs6KW", pin: { kind: "explicit", version: "skver_01JkUyb6btqQcLJVfq4cz9kp", sessionVersion: "1791793798537727" } },
+    RELEASE_R31.skills.find((skill) => skill.name === "studio-intake")!,
+    { name: "work-review", skillId: WORK_REVIEW_SKILL.skillId, pin: { kind: "explicit", version: "skver_01J39PC8Fvw5UEhsC6ZufHBr", sessionVersion: "1791793802823947" } },
+    { name: "pm-rhythm", skillId: "skill_01GzpQX3bVuWNk5bhbGcbzku", pin: { kind: "explicit", version: "skver_01QhCPnJ128imU5h4Hhfgi2e", sessionVersion: "1791793807571556" } },
+  ],
+  specialist: null,
+  builtInTools: RELEASE_R31.builtInTools,
+  customTools: ["trello_work_history", "trello_board_snapshot", "focus_budget", "trello_project_time", "reminder"],
+  customToolRevisions: { trello_work_history: "v2" },
+  mcpServers: RELEASE_R31.mcpServers,
+  mcpToolsets: RELEASE_R31.mcpToolsets,
+  confirmationRequired: RELEASE_R31.confirmationRequired,
+  session: SESSION,
+};
+
+export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_R25, r26: RELEASE_R26, r27: RELEASE_R27, r28: RELEASE_R28, r29: RELEASE_R29, r30: RELEASE_R30, r31: RELEASE_R31, r32: RELEASE_R32 };
 
 /**
  * The one release this application revision serves. Changing it is the application half of a cutover
@@ -698,6 +777,8 @@ export const RELEASES: Readonly<Record<string, DjonikRelease>> = { r25: RELEASE_
  * #64 constructed and attested r31 (Agent v31) remotely WITHOUT a cutover (docs/102). #65 flips this to `r31`
  * (docs/103), a source cutover only: the host keeps serving its deployed r30 revision until a separately authorized
  * deploy; r30 is the immediate rollback.
+ * #70 constructed and attested r32 (Agent v32) remotely WITHOUT a cutover (docs/110): this stays `r31` until a separately
+ * authorized source cutover and deploy.
  * This is deliberately not an environment variable:
  * the reviewed revision, not host configuration, decides what is served.
  */

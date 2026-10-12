@@ -11,16 +11,16 @@ skills:
     version: skver_017sbYxMKd3NoUytYFwadrgD
   - type: custom
     skill_id: skill_01PxXTvhbZSrbxqi7gmDs6KW
-    version: skver_01L9cL8yv244qmpXSyqvmqzJ
+    version: skver_01JkUyb6btqQcLJVfq4cz9kp
   - type: custom
     skill_id: skill_015c8dtDnWyDfVLwS6NLS7r6
     version: skver_01SYUXncujJcAWuXz1wbD69U
   - type: custom
     skill_id: skill_0169h7GYNYUDDDZteDCUV2fE
-    version: skver_0155j1qEvdXYq286L8x6vBFF
+    version: skver_01J39PC8Fvw5UEhsC6ZufHBr
   - type: custom
     skill_id: skill_01GzpQX3bVuWNk5bhbGcbzku
-    version: skver_01BetXsjNcGqmaHY9MpNQgns
+    version: skver_01QhCPnJ128imU5h4Hhfgi2e
 multiagent: null
 mcp_servers:
   - type: url
@@ -55,8 +55,8 @@ tools:
           type: always_allow
   - type: custom
     name: trello_work_history
-    description: "Read a compact, read-only Trello board-action digest for a requested week or explicit Kyiv date range. Use it for questions about what moved into Done, returned from Done, was created, archived, or changed during a period. It computes Kyiv dates, counts, current-label project scope, and coverage itself; do not use it for current Project Health, writes, effort, or work outside Trello."
-    input_schema: {"type":"object","additionalProperties":false,"required":["window","scope"],"properties":{"window":{"oneOf":[{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"this_week"}}},{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"last_week"}}},{"type":"object","additionalProperties":false,"required":["kind","from","to"],"properties":{"kind":{"const":"explicit"},"from":{"type":"string"},"to":{"type":"string"}}}]},"scope":{"oneOf":[{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"board"}}},{"type":"object","additionalProperties":false,"required":["kind","label"],"properties":{"kind":{"const":"project"},"label":{"type":"string","minLength":1,"maxLength":120}}}]},"response_format":{"enum":["concise","detailed"]}}}
+    description: "Read a compact, read-only Trello board-action digest for a requested week or explicit Kyiv date range. The client shows its `answer_text` to Daniel verbatim, so request exactly what he asked. `focus`: `overview` (default) for a week or project review; one kind of change (`completed` = moved into Done, `returned` = came back from Done, `created`, `archived`, `moved`) for a narrow question — the answer is then only that deduplicated card list. `response_format: detailed` is the event-by-event chronology: code delivers it only when Daniel's own message asks for detail, so never request it to gather material for your own summary. In the text «N карток» is unique cards and «переходів»/«подій» is Done transitions; neither counts completed tasks or achieved outcomes. It computes Kyiv dates, counts, current-label project scope, and coverage itself; do not use it for current Project Health, writes, effort, or work outside Trello."
+    input_schema: {"type":"object","additionalProperties":false,"required":["window","scope"],"properties":{"window":{"oneOf":[{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"this_week"}}},{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"last_week"}}},{"type":"object","additionalProperties":false,"required":["kind","from","to"],"properties":{"kind":{"const":"explicit"},"from":{"type":"string"},"to":{"type":"string"}}}]},"scope":{"oneOf":[{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"board"}}},{"type":"object","additionalProperties":false,"required":["kind","label"],"properties":{"kind":{"const":"project"},"label":{"type":"string","minLength":1,"maxLength":120}}}]},"response_format":{"enum":["concise","detailed"]},"focus":{"enum":["overview","completed","returned","created","archived","moved"]}}}
   - type: custom
     name: trello_board_snapshot
     description: "Read a fresh, compact Trello current-board factual snapshot for planning, workload, nearly finished work, and Waiting. Includes real Size, checklist progress, Kyiv due, and evidenced days in the current list. Backlog and Inbox are counts by default. Use Trello MCP for exact card detail or writes; use trello_work_history for retrospective changes. This tool never ranks work or writes."
@@ -69,6 +69,10 @@ tools:
     name: trello_project_time
     description: "Approximate time Daniel spent on ONE project this week (Monday 00:00 Kyiv → now), with a per-card breakdown, computed by code from Trello In-progress list moves inside his /rhythm.md work_hours (overlaps split equally, daily cap). Use it whenever Daniel asks how much time or how many hours went into a project; pass the project's current Trello label after resolving his word through the project brief. The client shows `answer_text` to Daniel verbatim: never repeat, recompute, round or restate its hours; add nothing, or at most one short line without numbers. An `unavailable` result (no work_hours, incomplete history, label not found) is the final answer: never estimate time from trello_work_history, card or action counts, and never narrate raw moves instead. Read-only; this week only; not billing-grade."
     input_schema: {"type":"object","additionalProperties":false,"required":["project_label"],"properties":{"project_label":{"type":"string","minLength":1,"maxLength":120}}}
+  - type: custom
+    name: reminder
+    description: "Daniel's reminders, stored and delivered by code: once created, the adapter itself messages him in Telegram at the resolved moment, even if this Session ends. Use only when Daniel asks to be reminded (create), asks what he asked to be reminded about (list), or asks to cancel or move a reminder (cancel / snooze). Pass his day/time words as structured `when`, never a date you computed: 'завтра' {day:'tomorrow'}; 'в понеділок' {day:'weekday',weekday:'mon'}; 'о 15' {time:'15:00'}; 'завтра о 9' {day:'tomorrow',time:'09:00'}; '28.09' {day:'date',date:'28.09'}; 'через годину' {in_minutes:60}. No time means that day's morning (in the brief or plan). `text` is what to remind, in Daniel's words, short. Link `card` only with an id from a fresh Trello read in this turn. cancel/snooze: `id` from list, or `match` with one distinctive word. Say saved only when the result is ok, and give its `confirmation` line exactly; if it asks for a time or lists several candidates, ask Daniel one short question. A reminder never changes Trello and is not a commitment in Memory."
+    input_schema: {"type":"object","additionalProperties":false,"required":["op"],"properties":{"op":{"enum":["create","list","cancel","snooze"]},"text":{"type":"string","minLength":1,"maxLength":300},"when":{"type":"object","additionalProperties":false,"properties":{"day":{"enum":["today","tomorrow","day_after_tomorrow","weekday","date"]},"weekday":{"enum":["mon","tue","wed","thu","fri","sat","sun"]},"next_week":{"type":"boolean"},"date":{"type":"string","maxLength":10},"time":{"type":"string","maxLength":5},"in_minutes":{"type":"integer","minimum":1,"maximum":10080}}},"project":{"type":"string","minLength":1,"maxLength":60},"card":{"type":"object","additionalProperties":false,"required":["id"],"properties":{"id":{"type":"string"},"name":{"type":"string","maxLength":120}}},"id":{"type":"string"},"match":{"type":"string","minLength":2,"maxLength":80},"include_history":{"type":"boolean"}}}
   - type: mcp_toolset
     mcp_server_name: trello
     default_config:

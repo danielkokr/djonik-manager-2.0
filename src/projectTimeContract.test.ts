@@ -112,7 +112,7 @@ test("release: the tool exists only on the r31 candidate and its #64 resolution 
   assert.equal(SERVING_RELEASE, RELEASE_R31);
   assert.ok(SERVING_RELEASE.customTools.includes("trello_project_time"), "the served r31 exposes the #62 tool");
   assert.deepEqual(RELEASE_R30.customTools, ["trello_work_history", "trello_board_snapshot", "focus_budget"], "the r30 rollback does not");
-  assert.deepEqual(Object.values(RELEASES).filter((release) => release.customTools.includes("trello_project_time")).map((release) => release.id), ["r31"]);
+  assert.deepEqual(Object.values(RELEASES).filter((release) => release.customTools.includes("trello_project_time")).map((release) => release.id), ["r31", "r32"], "r32 (#70) keeps it");
   assert.ok(!Object.values(RELEASES).includes(RELEASE_R31_CANDIDATE as never));
   assert.equal(RELEASES.r31, RELEASE_R31, "#64 resolved the candidate remotely (Agent v31); #65 serves it");
   assert.equal(RELEASE_R31_CANDIDATE.agent.fromVersion, 30);

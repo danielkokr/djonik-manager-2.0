@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DjonikRelease } from "./release.js";
-import { SUPPORTED_CUSTOM_TOOLS } from "./releaseAttestation.js";
+import { customToolDefinition } from "./releaseAttestation.js";
 
 /**
  * Provider-shaped fixtures for release attestation tests (#33). Shapes mirror the live read-backs of
@@ -89,8 +89,8 @@ export const ISSUE_62_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ befor
 };
 
 /** The #66 work-review edit (answer the question asked: `focus`, `detailed` only on Daniel's request, no second call for
- *  a follow-up), exact text before → after. Source only: no reviewed release pins it. r31 (served) pins the source minus
- *  this edit; it ships with `TRELLO_WORK_HISTORY_TOOL_NEXT` in one later Agent version (docs/104). */
+ *  a follow-up), exact text before → after. Synced into r32 (#70) together with `TRELLO_WORK_HISTORY_TOOL_NEXT`; r31
+ *  (served) pins the source minus this edit (docs/104, docs/110). */
 export const ISSUE_66_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ before: string; after: string }>>> = {
   "work-review": [
     {
@@ -111,8 +111,8 @@ export const ISSUE_66_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ befor
 const pmRhythmSource = readFileSync(join(repoRoot, ".claude", "skills", "pm-rhythm", "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
 
 /** The #67 Skill edits (plain words instead of `due`, scan-first layout, the project-grouped Monday shape), exact text
- *  before → after. Source only: no reviewed release pins them, so r31 (served) pins the source minus these edits. The
- *  two long pm-rhythm additions are read back from the Skill itself rather than copied here (docs/106). */
+ *  before → after. Synced into r32 (#70); r31 (served) pins the source minus these edits. The two long pm-rhythm
+ *  additions are read back from the Skill itself rather than copied here (docs/106, docs/110). */
 export const ISSUE_67_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ before: string; after: string }>>> = {
   "pm-rhythm": [
     {
@@ -136,8 +136,8 @@ export const ISSUE_67_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ befor
 const workReviewSource = readFileSync(join(repoRoot, ".claude", "skills", "work-review", "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
 
 /** The #69 Skill edits (a week's success is judged by planned and important outcomes, never by activity counts; what
- *  «N карток» and «переходів» mean), exact text before → after. Source only: no reviewed release pins them, so r31
- *  (served) pins the source minus these edits. Both additions are read back from the Skills themselves (docs/108). */
+ *  «N карток» and «переходів» mean), exact text before → after. Synced into r32 (#70); r31 (served) pins the source
+ *  minus these edits. Both additions are read back from the Skills themselves (docs/108, docs/110). */
 export const ISSUE_69_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ before: string; after: string }>>> = {
   "work-review": [
     { before: "", after: /\*\*«Тиждень успішний\?»\*\*[\s\S]*?with no score or percentage\.\n\n/.exec(workReviewSource)?.[0] ?? "<missing #69 week-judgement rule>" },
@@ -147,7 +147,7 @@ export const ISSUE_69_SKILL_EDITS: Readonly<Record<string, ReadonlyArray<{ befor
   ],
 };
 
-/** A Skill's committed source as its r31 pin stores it: the repo source minus the unsynced #69, #67 and #66 edits. */
+/** A Skill's committed source as its r31 pin stores it: the repo source (= its r32 pin, #70) minus the #69, #67 and #66 edits. */
 export function r31SkillSource(name: string): string {
   const source = readFileSync(join(repoRoot, ".claude", "skills", name, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
   const pre69 = revertEdits(source, ISSUE_69_SKILL_EDITS[name] ?? [], `#69 ${name}`);
@@ -279,7 +279,8 @@ function builtInToolset(release: DjonikRelease): Record<string, unknown> {
 function tools(release: DjonikRelease): unknown[] {
   return [
     builtInToolset(release),
-    ...release.customTools.map((name) => ({ type: "custom", name, ...SUPPORTED_CUSTOM_TOOLS[name] })),
+    // #70: the definition this release carries (its named revision, else the original).
+    ...release.customTools.map((name) => ({ type: "custom", name, description: customToolDefinition(release, name)!.description, input_schema: customToolDefinition(release, name)!.input_schema })),
     ...release.mcpToolsets.map((toolset) => ({
       type: "mcp_toolset",
       mcp_server_name: toolset.server,

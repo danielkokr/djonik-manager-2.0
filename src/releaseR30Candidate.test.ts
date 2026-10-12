@@ -80,7 +80,7 @@ test("#44 topology: r25–r29 pin specialist v4 unchanged; the r30 candidate has
   assert.equal(RELEASE_R30_CANDIDATE.specialist, null, "absence is explicit, not a missing field");
   assert.ok("specialist" in RELEASE_R30_CANDIDATE);
   assert.equal(RELEASE_R30_CANDIDATE.agent.version, null, "the candidate never carries an Agent version; RELEASE_R30 does (#55)");
-  assert.deepEqual(Object.keys(RELEASES), ["r25", "r26", "r27", "r28", "r29", "r30", "r31"], "r30 is attestable (#55); r31 too (#64), served since #65");
+  assert.deepEqual(Object.keys(RELEASES), ["r25", "r26", "r27", "r28", "r29", "r30", "r31", "r32"], "r30 is attestable (#55); r31 too (#64), served since #65; r32 constructed, not served (#70)");
   assert.equal(RELEASE_R30.specialist, null);
   assert.equal(RELEASES.r31!.specialist, null, "r31 keeps the coordinator-only topology");
   assert.equal(SERVING_RELEASE.id, "r31");
